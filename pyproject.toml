@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "card-capture"
+version = "0.1.0"
+description = "Extract high-quality sports card stills from local video files."
+requires-python = ">=3.9"
+dependencies = [
+  "numpy",
+  "opencv-python",
+]
+
+[project.optional-dependencies]
+model = [
+  "huggingface-hub",
+  "ultralytics",
+]
+review = [
+  "fastapi",
+  "jinja2",
+  "python-multipart",
+  "uvicorn",
+]
+test = [
+  "pytest",
+  "httpx",
+]
+
+[project.scripts]
+card-capture = "card_capture.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+card_capture = ["templates/*.html"]
