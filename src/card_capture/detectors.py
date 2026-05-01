@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import cv2
 from pathlib import Path
 from typing import Iterable, List, Protocol
+
+import cv2
 
 from .models import CardDetection, FrameSample, Polygon
 
@@ -46,6 +47,8 @@ class CardcaptorUltralyticsDetector:
         filename: str = "weights/cardcaptor_v3_best.pt",
         detection_width: int = 640,
     ):
+        if detection_width <= 0:
+            raise ValueError(f"detection_width must be a positive integer, got {detection_width!r}")
         self.confidence_threshold = confidence_threshold
         self.repo_id = repo_id
         self.filename = filename
