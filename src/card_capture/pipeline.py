@@ -23,6 +23,8 @@ class ProcessingOptions:
     max_candidates: int = 10
     confidence_threshold: float = 0.25
     group_gap_ms: int = 1000
+    detections_to_stop: int = 1
+    quality_floor: float = 0.5
 
 
 class VideoProcessor:
@@ -65,10 +67,13 @@ class VideoProcessor:
 
         candidates: List[ScoredCandidate] = []
         detection_count = 0
+        good_detection_count = 0
 
         for frame in self.sampler.sample(video_path, options.sample_fps):
             source_frame_path = frame_dir / f"video_{video_id}_frame_{frame.frame_index}.jpg"
             cv2.imwrite(str(source_frame_path), frame.image)
+
+            stop_this_frame = False
             for detection in self.detector.detect(frame):
                 if detection.confidence < options.confidence_threshold:
                     continue
@@ -96,6 +101,17 @@ class VideoProcessor:
                     )
                 )
                 detection_count += 1
+                if (
+                    options.detections_to_stop > 0
+                    and score.total >= options.quality_floor
+                ):
+                    good_detection_count += 1
+                    if good_detection_count >= options.detections_to_stop:
+                        stop_this_frame = True
+                        break  # stop processing further detections in this frame
+
+            if stop_this_frame:
+                break  # stop consuming more frames
 
         selector = self.selector or CandidateSelector(
             group_gap_ms=options.group_gap_ms,
