@@ -6,7 +6,7 @@ from typing import Optional, Sequence
 
 from .detectors import CardcaptorUltralyticsDetector, FakeCardDetector
 from .pipeline import ProcessingOptions, VideoProcessor
-from .sampler import StabilityBasedSampler, SyntheticSampler, VideoSampler
+from .sampler import DetectionGuidedSampler, StabilityBasedSampler, SyntheticSampler, VideoSampler
 from .storage import Storage
 
 
@@ -51,9 +51,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     process.add_argument(
         "--sampler",
-        choices=["stability", "raw"],
+        choices=["stability", "detection", "raw"],
         default="stability",
-        help="stability (default): two-pass stability sampler; raw: cadence-based VideoSampler",
+        help="stability: motion-based (default); detection: card-presence-based; raw: cadence-based",
     )
     process.add_argument(
         "--scan-fps", type=_positive_float, default=10.0,
@@ -85,7 +85,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     process.add_argument(
         "--candidates-per-window", type=_positive_int, default=5,
-        help="Candidate frames yielded per stable window, evenly distributed (default: 5)",
+        help="Candidate frames yielded per stable/detection window, evenly distributed (default: 5)",
+    )
+    process.add_argument(
+        "--detection-scan-fps", type=_positive_float, default=3.0,
+        help="Pass-1 scan cadence for detection-guided sampler (default: 3)",
+    )
+    process.add_argument(
+        "--min-detection-frames", type=_positive_int, default=3,
+        help="Min consecutive detection frames to form a detection window (default: 3)",
     )
     process.add_argument(
         "--device", default="auto",
@@ -125,7 +133,16 @@ def _run_process(args: argparse.Namespace) -> int:
         )
         if args.sampler == "raw":
             sampler = VideoSampler()
-        else:
+        elif args.sampler == "detection":
+            sampler = DetectionGuidedSampler(
+                scan_fps=args.detection_scan_fps,
+                scan_width=args.scan_width,
+                detection_confidence=args.confidence,
+                min_detection_frames=args.min_detection_frames,
+                candidates_per_window=args.candidates_per_window,
+                device=args.device,
+            )
+        else:  # stability
             sampler = StabilityBasedSampler(
                 scan_fps=args.scan_fps,
                 scan_width=args.scan_width,

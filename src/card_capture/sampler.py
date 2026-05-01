@@ -29,6 +29,22 @@ class StableWindow:
     frame_candidates: List[Tuple[int, float]] = field(default_factory=list)
 
 
+@dataclass
+class DetectionWindow:
+    """A contiguous run of detection-rich frames (card confidences > threshold).
+
+    Detection windows are found by scanning with YOLO at low resolution. The
+    best frame in each window (highest confidence) is marked for full-res
+    processing. All frame indices are source video frame numbers.
+    """
+
+    start_frame: int
+    end_frame: int
+    best_frame_index: int
+    best_confidence: float
+    frame_detections: List[Tuple[int, float]] = field(default_factory=list)
+
+
 class StabilityBasedSampler:
     """Two-pass sampler: cheap diff scan to find still windows, then seek to
     multiple candidate frames within each window for full-resolution detection.
@@ -227,3 +243,154 @@ class SyntheticSampler:
             width=90,
             height=120,
         )
+
+
+class DetectionGuidedSampler:
+    """Two-pass sampler: scan with YOLO at low resolution to find card-present
+    windows, then yield candidate frames from those windows for full-res processing.
+
+    Pass 1: decode at scan_fps, downscale to scan_width, run YOLO with conf
+            threshold; track windows where detections (confidences > threshold)
+            are found. This finds when the card is actually present, not just
+            when the camera is steady.
+
+    Pass 2: for each detection window, yield up to candidates_per_window frames
+            evenly distributed within the window at full resolution.
+
+    Unlike StabilityBasedSampler (which prioritizes low motion), this prioritizes
+    card visibility. Trades more computation (YOLO at scan time) for better
+    candidate selection (frames are guaranteed to show cards).
+    """
+
+    def __init__(
+        self,
+        scan_fps: float = 3.0,
+        scan_width: int = 160,
+        detection_confidence: float = 0.25,
+        min_detection_frames: int = 3,
+        candidates_per_window: int = 3,
+        device: str = "auto",
+    ) -> None:
+        self.scan_fps = scan_fps
+        self.scan_width = scan_width
+        self.detection_confidence = detection_confidence
+        self.min_detection_frames = min_detection_frames
+        self.candidates_per_window = max(1, candidates_per_window)
+        self.device = device
+
+    def _find_detection_windows(self, video_path: Path) -> List[DetectionWindow]:
+        """Pass 1: scan video with YOLO and return detection window descriptors."""
+        from .detectors import CardcaptorUltralyticsDetector
+
+        capture = cv2.VideoCapture(str(video_path))
+        if not capture.isOpened():
+            raise ValueError(f"Could not decode video: {video_path}")
+
+        source_fps = capture.get(cv2.CAP_PROP_FPS) or self.scan_fps
+        frame_step = max(1, int(round(source_fps / self.scan_fps)))
+        detector = CardcaptorUltralyticsDetector(
+            confidence_threshold=self.detection_confidence,
+            detection_width=self.scan_width,
+            device=self.device,
+        )
+
+        windows: List[DetectionWindow] = []
+        run_start: Optional[int] = None
+        run_detections: List[Tuple[int, float]] = []
+        frame_index = 0
+
+        try:
+            while True:
+                ok, frame = capture.read()
+                if not ok:
+                    break
+
+                if frame_index % frame_step == 0:
+                    h, w = frame.shape[:2]
+                    fs = FrameSample(
+                        frame_index=frame_index,
+                        timestamp_ms=0,
+                        image=frame,
+                        width=w,
+                        height=h,
+                    )
+                    detections = detector.detect(fs)
+                    if detections:
+                        best_conf = max(d.confidence for d in detections)
+                        if run_start is None:
+                            run_start = frame_index
+                        run_detections.append((frame_index, best_conf))
+                    else:
+                        self._flush_detection_run(run_start, run_detections, windows)
+                        run_start = None
+                        run_detections = []
+
+                frame_index += 1
+
+            self._flush_detection_run(run_start, run_detections, windows)
+        finally:
+            capture.release()
+
+        return windows
+
+    def _flush_detection_run(
+        self,
+        run_start: Optional[int],
+        run_detections: List[Tuple[int, float]],
+        windows: List[DetectionWindow],
+    ) -> None:
+        """Flush a completed detection run if it meets min_detection_frames."""
+        if run_start is not None and len(run_detections) >= self.min_detection_frames:
+            best_idx, best_conf = max(run_detections, key=lambda x: x[1])
+            windows.append(
+                DetectionWindow(
+                    start_frame=run_start,
+                    end_frame=run_detections[-1][0],
+                    best_frame_index=best_idx,
+                    best_confidence=best_conf,
+                    frame_detections=list(run_detections),
+                )
+            )
+
+    def sample(self, video_path: Path, sample_fps: float) -> Iterator[FrameSample]:  # noqa: ARG002
+        """Yield candidate frames from detection windows at full resolution.
+
+        sample_fps is intentionally unused — scan_fps is set via the constructor.
+        """
+        video_path = Path(video_path)
+        windows = self._find_detection_windows(video_path)
+        if not windows:
+            return
+
+        capture = cv2.VideoCapture(str(video_path))
+        if not capture.isOpened():
+            raise ValueError(f"Could not decode video: {video_path}")
+
+        try:
+            for window in windows:
+                detections = window.frame_detections
+                n = len(detections)
+                k = self.candidates_per_window
+                if n <= k:
+                    selected = detections
+                else:
+                    step = n / k
+                    selected = [detections[int(i * step)] for i in range(k)]
+
+                for frame_idx, _conf in selected:
+                    capture.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+                    timestamp_ms = int(capture.get(cv2.CAP_PROP_POS_MSEC))
+                    ok, frame = capture.read()
+                    if not ok:
+                        continue
+                    height, width = frame.shape[:2]
+                    yield FrameSample(
+                        frame_index=frame_idx,
+                        timestamp_ms=timestamp_ms,
+                        image=frame,
+                        width=width,
+                        height=height,
+                    )
+        finally:
+            capture.release()
+
