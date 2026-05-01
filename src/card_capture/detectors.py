@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import cv2
 from pathlib import Path
 from typing import Iterable, List, Protocol
 
@@ -43,15 +44,30 @@ class CardcaptorUltralyticsDetector:
         confidence_threshold: float = 0.25,
         repo_id: str = "AlecKarfonta/cardcaptor-v3",
         filename: str = "weights/cardcaptor_v3_best.pt",
+        detection_width: int = 640,
     ):
         self.confidence_threshold = confidence_threshold
         self.repo_id = repo_id
         self.filename = filename
+        self.detection_width = detection_width
         self._model = None
 
     def detect(self, frame: FrameSample) -> List[CardDetection]:
         model = self._load_model()
-        results = model(frame.image, conf=self.confidence_threshold, verbose=False)
+        original_h, original_w = frame.image.shape[:2]
+
+        if original_w > self.detection_width:
+            scaled_w = self.detection_width
+            scaled_h = max(1, int(round(original_h * self.detection_width / original_w)))
+            detect_image = cv2.resize(frame.image, (scaled_w, scaled_h))
+            scale_x = original_w / scaled_w
+            scale_y = original_h / scaled_h
+        else:
+            detect_image = frame.image
+            scale_x = 1.0
+            scale_y = 1.0
+
+        results = model(detect_image, conf=self.confidence_threshold, verbose=False)
         detections: List[CardDetection] = []
         for result in results:
             obb = getattr(result, "obb", None)
@@ -59,13 +75,18 @@ class CardcaptorUltralyticsDetector:
                 continue
             polygons = obb.xyxyxyxy.cpu().numpy()
             confidences = obb.conf.cpu().numpy()
-            labels = obb.cls.cpu().numpy() if obb.cls is not None else [0] * len(confidences)
+            labels = (
+                obb.cls.cpu().numpy()
+                if obb.cls is not None
+                else [0] * len(confidences)
+            )
             for polygon_array, confidence, label in zip(polygons, confidences, labels):
                 confidence_float = float(confidence)
                 if confidence_float < self.confidence_threshold:
                     continue
                 polygon = tuple(
-                    (float(point[0]), float(point[1])) for point in polygon_array
+                    (float(point[0]) * scale_x, float(point[1]) * scale_y)
+                    for point in polygon_array
                 )
                 if len(polygon) != 4:
                     continue
