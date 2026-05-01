@@ -83,6 +83,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--quality-floor", type=_unit_float, default=0.5,
         help="Minimum quality score to count toward early stop (default: 0.5)",
     )
+    process.add_argument(
+        "--candidates-per-window", type=_positive_int, default=5,
+        help="Candidate frames yielded per stable window, evenly distributed (default: 5)",
+    )
 
     review = subparsers.add_parser("review", help="Start the local review UI")
     review.add_argument("--db", type=Path, default=Path("card_capture_output/cards.sqlite"))
@@ -122,6 +126,7 @@ def _run_process(args: argparse.Namespace) -> int:
                 scan_width=args.scan_width,
                 motion_threshold=args.motion_threshold,
                 min_stable_frames=args.min_stable_frames,
+                candidates_per_window=args.candidates_per_window,
             )
 
     processor = VideoProcessor(storage=storage, sampler=sampler, detector=detector)

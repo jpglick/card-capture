@@ -94,7 +94,7 @@ def test_finds_two_stable_windows_separated_by_motion(tmp_path):
 
 
 def test_stable_window_dataclass_has_start_end_best(tmp_path):
-    """StableWindow exposes start_frame, end_frame, best_frame_index."""
+    """StableWindow exposes start_frame, end_frame, best_frame_index, frame_candidates."""
     path = make_video(tmp_path, gray_frames(30))
     sampler = StabilityBasedSampler(
         scan_fps=10, scan_width=80, motion_threshold=8.0, min_stable_frames=3
@@ -105,27 +105,75 @@ def test_stable_window_dataclass_has_start_end_best(tmp_path):
     assert hasattr(w, "start_frame")
     assert hasattr(w, "end_frame")
     assert hasattr(w, "best_frame_index")
+    assert hasattr(w, "frame_candidates")
     assert w.start_frame <= w.best_frame_index <= w.end_frame
+    assert len(w.frame_candidates) >= 1
+
+
+def test_frame_candidates_populated(tmp_path):
+    """frame_candidates contains all (frame_index, sharpness) pairs in the window."""
+    path = make_video(tmp_path, gray_frames(30), fps=30.0)
+    sampler = StabilityBasedSampler(
+        scan_fps=10, scan_width=80, motion_threshold=8.0, min_stable_frames=3
+    )
+    windows = sampler._find_stable_windows(path)
+
+    assert len(windows) == 1
+    cands = windows[0].frame_candidates
+    # Each entry is (frame_index, laplacian_variance)
+    assert all(isinstance(fi, int) and isinstance(lv, float) for fi, lv in cands)
+    # best_frame_index must be one of the candidates
+    frame_indices = [fi for fi, _ in cands]
+    assert windows[0].best_frame_index in frame_indices
 
 
 # ---------------------------------------------------------------------------
 # sample()
 # ---------------------------------------------------------------------------
 
-def test_sample_yields_one_frame_sample_per_stable_window(tmp_path):
-    """sample() yields exactly one FrameSample per stable window."""
+def test_sample_yields_candidates_per_window_frames(tmp_path):
+    """sample() yields up to candidates_per_window FrameSamples per stable window."""
     path = make_video(tmp_path, gray_frames(30), fps=30.0)
     sampler = StabilityBasedSampler(
-        scan_fps=10, scan_width=80, motion_threshold=8.0, min_stable_frames=3
+        scan_fps=10, scan_width=80, motion_threshold=8.0, min_stable_frames=3,
+        candidates_per_window=3,
+    )
+    results = list(sampler.sample(path, sample_fps=5.0))
+
+    # One stable window with 3 candidates requested
+    assert len(results) == 3
+    for s in results:
+        assert isinstance(s, FrameSample)
+        assert s.width == 320
+        assert s.height == 240
+        assert s.frame_index in set(range(0, 30, 3))
+
+
+def test_candidates_per_window_one_yields_single_frame(tmp_path):
+    """candidates_per_window=1 yields exactly one frame per stable window."""
+    path = make_video(tmp_path, gray_frames(30), fps=30.0)
+    sampler = StabilityBasedSampler(
+        scan_fps=10, scan_width=80, motion_threshold=8.0, min_stable_frames=3,
+        candidates_per_window=1,
     )
     results = list(sampler.sample(path, sample_fps=5.0))
 
     assert len(results) == 1
-    s = results[0]
-    assert isinstance(s, FrameSample)
-    assert s.width == 320
-    assert s.height == 240
-    assert s.frame_index in set(range(0, 30, 3))
+    assert isinstance(results[0], FrameSample)
+
+
+def test_candidates_spread_across_window(tmp_path):
+    """Multiple candidates from one window must not all have the same frame_index."""
+    path = make_video(tmp_path, gray_frames(60), fps=30.0)
+    sampler = StabilityBasedSampler(
+        scan_fps=10, scan_width=80, motion_threshold=8.0, min_stable_frames=3,
+        candidates_per_window=5,
+    )
+    results = list(sampler.sample(path, sample_fps=5.0))
+
+    assert len(results) >= 2
+    frame_indices = [r.frame_index for r in results]
+    assert len(set(frame_indices)) > 1, "candidates must be at distinct frame positions"
 
 
 def test_sample_yields_empty_when_no_stable_windows(tmp_path):
@@ -147,7 +195,8 @@ def test_sample_fps_argument_is_ignored(tmp_path):
     """sample_fps is accepted for interface compatibility but does not affect output."""
     path = make_video(tmp_path, gray_frames(30), fps=30.0)
     sampler = StabilityBasedSampler(
-        scan_fps=10, scan_width=80, motion_threshold=8.0, min_stable_frames=3
+        scan_fps=10, scan_width=80, motion_threshold=8.0, min_stable_frames=3,
+        candidates_per_window=1,
     )
     results_5 = list(sampler.sample(path, sample_fps=5.0))
     results_30 = list(sampler.sample(path, sample_fps=30.0))

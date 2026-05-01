@@ -1,0 +1,16 @@
+numpy
+opencv-python
+
+[model]
+huggingface-hub
+ultralytics
+
+[review]
+fastapi
+jinja2
+python-multipart
+uvicorn
+
+[test]
+pytest
+httpx

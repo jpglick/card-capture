@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator, List, Optional, Tuple
 
@@ -14,20 +14,24 @@ from .models import FrameSample
 class StableWindow:
     """A contiguous run of low-motion frames found during pass 1.
 
-    start_frame and end_frame are retained for logging/debugging.
-    Only best_frame_index is used by pass 2 when seeking the video capture.
-    All three values are source video frame numbers (0-based, usable with
-    cv2.CAP_PROP_POS_FRAMES).
+    start_frame, end_frame, and best_frame_index are retained for
+    logging/debugging.  frame_candidates holds every (source_frame_index,
+    laplacian_variance) pair recorded during the scan so that pass 2 can yield
+    multiple candidate frames spread across the window.
+
+    All frame index values are source video frame numbers (0-based) usable
+    directly with cv2.CAP_PROP_POS_FRAMES.
     """
 
     start_frame: int
     end_frame: int
     best_frame_index: int
+    frame_candidates: List[Tuple[int, float]] = field(default_factory=list)
 
 
 class StabilityBasedSampler:
     """Two-pass sampler: cheap diff scan to find still windows, then seek to
-    the sharpest frame in each window for full-resolution detection.
+    multiple candidate frames within each window for full-resolution detection.
 
     Pass 1: decode at scan_fps with frames downscaled to scan_width wide.
             Compute per-frame pixel diff; track stable runs. Record the source
@@ -35,8 +39,11 @@ class StabilityBasedSampler:
             frame numbers (not scan counters) are stored so they can be passed
             directly to cv2.CAP_PROP_POS_FRAMES.
 
-    Pass 2: for each stable window, seek to best_frame_index and yield the
-            full-resolution FrameSample.
+    Pass 2: for each stable window, yield up to candidates_per_window frames
+            evenly distributed across the window's duration. Spreading
+            candidates temporally gives the detector a better chance of finding
+            a frame where the card is clearly visible, rather than committing to
+            the single sharpest moment.
 
     sample_fps is intentionally ignored — scan_fps is set via the constructor.
     The argument exists solely for interface compatibility with VideoSampler.
@@ -48,11 +55,13 @@ class StabilityBasedSampler:
         scan_width: int = 160,
         motion_threshold: float = 8.0,
         min_stable_frames: int = 5,
+        candidates_per_window: int = 5,
     ) -> None:
         self.scan_fps = scan_fps
         self.scan_width = scan_width
         self.motion_threshold = motion_threshold
         self.min_stable_frames = min_stable_frames
+        self.candidates_per_window = max(1, candidates_per_window)
 
     def _flush_run(
         self,
@@ -68,6 +77,7 @@ class StabilityBasedSampler:
                     start_frame=run_start,
                     end_frame=run_frames[-1][0],
                     best_frame_index=best_idx,
+                    frame_candidates=list(run_frames),
                 )
             )
 
@@ -127,7 +137,11 @@ class StabilityBasedSampler:
         return windows
 
     def sample(self, video_path: Path, sample_fps: float) -> Iterator[FrameSample]:  # noqa: ARG002
-        """Yield one FrameSample per stable window (the sharpest frame in each).
+        """Yield up to candidates_per_window FrameSamples per stable window.
+
+        Candidates are selected by evenly spacing across the window's recorded
+        frames, giving temporal coverage so the detector can find whichever
+        moment the card is most clearly visible.
 
         sample_fps is intentionally unused — scan_fps is set via the constructor.
         """
@@ -142,21 +156,32 @@ class StabilityBasedSampler:
 
         try:
             for window in windows:
-                capture.set(cv2.CAP_PROP_POS_FRAMES, window.best_frame_index)
-                # Read timestamp BEFORE capture.read() — OpenCV advances the
-                # position counter on read, which would cause an off-by-one.
-                timestamp_ms = int(capture.get(cv2.CAP_PROP_POS_MSEC))
-                ok, frame = capture.read()
-                if not ok:
-                    continue
-                height, width = frame.shape[:2]
-                yield FrameSample(
-                    frame_index=window.best_frame_index,
-                    timestamp_ms=timestamp_ms,
-                    image=frame,
-                    width=width,
-                    height=height,
-                )
+                candidates = window.frame_candidates
+                n = len(candidates)
+                k = self.candidates_per_window
+                if n <= k:
+                    selected = candidates
+                else:
+                    # Evenly distribute k indices across the n candidates
+                    step = n / k
+                    selected = [candidates[int(i * step)] for i in range(k)]
+
+                for frame_idx, _lap_var in selected:
+                    capture.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+                    # Read timestamp BEFORE capture.read() — OpenCV advances the
+                    # position counter on read, which would cause an off-by-one.
+                    timestamp_ms = int(capture.get(cv2.CAP_PROP_POS_MSEC))
+                    ok, frame = capture.read()
+                    if not ok:
+                        continue
+                    height, width = frame.shape[:2]
+                    yield FrameSample(
+                        frame_index=frame_idx,
+                        timestamp_ms=timestamp_ms,
+                        image=frame,
+                        width=width,
+                        height=height,
+                    )
         finally:
             capture.release()
 

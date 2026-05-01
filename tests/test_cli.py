@@ -51,6 +51,7 @@ def test_process_subparser_accepts_new_flags():
         "--sampler", "stability",
         "--detections-to-stop", "2",
         "--quality-floor", "0.6",
+        "--candidates-per-window", "3",
     ])
     assert args.detection_width == 320
     assert args.scan_fps == 5.0
@@ -60,6 +61,7 @@ def test_process_subparser_accepts_new_flags():
     assert args.sampler == "stability"
     assert args.detections_to_stop == 2
     assert args.quality_floor == 0.6
+    assert args.candidates_per_window == 3
 
 
 def test_sampler_raw_uses_video_sampler(tmp_path: Path):
