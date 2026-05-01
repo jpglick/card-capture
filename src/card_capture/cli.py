@@ -10,6 +10,28 @@ from .sampler import StabilityBasedSampler, SyntheticSampler, VideoSampler
 from .storage import Storage
 
 
+def _positive_float(value: str) -> float:
+    f = float(value)
+    if f <= 0:
+        raise argparse.ArgumentTypeError(f"must be a positive number, got {value!r}")
+    return f
+
+
+def _positive_int(value: str) -> int:
+    i = int(value)
+    if i <= 0:
+        raise argparse.ArgumentTypeError(f"must be a positive integer, got {value!r}")
+    return i
+
+
+def _unit_float(value: str) -> float:
+    """Float in [0.0, 1.0]."""
+    f = float(value)
+    if not (0.0 <= f <= 1.0):
+        raise argparse.ArgumentTypeError(f"must be between 0.0 and 1.0, got {value!r}")
+    return f
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="card-capture")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -34,23 +56,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="stability (default): two-pass stability sampler; raw: cadence-based VideoSampler",
     )
     process.add_argument(
-        "--scan-fps", type=float, default=10.0,
+        "--scan-fps", type=_positive_float, default=10.0,
         help="Pass-1 scan cadence in frames per second (default: 10)",
     )
     process.add_argument(
-        "--scan-width", type=int, default=160,
+        "--scan-width", type=_positive_int, default=160,
         help="Pass-1 scan frame width in pixels (default: 160)",
     )
     process.add_argument(
-        "--motion-threshold", type=float, default=8.0,
+        "--motion-threshold", type=_positive_float, default=8.0,
         help="Max mean pixel diff (0-255) to count as stable (default: 8.0)",
     )
     process.add_argument(
-        "--min-stable-frames", type=int, default=5,
+        "--min-stable-frames", type=_positive_int, default=5,
         help="Min consecutive stable scan frames to form a window (default: 5)",
     )
     process.add_argument(
-        "--detection-width", type=int, default=640,
+        "--detection-width", type=_positive_int, default=640,
         help="Frame width passed to YOLO detector, proportionally scaled (default: 640)",
     )
     process.add_argument(
@@ -58,7 +80,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Stop after this many quality detections; 0 = disabled (default: 1)",
     )
     process.add_argument(
-        "--quality-floor", type=float, default=0.5,
+        "--quality-floor", type=_unit_float, default=0.5,
         help="Minimum quality score to count toward early stop (default: 0.5)",
     )
 

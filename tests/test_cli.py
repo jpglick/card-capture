@@ -1,4 +1,5 @@
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from card_capture.cli import build_parser, main
 
@@ -59,3 +60,78 @@ def test_process_subparser_accepts_new_flags():
     assert args.sampler == "stability"
     assert args.detections_to_stop == 2
     assert args.quality_floor == 0.6
+
+
+def test_sampler_raw_uses_video_sampler(tmp_path: Path):
+    """--sampler raw must construct VideoSampler, not StabilityBasedSampler."""
+    video_path = tmp_path / "v.mov"
+    video_path.write_bytes(b"x")
+
+    fake_result = MagicMock()
+    fake_result.video_id = 1
+    fake_result.detection_count = 0
+    fake_result.saved_count = 0
+    fake_result.output_dir = tmp_path / "out"
+
+    with patch("card_capture.cli.VideoProcessor") as MockProcessor, \
+         patch("card_capture.cli.VideoSampler") as MockVideoSampler, \
+         patch("card_capture.cli.StabilityBasedSampler") as MockStability:
+        MockProcessor.return_value.process.return_value = fake_result
+        main([
+            "process", str(video_path),
+            "--sampler", "raw",
+            "--db", str(tmp_path / "db.sqlite"),
+            "--output-dir", str(tmp_path / "out"),
+        ])
+
+    MockVideoSampler.assert_called_once()
+    MockStability.assert_not_called()
+
+
+def test_detector_fake_always_uses_synthetic_sampler(tmp_path: Path):
+    """--detector fake must use SyntheticSampler even when --sampler raw is passed."""
+    video_path = tmp_path / "v.mov"
+    video_path.write_bytes(b"x")
+
+    fake_result = MagicMock()
+    fake_result.video_id = 1
+    fake_result.detection_count = 0
+    fake_result.saved_count = 0
+    fake_result.output_dir = tmp_path / "out"
+
+    with patch("card_capture.cli.VideoProcessor") as MockProcessor, \
+         patch("card_capture.cli.SyntheticSampler") as MockSynthetic, \
+         patch("card_capture.cli.VideoSampler") as MockVideoSampler:
+        MockProcessor.return_value.process.return_value = fake_result
+        main([
+            "process", str(video_path),
+            "--detector", "fake",
+            "--sampler", "raw",
+            "--db", str(tmp_path / "db.sqlite"),
+            "--output-dir", str(tmp_path / "out"),
+        ])
+
+    MockSynthetic.assert_called_once()
+    MockVideoSampler.assert_not_called()
+
+
+def test_cli_rejects_nonpositive_scan_fps():
+    """--scan-fps 0 must be rejected by argparse."""
+    parser = build_parser()
+    try:
+        parser.parse_args(["process", "video.mov", "--scan-fps", "0"])
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("expected rejection of --scan-fps 0")
+
+
+def test_cli_rejects_out_of_range_quality_floor():
+    """--quality-floor 1.5 must be rejected by argparse."""
+    parser = build_parser()
+    try:
+        parser.parse_args(["process", "video.mov", "--quality-floor", "1.5"])
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("expected rejection of --quality-floor 1.5")
