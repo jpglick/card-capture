@@ -54,3 +54,45 @@ def test_candidate_selector_respects_max_candidates_by_score():
     selected = CandidateSelector(group_gap_ms=1000, max_candidates=2).select(candidates)
 
     assert [candidate.detection_id for candidate in selected] == [2, 3]
+
+
+def test_quality_scorer_penalizes_wrong_aspect_ratio():
+    """Portrait (≈0.714 w/h) should score higher on aspect_ratio than a square (mid-flip)."""
+    # Portrait: w=63, h=88 → ratio ≈ 0.716 ≈ CARD_RATIO
+    portrait = np.zeros((88, 63, 3), dtype=np.uint8)
+    portrait[5:83, 5:58] = 120
+    # Square: w=88, h=88 → ratio 1.0 (foreshortened)
+    square = np.zeros((88, 88, 3), dtype=np.uint8)
+    square[5:83, 5:83] = 120
+
+    scorer = QualityScorer(target_pixels=88 * 88)
+    portrait_score = scorer.score(portrait, detection_confidence=0.9)
+    square_score = scorer.score(square, detection_confidence=0.9)
+
+    assert "aspect_ratio" in portrait_score.components
+    assert portrait_score.components["aspect_ratio"] > square_score.components["aspect_ratio"]
+
+
+def test_quality_scorer_complexity_rewards_textured_image():
+    """Textured image (card artwork) should score higher on complexity than uniform (plain back)."""
+    rng = np.random.default_rng(42)
+    textured = rng.integers(0, 256, (100, 70, 3), dtype=np.uint8)
+    uniform = np.full((100, 70, 3), 128, dtype=np.uint8)
+
+    scorer = QualityScorer(target_pixels=100 * 70)
+    textured_score = scorer.score(textured, detection_confidence=0.9)
+    uniform_score = scorer.score(uniform, detection_confidence=0.9)
+
+    assert "complexity" in textured_score.components
+    assert textured_score.components["complexity"] > uniform_score.components["complexity"]
+
+
+def test_quality_scorer_has_six_components():
+    """Score components dict must contain all six keys after the rebalance."""
+    image = np.full((88, 63, 3), 128, dtype=np.uint8)
+    scorer = QualityScorer(target_pixels=88 * 63)
+    score = scorer.score(image, detection_confidence=1.0)
+
+    assert set(score.components.keys()) == {
+        "sharpness", "glare", "aspect_ratio", "size", "complexity", "confidence"
+    }
