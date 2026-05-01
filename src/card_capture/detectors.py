@@ -46,6 +46,7 @@ class CardcaptorUltralyticsDetector:
         repo_id: str = "AlecKarfonta/cardcaptor-v3",
         filename: str = "weights/cardcaptor_v3_best.pt",
         detection_width: int = 640,
+        device: str = "auto",
     ):
         if detection_width <= 0:
             raise ValueError(f"detection_width must be a positive integer, got {detection_width!r}")
@@ -53,6 +54,7 @@ class CardcaptorUltralyticsDetector:
         self.repo_id = repo_id
         self.filename = filename
         self.detection_width = detection_width
+        self.device = device
         self._model = None
 
     def detect(self, frame: FrameSample) -> List[CardDetection]:
@@ -122,4 +124,16 @@ class CardcaptorUltralyticsDetector:
 
         model_path = hf_hub_download(repo_id=self.repo_id, filename=self.filename)
         self._model = YOLO(model_path)
+        self._model.to(self._resolve_device())
         return self._model
+
+    def _resolve_device(self) -> str:
+        if self.device != "auto":
+            return self.device
+        try:
+            import torch
+            if torch.backends.mps.is_available():
+                return "mps"
+        except ImportError:
+            pass
+        return "cpu"

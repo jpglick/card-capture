@@ -87,6 +87,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--candidates-per-window", type=_positive_int, default=5,
         help="Candidate frames yielded per stable window, evenly distributed (default: 5)",
     )
+    process.add_argument(
+        "--device", default="auto",
+        help="Device for model inference: auto (default, uses MPS on Mac), cpu, mps, cuda",
+    )
 
     review = subparsers.add_parser("review", help="Start the local review UI")
     review.add_argument("--db", type=Path, default=Path("card_capture_output/cards.sqlite"))
@@ -117,6 +121,7 @@ def _run_process(args: argparse.Namespace) -> int:
         detector = CardcaptorUltralyticsDetector(
             confidence_threshold=args.confidence,
             detection_width=args.detection_width,
+            device=args.device,
         )
         if args.sampler == "raw":
             sampler = VideoSampler()
