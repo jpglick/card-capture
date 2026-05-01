@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, List, Optional
+from typing import Iterator, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -54,6 +54,23 @@ class StabilityBasedSampler:
         self.motion_threshold = motion_threshold
         self.min_stable_frames = min_stable_frames
 
+    def _flush_run(
+        self,
+        run_start: Optional[int],
+        run_frames: List[Tuple[int, float]],
+        windows: List[StableWindow],
+    ) -> None:
+        """Flush a completed stable run into windows if it meets min_stable_frames."""
+        if run_start is not None and len(run_frames) >= self.min_stable_frames:
+            best_idx = max(run_frames, key=lambda x: x[1])[0]
+            windows.append(
+                StableWindow(
+                    start_frame=run_start,
+                    end_frame=run_frames[-1][0],
+                    best_frame_index=best_idx,
+                )
+            )
+
     def _find_stable_windows(self, video_path: Path) -> List[StableWindow]:
         """Pass 1: decode at low resolution and return stable window descriptors."""
         capture = cv2.VideoCapture(str(video_path))
@@ -66,7 +83,7 @@ class StabilityBasedSampler:
         windows: List[StableWindow] = []
         run_start: Optional[int] = None
         # Each entry: (source_frame_index, laplacian_variance)
-        run_frames: List[tuple] = []
+        run_frames: List[Tuple[int, float]] = []
         prev_gray: Optional[np.ndarray] = None
         frame_index = 0
 
@@ -94,18 +111,7 @@ class StabilityBasedSampler:
                                 run_start = frame_index
                             run_frames.append((frame_index, lap_var))
                         else:
-                            if (
-                                run_start is not None
-                                and len(run_frames) >= self.min_stable_frames
-                            ):
-                                best_idx = max(run_frames, key=lambda x: x[1])[0]
-                                windows.append(
-                                    StableWindow(
-                                        start_frame=run_start,
-                                        end_frame=run_frames[-1][0],
-                                        best_frame_index=best_idx,
-                                    )
-                                )
+                            self._flush_run(run_start, run_frames, windows)
                             run_start = None
                             run_frames = []
 
@@ -114,15 +120,7 @@ class StabilityBasedSampler:
                 frame_index += 1
 
             # Flush any open run at end of video
-            if run_start is not None and len(run_frames) >= self.min_stable_frames:
-                best_idx = max(run_frames, key=lambda x: x[1])[0]
-                windows.append(
-                    StableWindow(
-                        start_frame=run_start,
-                        end_frame=run_frames[-1][0],
-                        best_frame_index=best_idx,
-                    )
-                )
+            self._flush_run(run_start, run_frames, windows)
         finally:
             capture.release()
 
