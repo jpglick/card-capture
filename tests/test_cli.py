@@ -35,3 +35,27 @@ def test_cli_process_fake_detector_writes_database(tmp_path: Path):
 
     assert exit_code == 0
     assert db_path.exists()
+
+
+def test_process_subparser_accepts_new_flags():
+    from card_capture.cli import build_parser
+    parser = build_parser()
+    args = parser.parse_args([
+        "process", "video.mov",
+        "--detection-width", "320",
+        "--scan-fps", "5",
+        "--scan-width", "120",
+        "--motion-threshold", "12.0",
+        "--min-stable-frames", "4",
+        "--sampler", "stability",
+        "--detections-to-stop", "2",
+        "--quality-floor", "0.6",
+    ])
+    assert args.detection_width == 320
+    assert args.scan_fps == 5.0
+    assert args.scan_width == 120
+    assert args.motion_threshold == 12.0
+    assert args.min_stable_frames == 4
+    assert args.sampler == "stability"
+    assert args.detections_to_stop == 2
+    assert args.quality_floor == 0.6

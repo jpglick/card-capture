@@ -6,7 +6,7 @@ from typing import Optional, Sequence
 
 from .detectors import CardcaptorUltralyticsDetector, FakeCardDetector
 from .pipeline import ProcessingOptions, VideoProcessor
-from .sampler import SyntheticSampler, VideoSampler
+from .sampler import StabilityBasedSampler, SyntheticSampler, VideoSampler
 from .storage import Storage
 
 
@@ -25,7 +25,41 @@ def build_parser() -> argparse.ArgumentParser:
         "--detector",
         choices=["cardcaptor", "fake"],
         default="cardcaptor",
-        help="Use cardcaptor for real detection or fake for smoke tests",
+        help="cardcaptor for real detection, fake for smoke tests",
+    )
+    process.add_argument(
+        "--sampler",
+        choices=["stability", "raw"],
+        default="stability",
+        help="stability (default): two-pass stability sampler; raw: cadence-based VideoSampler",
+    )
+    process.add_argument(
+        "--scan-fps", type=float, default=10.0,
+        help="Pass-1 scan cadence in frames per second (default: 10)",
+    )
+    process.add_argument(
+        "--scan-width", type=int, default=160,
+        help="Pass-1 scan frame width in pixels (default: 160)",
+    )
+    process.add_argument(
+        "--motion-threshold", type=float, default=8.0,
+        help="Max mean pixel diff (0-255) to count as stable (default: 8.0)",
+    )
+    process.add_argument(
+        "--min-stable-frames", type=int, default=5,
+        help="Min consecutive stable scan frames to form a window (default: 5)",
+    )
+    process.add_argument(
+        "--detection-width", type=int, default=640,
+        help="Frame width passed to YOLO detector, proportionally scaled (default: 640)",
+    )
+    process.add_argument(
+        "--detections-to-stop", type=int, default=1,
+        help="Stop after this many quality detections; 0 = disabled (default: 1)",
+    )
+    process.add_argument(
+        "--quality-floor", type=float, default=0.5,
+        help="Minimum quality score to count toward early stop (default: 0.5)",
     )
 
     review = subparsers.add_parser("review", help="Start the local review UI")
@@ -49,12 +83,24 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 def _run_process(args: argparse.Namespace) -> int:
     storage = Storage(args.db)
     storage.initialize()
+
     if args.detector == "fake":
         detector = FakeCardDetector()
         sampler = SyntheticSampler()
     else:
-        detector = CardcaptorUltralyticsDetector(confidence_threshold=args.confidence)
-        sampler = VideoSampler()
+        detector = CardcaptorUltralyticsDetector(
+            confidence_threshold=args.confidence,
+            detection_width=args.detection_width,
+        )
+        if args.sampler == "raw":
+            sampler = VideoSampler()
+        else:
+            sampler = StabilityBasedSampler(
+                scan_fps=args.scan_fps,
+                scan_width=args.scan_width,
+                motion_threshold=args.motion_threshold,
+                min_stable_frames=args.min_stable_frames,
+            )
 
     processor = VideoProcessor(storage=storage, sampler=sampler, detector=detector)
     result = processor.process(
@@ -64,6 +110,8 @@ def _run_process(args: argparse.Namespace) -> int:
             sample_fps=args.sample_fps,
             max_candidates=args.max_candidates,
             confidence_threshold=args.confidence,
+            detections_to_stop=args.detections_to_stop,
+            quality_floor=args.quality_floor,
         ),
     )
     print(
@@ -88,3 +136,4 @@ def _run_review(args: argparse.Namespace) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
