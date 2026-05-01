@@ -35,6 +35,15 @@ class FakeDetector:
         ]
 
 
+class AlwaysPassScorer:
+    """Scorer that always returns a high total score."""
+
+    def score(self, image, confidence):
+        from card_capture.models import QualityScore
+
+        return QualityScore(total=0.9, components={})
+
+
 def test_video_processor_saves_best_crop_and_metadata(tmp_path: Path):
     video_path = tmp_path / "input.mov"
     video_path.write_bytes(b"fake video content")
@@ -86,6 +95,7 @@ def test_early_stop_halts_after_first_qualifying_detection(tmp_path: Path):
         storage=storage,
         sampler=CountingSampler(),
         detector=FakeDetector(),
+        scorer=AlwaysPassScorer(),
     ).process(
         video_path,
         ProcessingOptions(
@@ -93,7 +103,7 @@ def test_early_stop_halts_after_first_qualifying_detection(tmp_path: Path):
             sample_fps=5,
             max_candidates=5,
             detections_to_stop=1,
-            quality_floor=0.2,  # FakeDetector crop scores ≈ 0.249 > 0.2
+            quality_floor=0.5,  # AlwaysPassScorer returns 0.9, well above 0.5
         ),
     )
 
@@ -140,3 +150,47 @@ def test_early_stop_disabled_when_zero(tmp_path: Path):
     )
 
     assert len(processed_frames) == 3
+
+
+def test_early_stop_accumulates_across_frames(tmp_path: Path):
+    """detections_to_stop=2 requires two qualifying detections across frames."""
+    video_path = tmp_path / "input.mov"
+    video_path.write_bytes(b"fake video content")
+    storage = Storage(tmp_path / "cards.sqlite")
+    storage.initialize()
+
+    processed_frames = []
+
+    class CountingSampler:
+        def sample(self, video_path, sample_fps):
+            for i in range(5):
+                processed_frames.append(i)
+                image = np.zeros((100, 100, 3), dtype=np.uint8)
+                image[10:90, 10:90] = 180
+                yield FrameSample(
+                    frame_index=i,
+                    timestamp_ms=i * 200,
+                    image=image,
+                    width=100,
+                    height=100,
+                )
+
+    result = VideoProcessor(
+        storage=storage,
+        sampler=CountingSampler(),
+        detector=FakeDetector(),
+        scorer=AlwaysPassScorer(),
+    ).process(
+        video_path,
+        ProcessingOptions(
+            output_dir=tmp_path / "output",
+            sample_fps=5,
+            max_candidates=5,
+            detections_to_stop=2,
+            quality_floor=0.5,  # AlwaysPassScorer returns 0.9, well above 0.5
+        ),
+    )
+
+    # Frame 0 yields 1 qualifying detection, frame 1 yields the second → stop.
+    assert len(processed_frames) == 2
+    assert result.detection_count == 2
