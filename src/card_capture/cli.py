@@ -215,16 +215,12 @@ def _run_process(args: argparse.Namespace) -> int:
         args.video_path,
         ProcessingOptions(
             output_dir=args.output_dir,
-            sample_fps=args.sample_fps,
-            max_candidates=args.max_candidates,
-            confidence_threshold=args.confidence,
-            detections_to_stop=args.detections_to_stop,
-            quality_floor=args.quality_floor,
+            corner_confidence_threshold=args.confidence,
         ),
     )
     print(
         f"Processed video_id={result.video_id}: "
-        f"{result.detection_count} detections, {result.saved_count} saved"
+        f"{result.detection_count} detections, {result.saved_instance_count} saved"
     )
     return 0
 
@@ -244,4 +240,3 @@ def _run_review(args: argparse.Namespace) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
