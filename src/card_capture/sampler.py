@@ -408,3 +408,139 @@ class DetectionGuidedSampler:
         finally:
             capture.release()
 
+
+class ContrastBasedSampler:
+    """
+    Fast, non-ML frame selection using color variance for presence detection.
+    
+    Pass 1: Scan video at low resolution to detect presence windows (high variance = card present).
+    Pass 2: Within each window, rank frames by Laplacian sharpness and yield top candidates.
+    """
+
+    def __init__(
+        self,
+        video_path: str,
+        scan_fps: float = 5.0,
+        scan_width: int = 160,
+        contrast_threshold: float = 1000.0,
+        min_presence_frames: int = 3,
+        candidates_per_window: int = 3,
+    ):
+        """
+        Args:
+            video_path: Path to input video file
+            scan_fps: Frames per second to scan in Pass 1 (lower = faster)
+            scan_width: Width to downscale for variance computation (lower = faster)
+            contrast_threshold: Minimum color variance to consider frame as card-present
+            min_presence_frames: Minimum consecutive frames to form a presence window
+            candidates_per_window: Number of sharpest frames to yield per window
+        """
+        self.video_path = video_path
+        self.scan_fps = scan_fps
+        self.scan_width = scan_width
+        self.contrast_threshold = contrast_threshold
+        self.min_presence_frames = min_presence_frames
+        self.candidates_per_window = candidates_per_window
+
+    def _find_presence_windows(self) -> list[PresenceWindow]:
+        """
+        Pass 1: Scan video at low resolution to find windows with high color variance.
+        
+        Returns:
+            List of PresenceWindow objects with frame ranges (no candidates yet).
+        """
+        windows = []
+        cap = cv2.VideoCapture(self.video_path)
+        
+        try:
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            frame_skip = max(1, int(fps / self.scan_fps))
+            frame_index = 0
+            in_presence_window = False
+            window_start = 0
+            presence_frames = 0
+
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+
+                # Sample at scan_fps
+                if frame_index % frame_skip == 0:
+                    # Downscale and compute variance
+                    small = cv2.resize(frame, (self.scan_width, int(frame.shape[0] * self.scan_width / frame.shape[1])))
+                    variance = cv2.Laplacian(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var()
+
+                    if variance > self.contrast_threshold:
+                        if not in_presence_window:
+                            in_presence_window = True
+                            window_start = frame_index
+                            presence_frames = 1
+                        else:
+                            presence_frames += 1
+                    else:
+                        if in_presence_window:
+                            if presence_frames >= self.min_presence_frames:
+                                windows.append(PresenceWindow(
+                                    start_frame=window_start,
+                                    end_frame=frame_index - frame_skip
+                                ))
+                            in_presence_window = False
+
+                frame_index += 1
+
+            # Handle window at end of video
+            if in_presence_window and presence_frames >= self.min_presence_frames:
+                windows.append(PresenceWindow(
+                    start_frame=window_start,
+                    end_frame=frame_index - 1
+                ))
+
+        finally:
+            cap.release()
+
+        return windows
+
+    def _score_sharpness_in_window(self, window: PresenceWindow) -> PresenceWindow:
+        """
+        Pass 2: For frames in a presence window, compute Laplacian sharpness and rank.
+        
+        Updates window.frame_candidates with (frame_index, sharpness_score) tuples,
+        sorted by sharpness descending.
+        """
+        cap = cv2.VideoCapture(self.video_path)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, window.start_frame)
+        
+        try:
+            frame_scores = []
+            for frame_idx in range(window.start_frame, window.end_frame + 1):
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                sharpness = cv2.Laplacian(gray, cv2.CV_64F).var()
+                frame_scores.append((frame_idx, sharpness))
+            
+            # Sort by sharpness descending, take top N candidates
+            frame_scores.sort(key=lambda x: x[1], reverse=True)
+            window.frame_candidates = frame_scores[:self.candidates_per_window]
+            
+        finally:
+            cap.release()
+        
+        return window
+
+    def sample(self) -> Iterator[PresenceWindow]:
+        """
+        Generate PresenceWindow objects with ranked frame candidates.
+        
+        Yields:
+            PresenceWindow objects with frame_candidates populated
+        """
+        presence_windows = self._find_presence_windows()
+        
+        for window in presence_windows:
+            window = self._score_sharpness_in_window(window)
+            if window.frame_candidates:
+                yield window
