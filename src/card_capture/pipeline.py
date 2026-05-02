@@ -19,12 +19,13 @@ from .storage import Storage
 @dataclass(frozen=True)
 class ProcessingOptions:
     output_dir: Path
-    sample_fps: float = 5.0
-    max_candidates: int = 10
-    confidence_threshold: float = 0.25
-    group_gap_ms: int = 1000
-    detections_to_stop: int = 1
-    quality_floor: float = 0.5
+    reader_backend: str = "auto"
+    queue_size: int = 64
+    inference_batch_size: int = 16
+    corner_confidence_threshold: float = 0.5
+    blur_threshold: float = 30.0
+    variance_threshold: float = 20.0
+    empty_pixel_threshold: float = 0.98
 
 
 class VideoProcessor:

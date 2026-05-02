@@ -46,6 +46,34 @@ class QualityScore:
 @dataclass(frozen=True)
 class ProcessingResult:
     video_id: int
+    frame_count: int
+    accepted_frame_count: int
     detection_count: int
-    saved_count: int
+    saved_instance_count: int
     output_dir: Path
+
+
+@dataclass(frozen=True)
+class FramePacket:
+    frame_index: int
+    timestamp_ms: int
+    image: np.ndarray
+    width: int
+    height: int
+    triage_metrics: Dict[str, float]
+
+
+@dataclass(frozen=True)
+class CornerDetection:
+    corners: Polygon
+    confidence: float
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class DetectionPacket:
+    frame_index: int
+    timestamp_ms: int
+    width: int
+    height: int
+    corner_detection: CornerDetection
