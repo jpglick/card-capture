@@ -145,3 +145,41 @@ def compute_motion_gpu(frame1: np.ndarray, frame2: np.ndarray, device: Union[str
     motion = torch.abs(t1 - t2).mean().item()
     
     return motion
+
+
+def compute_histogram_stats_gpu(variance_values: list[float]) -> tuple[float, float]:
+    """Compute mean and standard deviation of Laplacian variance distribution.
+    
+    Args:
+        variance_values: List of Laplacian variance scores from video scan
+    
+    Returns:
+        (mean, std_dev) of variance distribution
+    """
+    if not variance_values:
+        return 0.0, 0.0
+    
+    values = np.array(variance_values, dtype=np.float32)
+    return float(values.mean()), float(values.std())
+
+
+def is_histogram_outlier_gpu(variance: float, mean: float, std_dev: float, 
+                             sigma_threshold: float = 1.5) -> bool:
+    """Check if a variance value is a statistical outlier.
+    
+    Frames with unusual variance (much higher or lower than typical) likely contain cards.
+    
+    Args:
+        variance: Laplacian variance for current frame
+        mean: Population mean from histogram stats
+        std_dev: Population standard deviation
+        sigma_threshold: Z-score threshold (default 1.5 = ±1.5σ band)
+    
+    Returns:
+        True if |variance - mean| > sigma_threshold * std_dev
+    """
+    if std_dev == 0:
+        return False  # No variation in data
+    
+    z_score = abs(variance - mean) / std_dev
+    return z_score > sigma_threshold
