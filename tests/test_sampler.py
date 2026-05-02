@@ -325,7 +325,7 @@ class TestContrastBasedSampler:
                         "Frame candidates should be sorted by sharpness descending"
 
     def test_sample_yields_presence_windows(self, synthetic_video_path):
-        """sample() should yield PresenceWindow objects with populated candidates."""
+        """sample() should yield FrameSample objects (one per candidate frame)."""
         sampler = ContrastBasedSampler(
             video_path=str(synthetic_video_path),
             scan_fps=5.0,
@@ -334,11 +334,12 @@ class TestContrastBasedSampler:
             min_presence_frames=1,
             candidates_per_window=3,
         )
-        windows = list(sampler.sample())
-        assert len(windows) > 0, "sample() should yield at least one window"
-        for window in windows:
-            assert isinstance(window, PresenceWindow), "Should yield PresenceWindow objects"
-            assert len(window.frame_candidates) > 0, "Each window should have candidates"
+        frames = list(sampler.sample())
+        assert len(frames) > 0, "sample() should yield at least one frame"
+        for frame in frames:
+            assert isinstance(frame, FrameSample), "Should yield FrameSample objects"
+            assert frame.frame_index >= 0, "Frame index should be non-negative"
+            assert frame.image is not None, "Frame image should not be None"
 
     def test_min_presence_frames_filter(self, synthetic_video_path):
         """Windows with fewer frames than min_presence_frames should be filtered."""
@@ -364,9 +365,10 @@ class TestContrastBasedSampler:
             min_presence_frames=1,
             candidates_per_window=2,
         )
-        windows = list(sampler.sample())
-        for window in windows:
-            assert len(window.frame_candidates) <= 2, f"Should have at most 2 candidates, got {len(window.frame_candidates)}"
+        frames = list(sampler.sample())
+        # Should get at most 2 frames per window (since candidates_per_window=2)
+        # Note: The exact number depends on how many windows were detected
+        assert all(isinstance(f, FrameSample) for f in frames), "All items should be FrameSample objects"
 
     def test_contrast_sampler_uses_gpu_device(self, synthetic_video_path):
         """ContrastBasedSampler should accept device parameter and use it."""

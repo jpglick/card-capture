@@ -95,7 +95,7 @@ class VideoProcessor:
                 candidates.append(
                     ScoredCandidate(
                         detection_id=detection_id,
-                        timestamp_ms=detection.timestamp_ms,
+                        timestamp_ms=frame.timestamp_ms,
                         image_path=str(crop_path),
                         score=score,
                     )

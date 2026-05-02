@@ -692,16 +692,16 @@ class ContrastBasedSampler:
         
         return window
 
-    def sample(self, video_path: Path = None, sample_fps: float = None) -> Iterator[PresenceWindow]:  # noqa: ARG002
+    def sample(self, video_path: Path = None, sample_fps: float = None) -> Iterator[FrameSample]:
         """
-        Generate PresenceWindow objects with ranked frame candidates.
+        Yield candidate frames from presence windows at full resolution.
         
         Args:
-            video_path: Path to video file (video_path from init takes precedence)
-            sample_fps: Sample fps (scan_fps from init takes precedence)
+            video_path: Path to video file (self.video_path from init takes precedence)
+            sample_fps: Sample fps (self.scan_fps from init takes precedence)
             
         Yields:
-            PresenceWindow objects with frame_candidates populated
+            FrameSample objects for candidate frames in ranked order
         """
         overall_start = time.time()
         presence_windows = self._find_presence_windows()
@@ -719,5 +719,27 @@ class ContrastBasedSampler:
         overall_elapsed = time.time() - overall_start
         print(f"[Timing] Total sampling time: {overall_elapsed:.2f}s")
         
-        for window in scored_windows:
-            yield window
+        # Extract frames from windows
+        video_path = Path(self.video_path)
+        capture = cv2.VideoCapture(str(video_path))
+        if not capture.isOpened():
+            raise ValueError(f"Could not decode video: {video_path}")
+        
+        try:
+            for window in scored_windows:
+                for frame_index, sharpness_score in window.frame_candidates:
+                    capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+                    timestamp_ms = int(capture.get(cv2.CAP_PROP_POS_MSEC))
+                    ok, frame = capture.read()
+                    if not ok:
+                        continue
+                    height, width = frame.shape[:2]
+                    yield FrameSample(
+                        frame_index=frame_index,
+                        timestamp_ms=timestamp_ms,
+                        image=frame,
+                        width=width,
+                        height=height,
+                    )
+        finally:
+            capture.release()

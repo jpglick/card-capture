@@ -1,9 +1,11 @@
+README.md
 pyproject.toml
 setup.cfg
 src/card_capture/__init__.py
 src/card_capture/cli.py
 src/card_capture/cropper.py
 src/card_capture/detectors.py
+src/card_capture/gpu_utils.py
 src/card_capture/models.py
 src/card_capture/pipeline.py
 src/card_capture/review.py
