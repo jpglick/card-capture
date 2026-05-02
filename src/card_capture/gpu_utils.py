@@ -83,6 +83,10 @@ def compute_variance_gpu(frame: np.ndarray, device: torch.device) -> float:
     # Compute variance of the Laplacian response
     variance = torch.var(laplacian).item()
     
+    # Scale to match cv2.Laplacian behavior (which operates on [0, 255] values)
+    # Since we normalized to [0, 1], the response is scaled down by 255^2
+    variance = variance * (255.0 ** 2)
+    
     return float(variance)
 
 

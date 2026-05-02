@@ -6,8 +6,10 @@ from typing import Iterator, List, Optional, Tuple
 
 import cv2
 import numpy as np
+import torch
 
 from .models import FrameSample
+from .gpu_utils import compute_variance_gpu, compute_sharpness_gpu
 
 
 @dataclass
@@ -422,9 +424,10 @@ class ContrastBasedSampler:
         video_path: str,
         scan_fps: float = 5.0,
         scan_width: int = 160,
-        contrast_threshold: float = 1000.0,
+        contrast_threshold: float = 600.0,
         min_presence_frames: int = 3,
         candidates_per_window: int = 3,
+        device: str = "auto",
     ):
         """
         Args:
@@ -434,6 +437,7 @@ class ContrastBasedSampler:
             contrast_threshold: Minimum color variance to consider frame as card-present
             min_presence_frames: Minimum consecutive frames to form a presence window
             candidates_per_window: Number of sharpest frames to yield per window
+            device: Device for GPU acceleration ("auto", "cpu", "mps", "cuda")
         """
         self.video_path = video_path
         self.scan_fps = scan_fps
@@ -441,6 +445,13 @@ class ContrastBasedSampler:
         self.contrast_threshold = contrast_threshold
         self.min_presence_frames = min_presence_frames
         self.candidates_per_window = candidates_per_window
+        
+        # Device resolution
+        if device == "auto":
+            from .gpu_utils import get_device
+            self.device = get_device()
+        else:
+            self.device = torch.device(device)
 
     def _find_presence_windows(self) -> list[PresenceWindow]:
         """
@@ -469,7 +480,7 @@ class ContrastBasedSampler:
                 if frame_index % frame_skip == 0:
                     # Downscale and compute variance
                     small = cv2.resize(frame, (self.scan_width, int(frame.shape[0] * self.scan_width / frame.shape[1])))
-                    variance = cv2.Laplacian(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var()
+                    variance = compute_variance_gpu(small, self.device)
 
                     if variance > self.contrast_threshold:
                         if not in_presence_window:
@@ -518,8 +529,7 @@ class ContrastBasedSampler:
                 if not ret:
                     break
                 
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                sharpness = cv2.Laplacian(gray, cv2.CV_64F).var()
+                sharpness = compute_sharpness_gpu(frame, self.device)
                 frame_scores.append((frame_idx, sharpness))
             
             # Sort by sharpness descending, take top N candidates
@@ -531,10 +541,14 @@ class ContrastBasedSampler:
         
         return window
 
-    def sample(self) -> Iterator[PresenceWindow]:
+    def sample(self, video_path: Path = None, sample_fps: float = None) -> Iterator[PresenceWindow]:  # noqa: ARG002
         """
         Generate PresenceWindow objects with ranked frame candidates.
         
+        Args:
+            video_path: Path to video file (video_path from init takes precedence)
+            sample_fps: Sample fps (scan_fps from init takes precedence)
+            
         Yields:
             PresenceWindow objects with frame_candidates populated
         """

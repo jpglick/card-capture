@@ -347,3 +347,16 @@ class TestContrastBasedSampler:
         windows = list(sampler.sample())
         for window in windows:
             assert len(window.frame_candidates) <= 2, f"Should have at most 2 candidates, got {len(window.frame_candidates)}"
+
+    def test_contrast_sampler_uses_gpu_device(self, synthetic_video_path):
+        """ContrastBasedSampler should accept device parameter and use it."""
+        sampler = ContrastBasedSampler(
+            video_path=str(synthetic_video_path),
+            scan_fps=5.0,
+            scan_width=160,
+            contrast_threshold=100.0,
+            min_presence_frames=1,
+            candidates_per_window=1,
+            device="cpu",  # NEW: device parameter
+        )
+        assert sampler.device.type == "cpu"
