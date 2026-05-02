@@ -138,12 +138,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Sobel edge magnitude threshold, 0-255 (default: 50.0)",
     )
     process.add_argument(
-        "--sharpness-batch-size",
-        type=int,
-        default=None,
-        help="GPU batch size for sharpness scoring (auto-detect if None)",
-    )
-    process.add_argument(
         "--device", default="auto",
         help="Device for model inference: auto (default, uses MPS on Mac), cpu, mps, cuda",
     )
