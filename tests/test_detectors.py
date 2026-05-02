@@ -4,8 +4,8 @@ import numpy as np
 import pytest
 from unittest.mock import MagicMock, patch
 
-from card_capture.detectors import CardcaptorUltralyticsDetector
-from card_capture.models import FrameSample
+from card_capture.detectors import CardcaptorUltralyticsDetector, FakeCornerDetector
+from card_capture.models import DetectionPacket, FramePacket, FrameSample
 
 
 def _make_frame(height: int, width: int) -> FrameSample:
@@ -135,3 +135,54 @@ def test_detector_raises_on_nonpositive_detection_width():
         CardcaptorUltralyticsDetector(detection_width=0)
     with pytest.raises(ValueError, match="detection_width"):
         CardcaptorUltralyticsDetector(detection_width=-1)
+
+
+def test_fake_corner_detector_returns_one_detection_packet_per_frame_at_threshold():
+    detector = FakeCornerDetector(confidence=0.99)
+    frames = [
+        FramePacket(
+            frame_index=10,
+            timestamp_ms=111,
+            image=np.zeros((240, 320, 3), dtype=np.uint8),
+            width=320,
+            height=240,
+            triage_metrics={},
+        ),
+        FramePacket(
+            frame_index=11,
+            timestamp_ms=222,
+            image=np.zeros((480, 640, 3), dtype=np.uint8),
+            width=640,
+            height=480,
+            triage_metrics={},
+        ),
+    ]
+
+    detections = detector.detect_batch(frames, confidence_threshold=0.99)
+
+    assert len(detections) == len(frames)
+    for frame, detection in zip(frames, detections):
+        assert isinstance(detection, DetectionPacket)
+        assert detection.frame_index == frame.frame_index
+        assert detection.timestamp_ms == frame.timestamp_ms
+        assert detection.width == frame.width
+        assert detection.height == frame.height
+        assert detection.corner_detection.confidence == 0.99
+
+
+def test_fake_corner_detector_returns_empty_list_below_threshold():
+    detector = FakeCornerDetector(confidence=0.49)
+    frames = [
+        FramePacket(
+            frame_index=0,
+            timestamp_ms=0,
+            image=np.zeros((240, 320, 3), dtype=np.uint8),
+            width=320,
+            height=240,
+            triage_metrics={},
+        )
+    ]
+
+    detections = detector.detect_batch(frames, confidence_threshold=0.5)
+
+    assert detections == []

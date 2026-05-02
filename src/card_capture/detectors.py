@@ -5,7 +5,14 @@ from typing import Iterable, List, Protocol
 
 import cv2
 
-from .models import CardDetection, FrameSample, Polygon
+from .models import (
+    CardDetection,
+    CornerDetection,
+    DetectionPacket,
+    FramePacket,
+    FrameSample,
+    Polygon,
+)
 
 
 class CardDetector(Protocol):
@@ -13,6 +20,13 @@ class CardDetector(Protocol):
     model_name: str
 
     def detect(self, frame: FrameSample) -> Iterable[CardDetection]:
+        ...
+
+
+class CornerDetector(Protocol):
+    def detect_batch(
+        self, frames: list[FramePacket], confidence_threshold: float
+    ) -> list[DetectionPacket]:
         ...
 
 
@@ -34,6 +48,41 @@ class FakeCardDetector:
                 metadata={"runtime": self.runtime, "model": self.model_name},
             )
         ]
+
+
+class FakeCornerDetector:
+    runtime = "fake"
+    model_name = "fake-corner-detector"
+
+    def __init__(self, confidence: float = 0.99):
+        self.confidence = confidence
+
+    def detect_batch(
+        self, frames: list[FramePacket], confidence_threshold: float
+    ) -> list[DetectionPacket]:
+        if self.confidence < confidence_threshold:
+            return []
+
+        detections: list[DetectionPacket] = []
+        for frame in frames:
+            x0 = frame.width * 0.12
+            x1 = frame.width * 0.88
+            y0 = frame.height * 0.12
+            y1 = frame.height * 0.88
+            detections.append(
+                DetectionPacket(
+                    frame_index=frame.frame_index,
+                    timestamp_ms=frame.timestamp_ms,
+                    width=frame.width,
+                    height=frame.height,
+                    corner_detection=CornerDetection(
+                        corners=((x0, y0), (x1, y0), (x1, y1), (x0, y1)),
+                        confidence=self.confidence,
+                        metadata={"runtime": self.runtime, "model": self.model_name},
+                    ),
+                )
+            )
+        return detections
 
 
 class CardcaptorUltralyticsDetector:
