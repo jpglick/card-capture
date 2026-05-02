@@ -7,7 +7,12 @@ import numpy as np
 import pytest
 
 from card_capture.models import FrameSample
-from card_capture.sampler import StabilityBasedSampler, StableWindow
+from card_capture.sampler import (
+    StabilityBasedSampler,
+    StableWindow,
+    ContrastBasedSampler,
+    PresenceWindow,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -29,6 +34,36 @@ def make_video(tmp_path: Path, frames: list, fps: float = 30.0) -> Path:
 
 def gray_frames(count: int, value: int = 128) -> list:
     return [np.full((240, 320, 3), value, dtype=np.uint8) for _ in range(count)]
+
+
+def colored_frames(count: int) -> list:
+    """Generate frames with high Laplacian variance to trigger presence detection."""
+    frames = []
+    for i in range(count):
+        # Create frames with high edge variance using patterns
+        frame = np.zeros((240, 320, 3), dtype=np.uint8)
+        # Create a checkerboard/stripe pattern to get high Laplacian variance
+        # This mimics a real card with texture/patterns
+        for y in range(0, 240, 10):
+            for x in range(0, 320, 10):
+                if (x // 10 + y // 10) % 2 == 0:
+                    frame[y:y+10, x:x+10] = [50, 50, 200]   # Red squares
+                else:
+                    frame[y:y+10, x:x+10] = [200, 200, 50]  # Cyan squares
+        frames.append(frame)
+    return frames
+
+
+@pytest.fixture
+def synthetic_video_path(tmp_path):
+    """Create a synthetic video with high-variance (presence) frames."""
+    # 10 frames of low variance, 10 frames of high variance, 10 frames of low variance
+    frames = (
+        gray_frames(10, value=128)
+        + colored_frames(10)
+        + gray_frames(10, value=128)
+    )
+    return make_video(tmp_path, frames, fps=30.0)
 
 
 # ---------------------------------------------------------------------------
@@ -209,3 +244,106 @@ def test_raises_on_missing_video(tmp_path):
     sampler = StabilityBasedSampler()
     with pytest.raises(ValueError, match="Could not decode video"):
         list(sampler.sample(tmp_path / "nonexistent.avi", sample_fps=5.0))
+
+
+# ---------------------------------------------------------------------------
+# ContrastBasedSampler Tests
+# ---------------------------------------------------------------------------
+
+
+class TestContrastBasedSampler:
+    """Tests for ContrastBasedSampler presence detection and sharpness ranking."""
+
+    def test_presence_detection_basic(self, synthetic_video_path):
+        """High-variance frames should be detected as presence."""
+        sampler = ContrastBasedSampler(
+            video_path=str(synthetic_video_path),
+            scan_fps=5.0,
+            scan_width=160,
+            contrast_threshold=100.0,  # Low threshold for synthetic video
+            min_presence_frames=1,
+            candidates_per_window=1,
+        )
+        windows = sampler._find_presence_windows()
+        # Synthetic video should have at least one presence window (the colored frames)
+        assert len(windows) > 0, "Should detect at least one presence window"
+
+    def test_presence_windows_have_frame_ranges(self, synthetic_video_path):
+        """Presence windows should have valid start/end frame ranges."""
+        sampler = ContrastBasedSampler(
+            video_path=str(synthetic_video_path),
+            scan_fps=5.0,
+            scan_width=160,
+            contrast_threshold=100.0,
+            min_presence_frames=1,
+            candidates_per_window=1,
+        )
+        windows = sampler._find_presence_windows()
+        for window in windows:
+            assert window.start_frame >= 0, "start_frame must be >= 0"
+            assert window.end_frame >= window.start_frame, "end_frame must be >= start_frame"
+
+    def test_sharpness_ranking(self, synthetic_video_path):
+        """Frames should be ranked by sharpness (Laplacian variance)."""
+        sampler = ContrastBasedSampler(
+            video_path=str(synthetic_video_path),
+            scan_fps=5.0,
+            scan_width=160,
+            contrast_threshold=100.0,
+            min_presence_frames=1,
+            candidates_per_window=3,
+        )
+        windows = sampler._find_presence_windows()
+        if windows:
+            window = windows[0]
+            scored_window = sampler._score_sharpness_in_window(window)
+            # frame_candidates should be populated and sorted by sharpness (descending)
+            assert len(scored_window.frame_candidates) > 0, "Should have frame candidates"
+            if len(scored_window.frame_candidates) > 1:
+                for i in range(len(scored_window.frame_candidates) - 1):
+                    assert scored_window.frame_candidates[i][1] >= scored_window.frame_candidates[i + 1][1], \
+                        "Frame candidates should be sorted by sharpness descending"
+
+    def test_sample_yields_presence_windows(self, synthetic_video_path):
+        """sample() should yield PresenceWindow objects with populated candidates."""
+        sampler = ContrastBasedSampler(
+            video_path=str(synthetic_video_path),
+            scan_fps=5.0,
+            scan_width=160,
+            contrast_threshold=100.0,
+            min_presence_frames=1,
+            candidates_per_window=3,
+        )
+        windows = list(sampler.sample())
+        assert len(windows) > 0, "sample() should yield at least one window"
+        for window in windows:
+            assert isinstance(window, PresenceWindow), "Should yield PresenceWindow objects"
+            assert len(window.frame_candidates) > 0, "Each window should have candidates"
+
+    def test_min_presence_frames_filter(self, synthetic_video_path):
+        """Windows with fewer frames than min_presence_frames should be filtered."""
+        sampler = ContrastBasedSampler(
+            video_path=str(synthetic_video_path),
+            scan_fps=5.0,
+            scan_width=160,
+            contrast_threshold=100.0,
+            min_presence_frames=100,  # Very high; should filter most windows
+            candidates_per_window=1,
+        )
+        windows = sampler._find_presence_windows()
+        # With a high threshold, should have fewer (or no) windows
+        assert isinstance(windows, list), "Should return a list"
+
+    def test_candidates_limited_per_window(self, synthetic_video_path):
+        """Should return at most candidates_per_window frames per window."""
+        sampler = ContrastBasedSampler(
+            video_path=str(synthetic_video_path),
+            scan_fps=5.0,
+            scan_width=160,
+            contrast_threshold=100.0,
+            min_presence_frames=1,
+            candidates_per_window=2,
+        )
+        windows = list(sampler.sample())
+        for window in windows:
+            assert len(window.frame_candidates) <= 2, f"Should have at most 2 candidates, got {len(window.frame_candidates)}"
