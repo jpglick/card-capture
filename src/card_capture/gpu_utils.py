@@ -245,3 +245,64 @@ def compute_edge_density_gpu(frame: np.ndarray, device: Union[str, torch.device]
     is_high = edge_density > edge_density_threshold
     
     return edge_density, is_high
+
+
+def estimate_batch_size(device: str = "auto", safety_margin: float = 0.4) -> int:
+    """Estimate safe GPU batch size for sharpness scoring based on available VRAM.
+    
+    Queries GPU memory and estimates how many frames can be processed simultaneously
+    for batched sharpness scoring, accounting for GPU memory overhead.
+    
+    Args:
+        device: torch device ("mps", "cuda", "cpu", or "auto")
+        safety_margin: Fraction of VRAM to reserve (0.4 = 40% reserved, 60% usable)
+    
+    Returns:
+        Safe batch size integer, clamped to [1, 128]
+        - CPU: always 1
+        - GPU: 32-128 depending on VRAM
+    
+    Raises:
+        (caught internally) Any CUDA/device query exceptions fallback to 32
+    """
+    try:
+        # Convert device string to torch.device if needed
+        if device == "auto":
+            device_obj = get_device()
+        else:
+            device_obj = torch.device(device)
+        
+        # CPU always returns batch size 1
+        if device_obj.type == "cpu":
+            return 1
+        
+        # Query available VRAM based on device type
+        if device_obj.type == "mps":
+            # MPS (Mac) has no VRAM query API; estimate conservatively as 8GB
+            available_vram_gb = 8.0
+        elif device_obj.type == "cuda":
+            # CUDA: query actual total device memory
+            total_memory_bytes = torch.cuda.get_device_properties(device_obj).total_memory
+            available_vram_gb = total_memory_bytes / (1024**3)
+        else:
+            # Unknown device type
+            return 32
+        
+        # Apply safety margin: usable = available * (1 - safety_margin)
+        usable_vram_gb = available_vram_gb * (1.0 - safety_margin)
+        
+        # Empirical per-frame cost: ~10 MB per frame for sharpness scoring
+        per_frame_mb = 10.0
+        per_frame_gb = per_frame_mb / 1024.0
+        
+        # Calculate batch size
+        batch_size = int(usable_vram_gb / per_frame_gb)
+        
+        # Clamp to [1, 128]
+        batch_size = max(1, min(128, batch_size))
+        
+        return batch_size
+    
+    except Exception:
+        # Fallback on any error (old CUDA version, missing device, etc.)
+        return 32

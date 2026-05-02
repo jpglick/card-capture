@@ -11,7 +11,8 @@ from card_capture.gpu_utils import (
     compute_motion_gpu,
     compute_histogram_stats,
     is_histogram_outlier,
-    compute_edge_density_gpu
+    compute_edge_density_gpu,
+    estimate_batch_size
 )
 
 
@@ -223,3 +224,31 @@ def test_edge_density_rgb_frame():
     density, is_high = compute_edge_density_gpu(frame, sobel_threshold=50.0,
                                                 edge_density_threshold=0.01)
     assert is_high
+
+
+# ---------------------------------------------------------------------------
+# Batch Size Estimation Tests
+# ---------------------------------------------------------------------------
+
+def test_estimate_batch_size_cpu_returns_one():
+    """CPU device should always return 1."""
+    batch_size = estimate_batch_size(device="cpu")
+    assert batch_size == 1
+
+
+def test_estimate_batch_size_clamped_to_max():
+    """Batch size should never exceed 128."""
+    batch_size = estimate_batch_size(device="auto")
+    assert batch_size <= 128
+
+
+def test_estimate_batch_size_clamped_to_min():
+    """Batch size should never be below 1."""
+    batch_size = estimate_batch_size(device="auto")
+    assert batch_size >= 1
+
+
+def test_estimate_batch_size_type_validation():
+    """Return value should be integer."""
+    batch_size = estimate_batch_size(device="cpu")
+    assert isinstance(batch_size, int)
