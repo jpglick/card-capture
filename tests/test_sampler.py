@@ -398,3 +398,52 @@ class TestContrastBasedSampler:
         # Exact count depends on video, but should be reasonable
         assert isinstance(windows, list), "Should return a list"
         assert len(windows) >= 0, "Should handle merged windows"
+
+    def test_multi_metric_detection_variance_only(self, synthetic_video_path):
+        """With variance-only (default), should behave as before."""
+        sampler = ContrastBasedSampler(
+            video_path=str(synthetic_video_path),
+            scan_fps=5.0,
+            scan_width=160,
+            contrast_threshold=100.0,
+            candidates_per_window=1,
+            device="cpu",
+            detection_metrics=["variance"]
+        )
+        triggered = sampler._detect_metrics(
+            0, np.zeros((50, 50)), variance=150.0, motion=0.0,
+            histogram_stats=(0.0, 0.0), edge_metrics=(0.0, False),
+            enabled_metrics=["variance"]
+        )
+        assert triggered == ["variance"], "Variance should trigger when above threshold"
+
+    def test_multi_metric_detection_or_fusion(self, synthetic_video_path):
+        """Multiple metrics should use OR logic (any trigger = detection)."""
+        sampler = ContrastBasedSampler(
+            video_path=str(synthetic_video_path),
+            scan_fps=5.0,
+            scan_width=160,
+            contrast_threshold=100.0,
+            motion_threshold=5.0,
+            candidates_per_window=1,
+            device="cpu",
+            detection_metrics=["variance", "motion"]
+        )
+        
+        # Motion triggers, variance doesn't
+        triggered = sampler._detect_metrics(
+            0, np.zeros((50, 50)), variance=50.0, motion=10.0,
+            histogram_stats=(0.0, 0.0), edge_metrics=(0.0, False),
+            enabled_metrics=["variance", "motion"]
+        )
+        assert "motion" in triggered, "Motion should trigger when above threshold"
+        assert "variance" not in triggered, "Variance should not trigger when below threshold"
+        
+        # Both should trigger
+        triggered = sampler._detect_metrics(
+            0, np.zeros((50, 50)), variance=150.0, motion=10.0,
+            histogram_stats=(0.0, 0.0), edge_metrics=(0.0, False),
+            enabled_metrics=["variance", "motion"]
+        )
+        assert "variance" in triggered, "Variance should trigger"
+        assert "motion" in triggered, "Motion should trigger"

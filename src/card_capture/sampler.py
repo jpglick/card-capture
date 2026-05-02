@@ -10,7 +10,14 @@ import numpy as np
 import torch
 
 from .models import FrameSample
-from .gpu_utils import compute_variance_gpu, compute_sharpness_gpu
+from .gpu_utils import (
+    compute_variance_gpu,
+    compute_sharpness_gpu,
+    compute_motion_gpu,
+    compute_histogram_stats,
+    is_histogram_outlier,
+    compute_edge_density_gpu,
+)
 
 
 @dataclass
@@ -432,6 +439,11 @@ class ContrastBasedSampler:
         candidates_per_window: int = 3,
         device: str = "auto",
         window_merge_gap: int = 5,
+        motion_threshold: float = 8.0,
+        histogram_sigma: float = 1.5,
+        edge_density_threshold: float = 0.15,
+        sobel_magnitude_threshold: float = 50.0,
+        detection_metrics: list[str] = None,
     ):
         """
         Args:
@@ -443,6 +455,11 @@ class ContrastBasedSampler:
             candidates_per_window: Number of sharpest frames to yield per window
             device: Device for GPU acceleration ("auto", "cpu", "mps", "cuda")
             window_merge_gap: Maximum frame gap between windows to merge (handles jitter)
+            motion_threshold: Motion delta threshold for motion metric detection
+            histogram_sigma: Z-score sigma threshold for histogram outlier detection
+            edge_density_threshold: Fraction of high-edge pixels for edge metric detection
+            sobel_magnitude_threshold: Edge magnitude threshold for Sobel operator
+            detection_metrics: List of metric names to enable (["variance"] by default)
         """
         self.video_path = video_path
         self.scan_fps = scan_fps
@@ -451,6 +468,11 @@ class ContrastBasedSampler:
         self.min_presence_frames = min_presence_frames
         self.candidates_per_window = candidates_per_window
         self.window_merge_gap = window_merge_gap
+        self.motion_threshold = motion_threshold
+        self.histogram_sigma = histogram_sigma
+        self.edge_density_threshold = edge_density_threshold
+        self.sobel_magnitude_threshold = sobel_magnitude_threshold
+        self.detection_metrics = detection_metrics if detection_metrics is not None else ["variance"]
         
         # Device resolution
         if device == "auto":
@@ -458,6 +480,48 @@ class ContrastBasedSampler:
             self.device = get_device()
         else:
             self.device = torch.device(device)
+
+    def _detect_metrics(self, frame_idx: int, frame: np.ndarray, variance: float,
+                        motion: float, histogram_stats: tuple[float, float],
+                        edge_metrics: tuple[float, bool], 
+                        enabled_metrics: list[str]) -> list[str]:
+        """Evaluate all enabled metrics and return which ones triggered.
+        
+        Args:
+            frame_idx: Current frame index
+            frame: Frame image
+            variance: Laplacian variance (from cached Pass 1)
+            motion: Motion delta from compute_motion_gpu()
+            histogram_stats: (mean, std_dev) from compute_histogram_stats()
+            edge_metrics: (density, is_high) from compute_edge_density_gpu()
+            enabled_metrics: List of metric names to evaluate
+        
+        Returns:
+            List of metric names that triggered detection (OR-fused)
+        """
+        triggered = []
+        
+        for metric in enabled_metrics:
+            if metric == "variance":
+                if variance > self.contrast_threshold:
+                    triggered.append("variance")
+            
+            elif metric == "motion":
+                if motion > self.motion_threshold:
+                    triggered.append("motion")
+            
+            elif metric == "histogram":
+                mean, std_dev = histogram_stats
+                if is_histogram_outlier(variance, mean, std_dev, 
+                                           sigma_threshold=self.histogram_sigma):
+                    triggered.append("histogram")
+            
+            elif metric == "edge":
+                _, is_high = edge_metrics
+                if is_high:
+                    triggered.append("edge")
+        
+        return triggered
 
     def _find_presence_windows(self) -> list[PresenceWindow]:
         """
