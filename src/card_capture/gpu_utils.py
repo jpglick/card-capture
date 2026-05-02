@@ -247,7 +247,7 @@ def compute_edge_density_gpu(frame: np.ndarray, device: Union[str, torch.device]
     return edge_density, is_high
 
 
-def estimate_batch_size(device: str = "auto", safety_margin: float = 0.4) -> int:
+def estimate_batch_size(device: str = "auto", frame_shape: tuple = (1080, 1920), safety_margin: float = 0.4) -> int:
     """Estimate safe GPU batch size for sharpness scoring based on available VRAM.
     
     Queries GPU memory and estimates how many frames can be processed simultaneously
@@ -255,6 +255,7 @@ def estimate_batch_size(device: str = "auto", safety_margin: float = 0.4) -> int
     
     Args:
         device: torch device ("mps", "cuda", "cpu", or "auto")
+        frame_shape: Expected frame dimensions (height, width) in pixels (default: (1080, 1920))
         safety_margin: Fraction of VRAM to reserve (0.4 = 40% reserved, 60% usable)
     
     Returns:
