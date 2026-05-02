@@ -563,9 +563,11 @@ class ContrastBasedSampler:
                     # Compute edge metrics if enabled
                     edge_metrics = (0.0, False)
                     if "edge" in self.detection_metrics:
-                        edge_density = compute_edge_density_gpu(small, self.device)
-                        is_high = edge_density > self.edge_density_threshold
-                        edge_metrics = (edge_density, is_high)
+                        edge_metrics = compute_edge_density_gpu(
+                            small, self.device,
+                            sobel_threshold=self.sobel_magnitude_threshold,
+                            edge_density_threshold=self.edge_density_threshold
+                        )
                     
                     # Placeholder histogram stats (TODO: full histogram integration)
                     histogram_stats = (0.0, 0.0)
