@@ -96,6 +96,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Min consecutive detection frames to form a detection window (default: 3)",
     )
     process.add_argument(
+        "--contrast-threshold",
+        type=float,
+        default=1000.0,
+        help="Minimum color variance to detect card presence (Pass 1). Default: 1000.0",
+    )
+    process.add_argument(
+        "--min-presence-frames",
+        type=int,
+        default=3,
+        help="Minimum consecutive frames to form a presence window. Default: 3",
+    )
+    process.add_argument(
         "--device", default="auto",
         help="Device for model inference: auto (default, uses MPS on Mac), cpu, mps, cuda",
     )
