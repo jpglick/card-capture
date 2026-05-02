@@ -56,10 +56,12 @@ class PresenceWindow:
         start_frame: Frame index where presence begins
         end_frame: Frame index where presence ends (inclusive)
         frame_candidates: List of (frame_index, sharpness_score) tuples, sorted by sharpness descending
+        detection_methods: List of metric names that triggered detection
     """
     start_frame: int
     end_frame: int
     frame_candidates: list[tuple[int, float]] = field(default_factory=list)
+    detection_methods: list[str] = field(default_factory=list)
 
 
 class StabilityBasedSampler:

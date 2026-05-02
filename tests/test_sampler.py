@@ -247,6 +247,26 @@ def test_raises_on_missing_video(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# PresenceWindow Tests
+# ---------------------------------------------------------------------------
+
+
+def test_presence_window_detection_methods():
+    """PresenceWindow should store which metrics detected the card."""
+    window = PresenceWindow(
+        start_frame=100, end_frame=110,
+        detection_methods=["variance", "motion"]
+    )
+    assert window.detection_methods == ["variance", "motion"]
+
+
+def test_presence_window_detection_methods_default():
+    """Default detection_methods should be empty list."""
+    window = PresenceWindow(start_frame=100, end_frame=110)
+    assert window.detection_methods == []
+
+
+# ---------------------------------------------------------------------------
 # ContrastBasedSampler Tests
 # ---------------------------------------------------------------------------
 
