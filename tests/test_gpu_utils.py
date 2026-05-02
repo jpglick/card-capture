@@ -116,3 +116,11 @@ def test_motion_detection_rgb_input():
     frame2 = np.full((50, 50, 3), 200, dtype=np.uint8)
     motion = compute_motion_gpu(frame1, frame2)
     assert 190 < motion < 210  # ~200 ± noise
+
+
+def test_motion_detection_shape_mismatch():
+    """Shape mismatch should raise ValueError."""
+    frame1 = np.zeros((50, 50), dtype=np.uint8)
+    frame2 = np.zeros((60, 60), dtype=np.uint8)
+    with pytest.raises(ValueError, match="must have the same shape"):
+        compute_motion_gpu(frame1, frame2)

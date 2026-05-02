@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Union
+
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -108,19 +110,26 @@ def compute_sharpness_gpu(frame: np.ndarray, device: torch.device) -> float:
     return compute_variance_gpu(frame, device)
 
 
-def compute_motion_gpu(frame1: np.ndarray, frame2: np.ndarray, device: str = "auto") -> float:
+def compute_motion_gpu(frame1: np.ndarray, frame2: np.ndarray, device: Union[str, torch.device] = "auto") -> float:
     """Compute mean absolute pixel difference between consecutive frames (motion metric).
     
     Args:
         frame1: Previous frame (H, W) or (H, W, C), uint8 grayscale or color
         frame2: Current frame, same shape and type
-        device: torch device ("mps", "cuda", "cpu", or "auto")
+        device: torch device ("mps", "cuda", "cpu", or "auto") or torch.device object
     
     Returns:
         Mean pixel delta (0-255 scale for uint8 frames)
+    
+    Raises:
+        ValueError: If frame shapes don't match
     """
     if device == "auto":
         device = get_device()
+    
+    # Validate frame shapes match
+    if frame1.shape != frame2.shape:
+        raise ValueError(f"frame1 and frame2 must have the same shape, got {frame1.shape} and {frame2.shape}")
     
     # Convert to grayscale if RGB
     if len(frame1.shape) == 3:
