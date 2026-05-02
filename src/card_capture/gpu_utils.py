@@ -183,3 +183,65 @@ def is_histogram_outlier(variance: float, mean: float, std_dev: float,
     
     z_score = abs(variance - mean) / std_dev
     return z_score > sigma_threshold
+
+
+def compute_edge_density_gpu(frame: np.ndarray, device: Union[str, torch.device] = "auto",
+                             sobel_threshold: float = 50.0, 
+                             edge_density_threshold: float = 0.15) -> tuple[float, bool]:
+    """Compute edge density using Sobel operator for textured card detection.
+    
+    Args:
+        frame: Input frame (H, W) grayscale or (H, W, C) color, uint8
+        device: torch device ("mps", "cuda", "cpu", or "auto")
+        sobel_threshold: Edge magnitude threshold (0-255 scale), default 50
+        edge_density_threshold: Fraction of high-edge pixels for detection, default 0.15
+    
+    Returns:
+        (edge_density_fraction, is_high_edge) tuple
+        - edge_density_fraction: Fraction of pixels with |Sobel| > threshold
+        - is_high_edge: True if edge_density_fraction > edge_density_threshold
+    """
+    if device == "auto":
+        device = get_device()
+    
+    # Convert to grayscale if needed
+    if len(frame.shape) == 3:
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    
+    # Tensor conversion
+    t = torch.from_numpy(frame).float().to(device)
+    t = t.unsqueeze(0).unsqueeze(0)  # (1, 1, H, W) for conv2d
+    
+    # Sobel X kernel
+    sobel_x = torch.tensor([
+        [-1.0, 0.0, 1.0],
+        [-2.0, 0.0, 2.0],
+        [-1.0, 0.0, 1.0]
+    ], dtype=torch.float32).to(device).unsqueeze(0).unsqueeze(0)
+    
+    # Sobel Y kernel
+    sobel_y = torch.tensor([
+        [-1.0, -2.0, -1.0],
+        [0.0, 0.0, 0.0],
+        [1.0, 2.0, 1.0]
+    ], dtype=torch.float32).to(device).unsqueeze(0).unsqueeze(0)
+    
+    # Apply Sobel kernels
+    gx = F.conv2d(t, sobel_x, padding=1)
+    gy = F.conv2d(t, sobel_y, padding=1)
+    
+    # Magnitude = sqrt(Gx^2 + Gy^2)
+    magnitude = torch.sqrt(gx**2 + gy**2)
+    
+    # Scale magnitude to 0-255 range
+    # Max Sobel response is sqrt((2*255)^2 + (2*255)^2) ≈ 721, so divide by ~2.8 to normalize to 0-255
+    magnitude = magnitude * (255.0 / 720.0)
+    
+    # Count high-edge pixels
+    high_edge_pixels = (magnitude > sobel_threshold).float().sum()
+    total_pixels = float(magnitude.numel())
+    
+    edge_density = float(high_edge_pixels / total_pixels)
+    is_high = edge_density > edge_density_threshold
+    
+    return edge_density, is_high

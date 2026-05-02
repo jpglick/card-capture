@@ -10,7 +10,8 @@ from card_capture.gpu_utils import (
     compute_sharpness_gpu, 
     compute_motion_gpu,
     compute_histogram_stats,
-    is_histogram_outlier
+    is_histogram_outlier,
+    compute_edge_density_gpu
 )
 
 
@@ -156,7 +157,7 @@ def test_histogram_stats_normal_distribution():
 def test_is_histogram_outlier_within_band():
     """Value within ±σ band should not trigger outlier."""
     is_outlier = is_histogram_outlier(variance=105.0, mean=100.0, 
-                                           std_dev=10.0, sigma_threshold=1.5)
+                                            std_dev=10.0, sigma_threshold=1.5)
     # z_score = |105-100|/10 = 0.5 < 1.5
     assert not is_outlier
 
@@ -164,7 +165,7 @@ def test_is_histogram_outlier_within_band():
 def test_is_histogram_outlier_outside_band():
     """Value outside ±σ band should trigger outlier."""
     is_outlier = is_histogram_outlier(variance=120.0, mean=100.0, 
-                                           std_dev=10.0, sigma_threshold=1.5)
+                                            std_dev=10.0, sigma_threshold=1.5)
     # z_score = |120-100|/10 = 2.0 > 1.5
     assert is_outlier
 
@@ -172,5 +173,53 @@ def test_is_histogram_outlier_outside_band():
 def test_is_histogram_outlier_zero_std():
     """Zero std dev (no variation) should return False."""
     is_outlier = is_histogram_outlier(variance=100.0, mean=100.0, 
-                                           std_dev=0.0, sigma_threshold=1.5)
+                                            std_dev=0.0, sigma_threshold=1.5)
     assert not is_outlier
+
+
+# ---------------------------------------------------------------------------
+# Edge Density Detection Tests
+# ---------------------------------------------------------------------------
+
+def test_edge_density_blank_frame():
+    """Uniform frame should have near-zero edge density."""
+    frame = np.full((50, 50), 128, dtype=np.uint8)
+    density, is_high = compute_edge_density_gpu(frame, sobel_threshold=50.0, 
+                                                edge_density_threshold=0.15)
+    assert density < 0.10
+    assert not is_high
+
+
+def test_edge_density_checkerboard():
+    """Checkerboard pattern should have detectable high edge density."""
+    frame = np.zeros((100, 100), dtype=np.uint8)
+    frame[::2, ::2] = 255  # Checkerboard
+    density, is_high = compute_edge_density_gpu(frame, sobel_threshold=50.0,
+                                                edge_density_threshold=0.01)
+    assert density > 0.01  # Checkerboard has ~2% edge pixels at grid lines
+    assert is_high
+
+
+def test_edge_density_threshold_varies_detection():
+    """Higher threshold should reduce detections."""
+    frame = np.zeros((100, 100), dtype=np.uint8)
+    frame[::2, ::2] = 200
+    
+    # Loose threshold
+    _, is_high_loose = compute_edge_density_gpu(frame, sobel_threshold=30.0,
+                                                 edge_density_threshold=0.005)
+    # Strict threshold
+    _, is_high_strict = compute_edge_density_gpu(frame, sobel_threshold=150.0,
+                                                  edge_density_threshold=0.40)
+    
+    assert is_high_loose  # Loose should detect
+    assert not is_high_strict  # Strict should not
+
+
+def test_edge_density_rgb_frame():
+    """RGB input should auto-convert to grayscale."""
+    frame = np.zeros((50, 50, 3), dtype=np.uint8)
+    frame[::2, ::2] = [255, 255, 255]  # White checkerboard
+    density, is_high = compute_edge_density_gpu(frame, sobel_threshold=50.0,
+                                                edge_density_threshold=0.01)
+    assert is_high
