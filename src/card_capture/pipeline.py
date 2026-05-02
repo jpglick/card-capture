@@ -28,6 +28,9 @@ from .selector import CandidateSelector, ScoredCandidate
 from .storage import Storage
 
 _SENTINEL = "__card_capture_queue_sentinel__"
+_QUEUE_POLL_INTERVAL_SECONDS = 0.1
+_QUEUE_RETRY_MAX_WAIT_SECONDS = 5.0
+_DRAIN_IDLE_TIMEOUT_SECONDS = 30.0
 
 
 @dataclass(frozen=True)
@@ -211,7 +214,13 @@ def _run_pipeline_workers(
     consumer.start()
 
     try:
-        detections = _drain_detection_queue(detection_queue, error_queue, producer, consumer)
+        detections = _drain_detection_queue(
+            detection_queue,
+            error_queue,
+            producer,
+            consumer,
+            idle_timeout_s=_DRAIN_IDLE_TIMEOUT_SECONDS,
+        )
         producer.join(timeout=10)
         consumer.join(timeout=10)
         _raise_child_error_if_present(error_queue, producer, consumer)
@@ -242,17 +251,27 @@ def _read_producer_stats(stats_queue) -> _ProducerStats:
     raise RuntimeError(f"unexpected producer stats payload: {type(stats)!r}")
 
 
-def _drain_detection_queue(detection_queue, error_queue, producer, consumer) -> list[_DetectionEnvelope]:
+def _drain_detection_queue(
+    detection_queue,
+    error_queue,
+    producer,
+    consumer,
+    idle_timeout_s: float,
+) -> list[_DetectionEnvelope]:
     rows: list[_DetectionEnvelope] = []
+    last_activity = time.monotonic()
     while True:
         _raise_child_error_if_present(error_queue, producer, consumer)
         try:
-            item = detection_queue.get(timeout=0.1)
+            item = detection_queue.get(timeout=_QUEUE_POLL_INTERVAL_SECONDS)
         except Empty:
             if not producer.is_alive() and not consumer.is_alive():
                 _raise_child_error_if_present(error_queue, producer, consumer)
                 raise RuntimeError("consumer exited before emitting sentinel")
+            if time.monotonic() - last_activity > idle_timeout_s:
+                raise RuntimeError("timed out waiting for consumer output or sentinel")
             continue
+        last_activity = time.monotonic()
         if item == _SENTINEL:
             return rows
         if not isinstance(item, _DetectionEnvelope):
@@ -288,19 +307,37 @@ def _stop_process(process: mp.Process) -> None:
         process.terminate()
 
 
-def _put_with_retry(q, item, timeout: float = 0.1) -> None:
+def _put_with_retry(
+    q,
+    item,
+    timeout: float = _QUEUE_POLL_INTERVAL_SECONDS,
+    max_wait_s: float = _QUEUE_RETRY_MAX_WAIT_SECONDS,
+) -> None:
+    if max_wait_s <= 0:
+        raise ValueError("max_wait_s must be positive")
+
+    start = time.monotonic()
     backoff = 0.01
     while True:
         try:
             q.put(item, timeout=timeout)
             return
         except Full:
+            if time.monotonic() - start >= max_wait_s:
+                raise RuntimeError(
+                    f"timed out after {max_wait_s:.2f}s while enqueuing control/data payload"
+                )
             time.sleep(backoff)
             backoff = min(backoff * 2.0, 0.2)
 
 
-def _safe_put(q, item) -> None:
-    _put_with_retry(q, item, timeout=0.1)
+def _put_or_fail(q, item) -> None:
+    _put_with_retry(
+        q,
+        item,
+        timeout=_QUEUE_POLL_INTERVAL_SECONDS,
+        max_wait_s=_QUEUE_RETRY_MAX_WAIT_SECONDS,
+    )
 
 
 def _producer_main(
@@ -331,7 +368,7 @@ def _producer_main(
             accepted_frame_count += 1
             source_frame_path = Path(frame_dir) / f"video_{video_id}_frame_{frame.frame_index}.jpg"
             cv2.imwrite(str(source_frame_path), frame.image)
-            _safe_put(
+            _put_or_fail(
                 frame_queue,
                 _FrameEnvelope(
                     frame_packet=FramePacket(
@@ -346,14 +383,25 @@ def _producer_main(
                 ),
             )
     except Exception as exc:  # pragma: no cover - exercised in parent integration test.
-        _put_with_retry(error_queue, _serialize_error("producer", exc), timeout=0.1)
+        _put_with_retry(
+            error_queue,
+            _serialize_error("producer", exc),
+            timeout=_QUEUE_POLL_INTERVAL_SECONDS,
+            max_wait_s=_QUEUE_RETRY_MAX_WAIT_SECONDS,
+        )
     finally:
         _put_with_retry(
             stats_queue,
             _ProducerStats(frame_count=frame_count, accepted_frame_count=accepted_frame_count),
-            timeout=0.1,
+            timeout=_QUEUE_POLL_INTERVAL_SECONDS,
+            max_wait_s=_QUEUE_RETRY_MAX_WAIT_SECONDS,
         )
-        _put_with_retry(frame_queue, _SENTINEL, timeout=0.1)
+        _put_with_retry(
+            frame_queue,
+            _SENTINEL,
+            timeout=_QUEUE_POLL_INTERVAL_SECONDS,
+            max_wait_s=_QUEUE_RETRY_MAX_WAIT_SECONDS,
+        )
 
 
 def _consumer_main(
@@ -375,7 +423,12 @@ def _consumer_main(
                     corner_confidence_threshold,
                     detection_queue,
                 )
-                _put_with_retry(detection_queue, _SENTINEL, timeout=0.1)
+                _put_with_retry(
+                    detection_queue,
+                    _SENTINEL,
+                    timeout=_QUEUE_POLL_INTERVAL_SECONDS,
+                    max_wait_s=_QUEUE_RETRY_MAX_WAIT_SECONDS,
+                )
                 return
             if not isinstance(item, _FrameEnvelope):
                 raise RuntimeError(f"unexpected frame queue payload: {type(item)!r}")
@@ -389,8 +442,18 @@ def _consumer_main(
                 )
                 batch = []
     except Exception as exc:  # pragma: no cover - exercised in parent integration test.
-        _put_with_retry(error_queue, _serialize_error("consumer", exc), timeout=0.1)
-        _put_with_retry(detection_queue, _SENTINEL, timeout=0.1)
+        _put_with_retry(
+            error_queue,
+            _serialize_error("consumer", exc),
+            timeout=_QUEUE_POLL_INTERVAL_SECONDS,
+            max_wait_s=_QUEUE_RETRY_MAX_WAIT_SECONDS,
+        )
+        _put_with_retry(
+            detection_queue,
+            _SENTINEL,
+            timeout=_QUEUE_POLL_INTERVAL_SECONDS,
+            max_wait_s=_QUEUE_RETRY_MAX_WAIT_SECONDS,
+        )
 
 
 def _consume_batch(
@@ -412,7 +475,7 @@ def _consume_batch(
             source = source_by_frame.get((detection_packet.frame_index, detection_packet.timestamp_ms))
             if source is None:
                 continue
-            _safe_put(
+            _put_or_fail(
                 detection_queue,
                 _DetectionEnvelope(
                     detection_packet=detection_packet,
@@ -433,7 +496,7 @@ def _consume_batch(
         for detection in detector.detect(legacy_frame):
             if detection.confidence < corner_confidence_threshold:
                 continue
-            _safe_put(
+            _put_or_fail(
                 detection_queue,
                 _DetectionEnvelope(
                     detection_packet=DetectionPacket(

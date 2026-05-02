@@ -2,10 +2,16 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from queue import Full
+from queue import Empty, Full
 
 from card_capture.models import CardDetection, CornerDetection, DetectionPacket, FramePacket, FrameSample
-from card_capture.pipeline import ProcessingOptions, VideoProcessor, _SENTINEL, _put_with_retry
+from card_capture.pipeline import (
+    ProcessingOptions,
+    VideoProcessor,
+    _SENTINEL,
+    _drain_detection_queue,
+    _put_with_retry,
+)
 from card_capture.storage import Storage
 
 
@@ -201,6 +207,32 @@ class _QueueFullNTimes:
         self.items.append(item)
 
 
+class _QueueAlwaysFull:
+    def put(self, item, timeout):
+        raise Full
+
+
+class _QueueAlwaysEmpty:
+    def get(self, timeout):
+        raise Empty
+
+
+class _ErrorQueueAlwaysEmpty:
+    def get_nowait(self):
+        raise Empty
+
+
+class _FakeProcess:
+    def __init__(self, alive: bool = True):
+        self._alive = alive
+
+    def is_alive(self):
+        return self._alive
+
+    def terminate(self):
+        self._alive = False
+
+
 def test_put_with_retry_guarantees_sentinel_delivery_after_full():
     queue = _QueueFullNTimes(full_count=3)
 
@@ -218,3 +250,26 @@ def test_put_with_retry_guarantees_error_payload_delivery_after_full():
 
     assert queue.items == [error_payload]
     assert queue.put_calls == 3
+
+
+def test_put_with_retry_fails_fast_after_retry_deadline():
+    queue = _QueueAlwaysFull()
+
+    with pytest.raises(RuntimeError, match="timed out"):
+        _put_with_retry(queue, _SENTINEL, timeout=0.001, max_wait_s=0.02)
+
+
+def test_drain_detection_queue_times_out_when_worker_is_wedged():
+    detection_queue = _QueueAlwaysEmpty()
+    error_queue = _ErrorQueueAlwaysEmpty()
+    producer = _FakeProcess(alive=False)
+    consumer = _FakeProcess(alive=True)
+
+    with pytest.raises(RuntimeError, match="timed out"):
+        _drain_detection_queue(
+            detection_queue=detection_queue,
+            error_queue=error_queue,
+            producer=producer,
+            consumer=consumer,
+            idle_timeout_s=0.02,
+        )
