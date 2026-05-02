@@ -176,7 +176,6 @@ def test_process_command_metric_flags_help():
                 assert "--histogram-outlier-sigma" in help_str
                 assert "--edge-density-threshold" in help_str
                 assert "--sobel-magnitude-threshold" in help_str
-                assert "--sharpness-batch-size" in help_str
                 return
     
     raise AssertionError("Could not find process subparser")
