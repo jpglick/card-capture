@@ -234,8 +234,8 @@ def compute_edge_density_gpu(frame: np.ndarray, device: Union[str, torch.device]
     magnitude = torch.sqrt(gx**2 + gy**2)
     
     # Scale magnitude to 0-255 range
-    # Max Sobel response is sqrt((2*255)^2 + (2*255)^2) ≈ 721, so divide by ~2.8 to normalize to 0-255
-    magnitude = magnitude * (255.0 / 720.0)
+    # Max Sobel response is sqrt(1020^2 + 1020^2) ≈ 1443
+    magnitude = magnitude * (255.0 / 1443.0)
     
     # Count high-edge pixels
     high_edge_pixels = (magnitude > sobel_threshold).float().sum()
