@@ -67,16 +67,20 @@ class VideoProcessor:
         )
 
         candidates: List[ScoredCandidate] = []
+        frame_count = 0
+        accepted_frame_count = 0
         detection_count = 0
-        good_detection_count = 0
 
-        for frame in self.sampler.sample(video_path, options.sample_fps):
+        # sample_fps is no longer configurable through ProcessingOptions in v2.1.
+        # Use 0.0 to indicate "no frame skipping" for compatible samplers.
+        for frame in self.sampler.sample(video_path, 0.0):
+            frame_count += 1
+            accepted_frame_count += 1
             source_frame_path = frame_dir / f"video_{video_id}_frame_{frame.frame_index}.jpg"
             cv2.imwrite(str(source_frame_path), frame.image)
 
-            stop_this_frame = False
             for detection in self.detector.detect(frame):
-                if detection.confidence < options.confidence_threshold:
+                if detection.confidence < options.corner_confidence_threshold:
                     continue
                 crop = self.cropper.crop(frame.image, detection.polygon)
                 score = self.scorer.score(crop.image, detection.confidence)
@@ -102,22 +106,8 @@ class VideoProcessor:
                     )
                 )
                 detection_count += 1
-                if (
-                    options.detections_to_stop > 0
-                    and score.total >= options.quality_floor
-                ):
-                    good_detection_count += 1
-                    if good_detection_count >= options.detections_to_stop:
-                        stop_this_frame = True
-                        break  # stop processing further detections in this frame
 
-            if stop_this_frame:
-                break  # stop consuming more frames
-
-        selector = self.selector or CandidateSelector(
-            group_gap_ms=options.group_gap_ms,
-            max_candidates=options.max_candidates,
-        )
+        selector = self.selector or CandidateSelector()
         selected = selector.select(candidates)
         for selected_index, candidate in enumerate(selected):
             source_path = Path(candidate.image_path)
@@ -135,8 +125,10 @@ class VideoProcessor:
         )
         return ProcessingResult(
             video_id=video_id,
+            frame_count=frame_count,
+            accepted_frame_count=accepted_frame_count,
             detection_count=detection_count,
-            saved_count=len(selected),
+            saved_instance_count=len(selected),
             output_dir=options.output_dir,
         )
 
