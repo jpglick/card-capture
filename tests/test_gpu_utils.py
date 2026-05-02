@@ -9,8 +9,8 @@ from card_capture.gpu_utils import (
     compute_variance_gpu, 
     compute_sharpness_gpu, 
     compute_motion_gpu,
-    compute_histogram_stats_gpu,
-    is_histogram_outlier_gpu
+    compute_histogram_stats,
+    is_histogram_outlier
 )
 
 
@@ -140,7 +140,7 @@ def test_motion_detection_shape_mismatch():
 def test_histogram_stats_uniform():
     """Uniform variance values should have zero std dev."""
     values = [100.0] * 10
-    mean, std = compute_histogram_stats_gpu(values)
+    mean, std = compute_histogram_stats(values)
     assert abs(mean - 100.0) < 0.01
     assert std < 0.01
 
@@ -148,14 +148,14 @@ def test_histogram_stats_uniform():
 def test_histogram_stats_normal_distribution():
     """Known distribution should compute correct stats."""
     values = [100.0, 105.0, 110.0, 115.0, 120.0]  # mean=110, known std
-    mean, std = compute_histogram_stats_gpu(values)
+    mean, std = compute_histogram_stats(values)
     assert abs(mean - 110.0) < 0.1
     assert std > 0  # Should have variation
 
 
 def test_is_histogram_outlier_within_band():
     """Value within ±σ band should not trigger outlier."""
-    is_outlier = is_histogram_outlier_gpu(variance=105.0, mean=100.0, 
+    is_outlier = is_histogram_outlier(variance=105.0, mean=100.0, 
                                            std_dev=10.0, sigma_threshold=1.5)
     # z_score = |105-100|/10 = 0.5 < 1.5
     assert not is_outlier
@@ -163,7 +163,7 @@ def test_is_histogram_outlier_within_band():
 
 def test_is_histogram_outlier_outside_band():
     """Value outside ±σ band should trigger outlier."""
-    is_outlier = is_histogram_outlier_gpu(variance=120.0, mean=100.0, 
+    is_outlier = is_histogram_outlier(variance=120.0, mean=100.0, 
                                            std_dev=10.0, sigma_threshold=1.5)
     # z_score = |120-100|/10 = 2.0 > 1.5
     assert is_outlier
@@ -171,6 +171,6 @@ def test_is_histogram_outlier_outside_band():
 
 def test_is_histogram_outlier_zero_std():
     """Zero std dev (no variation) should return False."""
-    is_outlier = is_histogram_outlier_gpu(variance=100.0, mean=100.0, 
+    is_outlier = is_histogram_outlier(variance=100.0, mean=100.0, 
                                            std_dev=0.0, sigma_threshold=1.5)
     assert not is_outlier

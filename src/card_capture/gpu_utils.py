@@ -147,7 +147,7 @@ def compute_motion_gpu(frame1: np.ndarray, frame2: np.ndarray, device: Union[str
     return motion
 
 
-def compute_histogram_stats_gpu(variance_values: list[float]) -> tuple[float, float]:
+def compute_histogram_stats(variance_values: list[float]) -> tuple[float, float]:
     """Compute mean and standard deviation of Laplacian variance distribution.
     
     Args:
@@ -163,7 +163,7 @@ def compute_histogram_stats_gpu(variance_values: list[float]) -> tuple[float, fl
     return float(values.mean()), float(values.std())
 
 
-def is_histogram_outlier_gpu(variance: float, mean: float, std_dev: float, 
+def is_histogram_outlier(variance: float, mean: float, std_dev: float, 
                              sigma_threshold: float = 1.5) -> bool:
     """Check if a variance value is a statistical outlier.
     
