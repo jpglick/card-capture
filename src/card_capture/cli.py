@@ -6,7 +6,7 @@ from typing import Optional, Sequence
 
 from .detectors import CardcaptorUltralyticsDetector, FakeCardDetector
 from .pipeline import ProcessingOptions, VideoProcessor
-from .sampler import DetectionGuidedSampler, StabilityBasedSampler, SyntheticSampler, VideoSampler
+from .sampler import ContrastBasedSampler, DetectionGuidedSampler, StabilityBasedSampler, SyntheticSampler, VideoSampler
 from .storage import Storage
 
 
@@ -51,9 +51,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     process.add_argument(
         "--sampler",
-        choices=["stability", "detection", "raw"],
+        choices=["stability", "detection", "contrast", "raw"],
         default="stability",
-        help="stability: motion-based (default); detection: card-presence-based; raw: cadence-based",
+        help="stability: motion-based (default); detection: card-presence-based; contrast: color-variance-based; raw: cadence-based",
     )
     process.add_argument(
         "--scan-fps", type=_positive_float, default=10.0,
@@ -153,6 +153,15 @@ def _run_process(args: argparse.Namespace) -> int:
                 min_detection_frames=args.min_detection_frames,
                 candidates_per_window=args.candidates_per_window,
                 device=args.device,
+            )
+        elif args.sampler == "contrast":
+            sampler = ContrastBasedSampler(
+                video_path=args.video_path,
+                scan_fps=args.scan_fps,
+                scan_width=args.scan_width,
+                contrast_threshold=args.contrast_threshold,
+                min_presence_frames=args.min_presence_frames,
+                candidates_per_window=args.candidates_per_window,
             )
         else:  # stability
             sampler = StabilityBasedSampler(
