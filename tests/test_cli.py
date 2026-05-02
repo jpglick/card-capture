@@ -137,3 +137,15 @@ def test_cli_rejects_out_of_range_quality_floor():
         assert exc.code == 2
     else:
         raise AssertionError("expected rejection of --quality-floor 1.5")
+
+
+def test_process_command_accepts_window_merge_gap_flag():
+    """CLI should accept --window-merge-gap flag."""
+    parser = build_parser()
+    args = parser.parse_args([
+        "process",
+        "video.mov",
+        "--sampler", "contrast",
+        "--window-merge-gap", "10",
+    ])
+    assert args.window_merge_gap == 10

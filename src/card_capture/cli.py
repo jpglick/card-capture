@@ -108,6 +108,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Minimum consecutive frames to form a presence window. Default: 3",
     )
     process.add_argument(
+        "--window-merge-gap",
+        type=int,
+        default=5,
+        help="Max frame gap between presence windows to merge (handles card movement jitter). Default: 5",
+    )
+    process.add_argument(
         "--device", default="auto",
         help="Device for model inference: auto (default, uses MPS on Mac), cpu, mps, cuda",
     )
@@ -162,6 +168,7 @@ def _run_process(args: argparse.Namespace) -> int:
                 contrast_threshold=args.contrast_threshold,
                 min_presence_frames=args.min_presence_frames,
                 candidates_per_window=args.candidates_per_window,
+                window_merge_gap=args.window_merge_gap,
             )
         else:  # stability
             sampler = StabilityBasedSampler(
