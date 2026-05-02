@@ -2,9 +2,10 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from queue import Full
 
 from card_capture.models import CardDetection, CornerDetection, DetectionPacket, FramePacket, FrameSample
-from card_capture.pipeline import ProcessingOptions, VideoProcessor
+from card_capture.pipeline import ProcessingOptions, VideoProcessor, _SENTINEL, _put_with_retry
 from card_capture.storage import Storage
 
 
@@ -185,3 +186,35 @@ def test_pipeline_propagates_consumer_errors(tmp_path: Path):
 
     with pytest.raises(RuntimeError, match="consumer"):
         processor.process(video_path, ProcessingOptions(output_dir=tmp_path / "output", queue_size=2))
+
+
+class _QueueFullNTimes:
+    def __init__(self, full_count: int):
+        self.full_count = full_count
+        self.items = []
+        self.put_calls = 0
+
+    def put(self, item, timeout):
+        self.put_calls += 1
+        if self.put_calls <= self.full_count:
+            raise Full
+        self.items.append(item)
+
+
+def test_put_with_retry_guarantees_sentinel_delivery_after_full():
+    queue = _QueueFullNTimes(full_count=3)
+
+    _put_with_retry(queue, _SENTINEL, timeout=0.001)
+
+    assert queue.items == [_SENTINEL]
+    assert queue.put_calls == 4
+
+
+def test_put_with_retry_guarantees_error_payload_delivery_after_full():
+    queue = _QueueFullNTimes(full_count=2)
+    error_payload = {"worker": "consumer", "message": "boom"}
+
+    _put_with_retry(queue, error_payload, timeout=0.001)
+
+    assert queue.items == [error_payload]
+    assert queue.put_calls == 3

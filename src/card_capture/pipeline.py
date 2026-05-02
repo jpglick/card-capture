@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import multiprocessing as mp
 import shutil
+import time
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
@@ -287,11 +288,19 @@ def _stop_process(process: mp.Process) -> None:
         process.terminate()
 
 
+def _put_with_retry(q, item, timeout: float = 0.1) -> None:
+    backoff = 0.01
+    while True:
+        try:
+            q.put(item, timeout=timeout)
+            return
+        except Full:
+            time.sleep(backoff)
+            backoff = min(backoff * 2.0, 0.2)
+
+
 def _safe_put(q, item) -> None:
-    try:
-        q.put(item, timeout=0.5)
-    except Full:
-        pass
+    _put_with_retry(q, item, timeout=0.1)
 
 
 def _producer_main(
@@ -337,13 +346,14 @@ def _producer_main(
                 ),
             )
     except Exception as exc:  # pragma: no cover - exercised in parent integration test.
-        _safe_put(error_queue, _serialize_error("producer", exc))
+        _put_with_retry(error_queue, _serialize_error("producer", exc), timeout=0.1)
     finally:
-        _safe_put(
+        _put_with_retry(
             stats_queue,
             _ProducerStats(frame_count=frame_count, accepted_frame_count=accepted_frame_count),
+            timeout=0.1,
         )
-        _safe_put(frame_queue, _SENTINEL)
+        _put_with_retry(frame_queue, _SENTINEL, timeout=0.1)
 
 
 def _consumer_main(
@@ -365,7 +375,7 @@ def _consumer_main(
                     corner_confidence_threshold,
                     detection_queue,
                 )
-                _safe_put(detection_queue, _SENTINEL)
+                _put_with_retry(detection_queue, _SENTINEL, timeout=0.1)
                 return
             if not isinstance(item, _FrameEnvelope):
                 raise RuntimeError(f"unexpected frame queue payload: {type(item)!r}")
@@ -379,8 +389,8 @@ def _consumer_main(
                 )
                 batch = []
     except Exception as exc:  # pragma: no cover - exercised in parent integration test.
-        _safe_put(error_queue, _serialize_error("consumer", exc))
-        _safe_put(detection_queue, _SENTINEL)
+        _put_with_retry(error_queue, _serialize_error("consumer", exc), timeout=0.1)
+        _put_with_retry(detection_queue, _SENTINEL, timeout=0.1)
 
 
 def _consume_batch(
