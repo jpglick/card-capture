@@ -45,6 +45,20 @@ class DetectionWindow:
     frame_detections: List[Tuple[int, float]] = field(default_factory=list)
 
 
+@dataclass
+class PresenceWindow:
+    """Represents a window where a card is detected (high color variance).
+    
+    Attributes:
+        start_frame: Frame index where presence begins
+        end_frame: Frame index where presence ends (inclusive)
+        frame_candidates: List of (frame_index, sharpness_score) tuples, sorted by sharpness descending
+    """
+    start_frame: int
+    end_frame: int
+    frame_candidates: list[tuple[int, float]] = field(default_factory=list)
+
+
 class StabilityBasedSampler:
     """Two-pass sampler: cheap diff scan to find still windows, then seek to
     multiple candidate frames within each window for full-resolution detection.
