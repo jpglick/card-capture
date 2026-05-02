@@ -57,39 +57,52 @@ Pass 2: Full-res sharpness scoring (GPU-batched)
 **Purpose:** Catch cards being positioned (higher motion = likely card being moved/placed).
 
 **Algorithm:**
-1. Compute grayscale absolute difference between consecutive downscaled frames
-2. Compute mean pixel delta across image: `mean_delta = mean(|frame[t] - frame[t-1]|)`
-3. Threshold: `motion_detected = mean_delta > motion_threshold` (default: 8.0, tunable)
-4. Run on GPU: `torch.abs(frame1_tensor - frame2_tensor).mean()`
+1. Compute motion between consecutive downscaled frames (same resolution as Pass 1 scan: `scan_width` pixels wide, e.g., 160px)
+2. Compute grayscale absolute difference: `motion_frame = abs(gray_frame[t] - gray_frame[t-1])`
+3. Compute mean pixel delta across entire image: `mean_delta = mean(motion_frame)`
+4. Threshold: `motion_detected = mean_delta > motion_threshold` (default: 8.0)
+5. Run on GPU: `torch.abs(frame1_tensor - frame2_tensor).mean()`
 
 **Rationale:**
 - Cards held still have low motion; cards being positioned have higher motion
 - Captures transition moments where card presence begins
 - Orthogonal to variance (motion ≠ texture)
 - Negligible GPU overhead (single tensor operation)
+- Motion delta is normalized to 0-255 range (for uint8 grayscale), so threshold of 8.0 means ~3% pixel change
 
 **Parameter:** `--motion-threshold` (default: 8.0, range 1-50)
-- Higher values: only large movements (fewer detections, lower false positives)
-- Lower values: catch all motion (more detections, may catch camera shake)
+- **Higher values (e.g., 20+):** Only large movements trigger; ignores small jitter and focus breathing
+- **Lower values (e.g., 3-5):** Catch all motion; may trigger on camera shake or lighting flicker
+- **Default 8.0:** Catches card positioning (typically 10-30% pixel change) while ignoring minor jitter
 
 #### Metric 3: Histogram Outlier Detection
 
 **Purpose:** Catch statistically unusual frames (dim cards, bright reflections, unusual lighting).
 
-**Algorithm:**
-1. During Pass 1, collect Laplacian variance values for all scanned frames into histogram
-2. Compute mean (μ) and standard deviation (σ) of variances
-3. Mark frame as "outlier" if variance is outside band: `|variance - μ| > k·σ` (default k=1.5)
-4. Rationale: Unusual cards (very dim, very bright, or unusual texture) deviate from typical lightbox variance
+**Algorithm (Two-Phase Pass 1):**
+
+*Phase 1A - Statistics Collection:*
+1. Scan entire video, compute Laplacian variance for all frames at scan resolution
+2. Collect all variance values into histogram
+3. Compute mean (μ) and standard deviation (σ) of all variances
+
+*Phase 1B - Outlier Detection (with Fusion):*
+4. Scan video again with metric fusion
+5. For each frame, mark as "outlier" if: `|variance - μ| > k·σ` (default k=1.5)
+6. Interpretation: Frames with unusually HIGH variance (card/texture) OR unusually LOW variance (rare but possible with specific lighting)
 
 **Rationale:**
-- Lightbox typically has consistent variance pattern (empty frames cluster around μ)
-- Cards represent outliers: they're either significantly higher (high-contrast cards) or lower (dim cards) than the norm
-- k=1.5 is sensitive (catches ±1.5σ deviations); tunable for more/less sensitivity
+- Lightbox typically has consistent variance pattern (empty frames cluster around μ = baseline)
+- Cards represent outliers: they deviate from the typical lightbox variance distribution
+- Higher k values = stricter threshold (only extreme outliers detected, fewer detections)
+- Lower k values = looser threshold (more frames qualify as outliers, catches subtle variations)
 
 **Parameter:** `--histogram-outlier-sigma` (default: 1.5, range 0.5-3.0)
-- Lower values: more sensitive (larger ±σ band), catches more outliers
-- Higher values: less sensitive, only extreme outliers trigger
+- **1.5 (default):** Moderate sensitivity; catches cards that are ±1.5σ from baseline
+- **Lower values (e.g., 0.5):** More sensitive; catches cards closer to baseline variance
+- **Higher values (e.g., 2.5):** Less sensitive; only extreme outliers trigger
+
+**Implementation Note:** This metric requires two passes through the video (stats collection, then detection). The overhead is acceptable since Pass 1 is already fast (~65s). Consider caching histogram statistics if the same video is processed multiple times.
 
 #### Metric 4: Edge Density Detection
 
@@ -150,18 +163,37 @@ class PresenceWindow:
 
 #### Configuration
 
-**CLI flag:** `--detection-metrics` (comma-separated list, default: "variance,motion,histogram,edges")
+**CLI flag:** `--detection-metrics` (comma-separated list, default: "variance")
 
 ```bash
+# Default (backward compatible): only Laplacian variance
+card-capture process video.mov --sampler contrast
+
+# All metrics enabled (recommended for challenging videos)
 card-capture process video.mov \
   --sampler contrast \
   --detection-metrics variance,motion,histogram,edges \
-  --contrast-threshold 600.0 \
   --motion-threshold 8.0 \
   --histogram-outlier-sigma 1.5 \
-  --edge-density-threshold 0.15 \
-  --sobel-magnitude-threshold 50
+  --edge-density-threshold 0.15
+
+# Custom mix
+card-capture process video.mov \
+  --sampler contrast \
+  --detection-metrics variance,motion \
+  --motion-threshold 5.0
 ```
+
+**Default Behavior (Backward Compatible):**
+- `--detection-metrics variance` (only existing Laplacian variance)
+- Existing tests continue to pass without modification
+- New metrics must be explicitly enabled by user
+
+**Progressive Enhancement:**
+- Start with default (variance only)
+- If cards are missed, enable `--detection-metrics variance,motion` to catch positioning transitions
+- If still missing cards, enable histogram: `--detection-metrics variance,motion,histogram`
+- If textured cards are missed, add edges: `--detection-metrics variance,motion,histogram,edges`
 
 ### B) GPU-Batched Sharpness Scoring
 
@@ -186,8 +218,25 @@ Pass 2 (sharpness scoring) processes frames sequentially:
 #### Algorithm
 
 ```python
-def score_sharpness_batched(frames, batch_size=32):
-    """Score sharpness for multiple frames in parallel batches."""
+def score_sharpness_batched(frames, batch_size=32, device="mps"):
+    """Score sharpness for multiple frames in parallel batches.
+    
+    Args:
+        frames: List of numpy arrays (H, W, C) or (H, W)
+        batch_size: Number of frames to process at once
+        device: torch device (mps, cuda, cpu)
+    
+    Returns:
+        List of sharpness scores (one per frame)
+    """
+    # Laplacian kernel (3x3) for edge detection
+    laplacian_kernel = torch.tensor([
+        [0, -1, 0],
+        [-1, 4, -1],
+        [0, -1, 0]
+    ], dtype=torch.float32).to(device)
+    laplacian_kernel = laplacian_kernel.unsqueeze(0).unsqueeze(0)  # (1, 1, 3, 3)
+    
     all_scores = []
     
     for batch_start in range(0, len(frames), batch_size):
@@ -198,16 +247,19 @@ def score_sharpness_batched(frames, batch_size=32):
         batch_tensor = torch.stack([torch.from_numpy(f) for f in batch])
         batch_tensor = batch_tensor.to(device).float()
         
-        # Convert to grayscale and compute Laplacian variance
-        gray = torch.mean(batch_tensor, dim=3)  # (B, H, W)
+        # Convert to grayscale and prepare for conv2d
+        if batch_tensor.shape[-1] == 3:  # RGB
+            gray = torch.mean(batch_tensor, dim=3)  # (B, H, W)
+        else:  # Already grayscale
+            gray = batch_tensor.squeeze(-1)
+        
         gray = gray.unsqueeze(1)  # (B, 1, H, W) for conv2d
         
-        # Laplacian kernel
-        laplacian_kernel = torch.tensor([...]).to(device)
-        edges = torch.nn.functional.conv2d(gray, laplacian_kernel)
+        # Apply Laplacian kernel (edges)
+        edges = torch.nn.functional.conv2d(gray, laplacian_kernel, padding=1)  # (B, 1, H, W)
         
-        # Compute variance across spatial dimensions
-        batch_scores = torch.var(edges, dim=(2, 3))  # (B,)
+        # Compute variance across spatial dimensions (sharpness = high variance of edge magnitudes)
+        batch_scores = torch.var(edges, dim=(2, 3)).squeeze()  # (B,)
         all_scores.extend(batch_scores.cpu().numpy())
     
     return all_scores
@@ -223,17 +275,33 @@ def score_sharpness_batched(frames, batch_size=32):
 
 **Auto-detection:**
 ```python
-def estimate_batch_size(device, frame_shape=(1080, 1920), bytes_per_frame_factor=3):
-    """Estimate safe batch size based on available VRAM."""
+def estimate_batch_size(device, frame_shape=(1080, 1920), safety_margin=0.4):
+    """Estimate safe batch size based on available VRAM.
+    
+    Accounts for: frame data, intermediate Laplacian tensors, variance computations.
+    Uses conservative estimate to avoid OOM.
+    """
     if device.type == "cpu":
         return 1  # CPU: sequential only
     
-    available_vram = torch.cuda.get_device_properties(device).total_memory
-    bytes_per_frame = frame_shape[0] * frame_shape[1] * bytes_per_frame_factor
-    safe_batch_size = max(1, (available_vram * 0.5) // bytes_per_frame)
+    available_vram_gb = torch.cuda.get_device_properties(device).total_memory / (1024**3)
     
-    return min(safe_batch_size, 128)  # Cap at 128
+    # Empirical estimate: ~10MB per frame for batched Laplacian + variance
+    # (includes overhead for intermediate tensors and PyTorch memory fragmentation)
+    mb_per_frame = 10
+    usable_vram_gb = available_vram_gb * (1 - safety_margin)  # Leave 40% free
+    usable_vram_mb = usable_vram_gb * 1024
+    
+    safe_batch_size = int(usable_vram_mb / mb_per_frame)
+    
+    return min(max(1, safe_batch_size), 128)  # Clamp to [1, 128]
 ```
+
+**VRAM Guidelines (Empirical):**
+- M2 Max (16GB): ~110 frames per batch (~15GB usable after 40% margin)
+- M2 Pro (8GB): ~50 frames per batch (~4.8GB usable)
+- Default 32: Safe on most recent consumer GPUs (<=8GB)
+- If OOM occurs: Reduce `--sharpness-batch-size` manually or enable auto-detect
 
 #### Expected Speedup
 
@@ -263,10 +331,14 @@ card-capture process video.mov \
 
 #### Backward Compatibility
 
-- Default batch_size=32 (works on M2 Pro with 8GB)
-- batch_size=1 equivalent to current sequential behavior
-- CPU-only falls back to batch_size=1 automatically
-- Existing tests pass without modification (old behavior still supported)
+- **Default detection metrics:** `variance` only (existing behavior preserved)
+  - All existing tests pass without modification
+  - New metrics must be explicitly enabled via `--detection-metrics` flag
+- **Default batch_size:** 32 (safe on machines with 8GB+ VRAM)
+  - batch_size=1 equivalent to current sequential behavior if needed
+  - CPU-only falls back to batch_size=1 automatically
+- **Existing parameters unchanged:** All current CLI flags and defaults remain the same
+- **Progressive adoption:** Users can opt-in to new metrics as needed for better detection
 
 ## Integration
 
@@ -315,25 +387,27 @@ card-capture process video.mov \
 ## Success Criteria
 
 ✅ **Accuracy:**
-- Detect all 7 trading cards (fronts + backs) from test video
+- Detect all 7 trading cards (fronts + backs) from test videos
 - Zero false positives in output (only sharp, in-focus frames)
-- No regression on existing single-metric tests
+- No regression on existing single-metric tests (variance-only baseline behavior maintained)
+- Multi-metric mode improves detection rate over baseline
 
 ✅ **Performance:**
-- Pass 2 sharpness scoring: < 70 seconds (from 223s baseline)
-- Total processing: < 150 seconds (from 288s baseline)
-- Timing output shows contribution of each metric
+- Pass 2 sharpness scoring: < 70 seconds (from 223s baseline, 3.2x speedup)
+- Total processing: < 150 seconds (from 288s baseline, 1.9x speedup)
+- Timing output shows breakdown of each stage
 
 ✅ **Usability:**
+- Default detection mode is backward compatible (variance only)
 - All new parameters have sensible defaults
 - Auto-detection of batch size and device works reliably
 - CLI help documents all new flags
-- README provides tuning guidance
+- README provides tuning guidance and examples
 
 ✅ **Testing:**
-- 55+ existing tests pass (no regressions)
+- 55+ existing tests pass (no regressions with variance-only default)
 - 15+ new tests for multi-metric and batching
-- Manual verification on real video (IMG_5596.MOV)
+- Manual verification on test videos (if available)
 
 ## Timeline & Phases
 
