@@ -541,6 +541,8 @@ class ContrastBasedSampler:
             in_presence_window = False
             window_start = 0
             presence_frames = 0
+            window_triggered_methods = set()  # Track metrics that triggered in current window
+            prev_frame = None
 
             while True:
                 ret, frame = cap.read()
@@ -552,22 +554,49 @@ class ContrastBasedSampler:
                     # Downscale and compute variance
                     small = cv2.resize(frame, (self.scan_width, int(frame.shape[0] * self.scan_width / frame.shape[1])))
                     variance = compute_variance_gpu(small, self.device)
+                    
+                    # Compute motion if enabled
+                    motion = 0.0
+                    if "motion" in self.detection_metrics and prev_frame is not None:
+                        motion = compute_motion_gpu(prev_frame, small, self.device)
+                    
+                    # Compute edge metrics if enabled
+                    edge_metrics = (0.0, False)
+                    if "edge" in self.detection_metrics:
+                        edge_density = compute_edge_density_gpu(small, self.device)
+                        is_high = edge_density > self.edge_density_threshold
+                        edge_metrics = (edge_density, is_high)
+                    
+                    # Placeholder histogram stats (TODO: full histogram integration)
+                    histogram_stats = (0.0, 0.0)
+                    
+                    # Multi-metric OR fusion
+                    triggered = self._detect_metrics(frame_index, small, variance, motion=motion,
+                                                      histogram_stats=histogram_stats,
+                                                      edge_metrics=edge_metrics,
+                                                      enabled_metrics=self.detection_metrics)
 
-                    if variance > self.contrast_threshold:
+                    if triggered:
                         if not in_presence_window:
                             in_presence_window = True
                             window_start = frame_index
                             presence_frames = 1
+                            window_triggered_methods = set(triggered)
                         else:
                             presence_frames += 1
+                            window_triggered_methods.update(triggered)
                     else:
                         if in_presence_window:
                             if presence_frames >= self.min_presence_frames:
                                 windows.append(PresenceWindow(
                                     start_frame=window_start,
-                                    end_frame=frame_index - frame_skip
+                                    end_frame=frame_index - frame_skip,
+                                    detection_methods=list(window_triggered_methods)
                                 ))
                             in_presence_window = False
+                            window_triggered_methods = set()
+                    
+                    prev_frame = small
 
                 frame_index += 1
 
@@ -575,7 +604,8 @@ class ContrastBasedSampler:
             if in_presence_window and presence_frames >= self.min_presence_frames:
                 windows.append(PresenceWindow(
                     start_frame=window_start,
-                    end_frame=frame_index - 1
+                    end_frame=frame_index - 1,
+                    detection_methods=list(window_triggered_methods)
                 ))
 
         finally:
