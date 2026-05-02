@@ -1,0 +1,57 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Protocol
+
+import cv2
+import numpy as np
+
+
+class FrameReader(Protocol):
+    def iter_frames(self, video_path: Path | str):
+        ...
+
+
+def _decord_available() -> bool:
+    try:
+        import decord  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def _resolve_reader_backend(preferred: str) -> str:
+    backend = preferred.strip().lower()
+    if backend == "auto":
+        return "decord" if _decord_available() else "pyav"
+    if backend in {"decord", "pyav"}:
+        return backend
+    raise ValueError("preferred backend must be one of: auto, decord, pyav")
+
+
+@dataclass
+class FrameTriageFilter:
+    variance_threshold: float = 25.0
+    empty_ratio_threshold: float = 0.98
+    blur_threshold: float = 5.0
+    empty_pixel_threshold: int = 8
+
+    def evaluate(self, frame: np.ndarray) -> tuple[bool, dict[str, float]]:
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
+
+        blur = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+        variance = float(gray.var())
+        empty_ratio = float((gray <= self.empty_pixel_threshold).mean())
+
+        metrics = {
+            "blur": blur,
+            "variance": variance,
+            "empty_ratio": empty_ratio,
+        }
+        accepted = (
+            variance >= self.variance_threshold
+            and blur >= self.blur_threshold
+            and empty_ratio <= self.empty_ratio_threshold
+        )
+        return accepted, metrics
