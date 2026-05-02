@@ -12,7 +12,8 @@ from card_capture.gpu_utils import (
     compute_histogram_stats,
     is_histogram_outlier,
     compute_edge_density_gpu,
-    estimate_batch_size
+    estimate_batch_size,
+    score_sharpness_batched
 )
 
 
@@ -252,3 +253,49 @@ def test_estimate_batch_size_type_validation():
     """Return value should be integer."""
     batch_size = estimate_batch_size(device="cpu")
     assert isinstance(batch_size, int)
+
+
+# ---------------------------------------------------------------------------
+# Batched Sharpness Scoring Tests
+# ---------------------------------------------------------------------------
+
+def test_score_sharpness_batched_empty():
+    """Empty frame list should return empty results."""
+    results = score_sharpness_batched([])
+    assert results == []
+
+
+def test_score_sharpness_batched_single():
+    """Single frame should work (batch_size=1)."""
+    frame = np.random.randint(0, 256, (50, 50), dtype=np.uint8)
+    results = score_sharpness_batched([frame], batch_size=1)
+    assert len(results) == 1
+    assert isinstance(results[0], float)
+    assert results[0] >= 0
+
+
+def test_score_sharpness_batched_batch_size():
+    """Large batch should produce correct count."""
+    frames = [np.random.randint(0, 256, (50, 50), dtype=np.uint8) for _ in range(10)]
+    results = score_sharpness_batched(frames, batch_size=4)
+    assert len(results) == 10
+    # All should be floats >= 0
+    for score in results:
+        assert isinstance(score, float)
+        assert score >= 0
+
+
+def test_score_sharpness_batched_matches_sequential():
+    """Batched results should match sequential computation (within float tolerance)."""
+    frames = [np.random.randint(50, 200, (50, 50), dtype=np.uint8) for _ in range(3)]
+    
+    # Batched
+    batched_results = score_sharpness_batched(frames, batch_size=10)
+    
+    # Sequential (batch_size=1)
+    sequential_results = score_sharpness_batched(frames, batch_size=1)
+    
+    # Should match within floating point tolerance
+    assert len(batched_results) == len(sequential_results)
+    for batched, sequential in zip(batched_results, sequential_results):
+        assert abs(batched - sequential) < 1e-4

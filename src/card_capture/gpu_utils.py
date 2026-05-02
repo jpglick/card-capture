@@ -307,3 +307,86 @@ def estimate_batch_size(device: str = "auto", frame_shape: tuple = (1080, 1920),
     except Exception:
         # Fallback on any error (old CUDA version, missing device, etc.)
         return 32
+
+
+def score_sharpness_batched(frames: list[np.ndarray], device: str = "auto", 
+                            batch_size: int = 32, variance_only: bool = True) -> list[float]:
+    """Score sharpness (Laplacian variance) for a batch of frames on GPU.
+    
+    Processes multiple frames in parallel on GPU for efficient batched computation.
+    Uses Laplacian convolution variance as the sharpness metric.
+    
+    Args:
+        frames: List of frames, each (H, W) grayscale or (H, W, C) color, uint8
+        device: torch device ("mps", "cuda", "cpu", or "auto")
+        batch_size: Frames to process simultaneously, clamped to [1, 128]
+        variance_only: If True (default), compute only Laplacian. If False, for future expansion.
+    
+    Returns:
+        List of float variance scores in original frame order, same length as input frames.
+        Empty list if input is empty.
+    
+    Raises:
+        TypeError: If frames is not a list or contains non-ndarray items
+    """
+    # Handle empty input
+    if not frames:
+        return []
+    
+    # Convert device string to torch.device if needed
+    if device == "auto":
+        device = get_device()
+    elif isinstance(device, str):
+        device = torch.device(device)
+    
+    # Clamp batch_size to valid range [1, 128]
+    batch_size = max(1, min(128, batch_size))
+    
+    # Create Laplacian kernel (reused for all batches)
+    laplacian_kernel = torch.tensor([
+        [0, -1, 0],
+        [-1, 4, -1],
+        [0, -1, 0]
+    ], dtype=torch.float32, device=device).unsqueeze(0).unsqueeze(0)
+    
+    results = []
+    
+    # Process frames in batches
+    for batch_idx in range(0, len(frames), batch_size):
+        batch_frames = frames[batch_idx:batch_idx + batch_size]
+        
+        # Convert frames to grayscale tensors
+        batch_tensors = []
+        for frame in batch_frames:
+            # Convert to grayscale if needed
+            if len(frame.shape) == 3:
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            else:
+                gray = frame
+            
+            # Normalize to [0, 1] and convert to tensor
+            gray_normalized = gray.astype(np.float32) / 255.0
+            tensor = torch.from_numpy(gray_normalized).to(device)
+            batch_tensors.append(tensor)
+        
+        # Stack into batch tensor (B, H, W)
+        batch_tensor = torch.stack(batch_tensors)  # (B, H, W)
+        # Add channel dimension: (B, 1, H, W)
+        batch_tensor = batch_tensor.unsqueeze(1)
+        
+        # Apply Laplacian filter using convolution
+        laplacian = F.conv2d(batch_tensor, laplacian_kernel, padding=1)
+        
+        # Compute variance per frame in batch
+        # laplacian shape: (B, 1, H, W)
+        batch_variances = []
+        for i in range(laplacian.shape[0]):
+            frame_laplacian = laplacian[i]  # (1, H, W)
+            variance = torch.var(frame_laplacian).item()
+            # Scale to match cv2.Laplacian behavior (255 scale)
+            variance = variance * (255.0 ** 2)
+            batch_variances.append(float(variance))
+        
+        results.extend(batch_variances)
+    
+    return results
