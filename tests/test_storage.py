@@ -1,93 +1,97 @@
+import json
 from pathlib import Path
 
-import numpy as np
-
-from card_capture.models import CardDetection, QualityScore
+from card_capture.models import CornerDetection
 from card_capture.storage import Storage
 
 
-def test_storage_records_video_detection_saved_card_and_review(tmp_path: Path):
-    db_path = tmp_path / "cards.sqlite"
-    storage = Storage(db_path)
-    storage.initialize()
-
-    video_id = storage.add_video(
-        source_path="/videos/input.mov",
-        file_hash="abc123",
-        duration_ms=1200,
-        width=1920,
-        height=1080,
-    )
-
-    detection = CardDetection(
-        frame_index=12,
-        timestamp_ms=400,
-        polygon=((10.0, 20.0), (210.0, 20.0), (210.0, 320.0), (10.0, 320.0)),
-        confidence=0.91,
-    )
-    score = QualityScore(
-        total=0.82,
-        components={"sharpness": 0.9, "glare": 0.8, "size": 0.7, "confidence": 0.91},
-    )
-
-    detection_id = storage.add_detection(
-        video_id=video_id,
-        detection=detection,
-        crop_path="output/crops/card.jpg",
-        source_frame_path="output/frames/frame.jpg",
-        score=score,
-        crop_width=200,
-        crop_height=300,
-    )
-    saved_id = storage.add_saved_card(
-        detection_id=detection_id,
-        image_path="output/best/card.jpg",
-        final_score=0.82,
-    )
-    decision_id = storage.set_review_decision(saved_id, "accepted", "front is readable")
-
-    saved_cards = storage.list_saved_cards()
-
-    assert video_id == 1
-    assert detection_id == 1
-    assert saved_id == 1
-    assert decision_id == 1
-    assert saved_cards == [
-        {
-            "id": 1,
-            "detection_id": 1,
-            "image_path": "output/best/card.jpg",
-            "final_score": 0.82,
-            "review_state": "accepted",
-            "source_path": "/videos/input.mov",
-            "timestamp_ms": 400,
-            "score_components": {
-                "sharpness": 0.9,
-                "glare": 0.8,
-                "size": 0.7,
-                "confidence": 0.91,
-            },
-        }
-    ]
-
-
-def test_storage_filters_saved_cards_by_review_state(tmp_path: Path):
+def test_storage_v21_records_instance_view_and_evidence(tmp_path: Path):
     storage = Storage(tmp_path / "cards.sqlite")
     storage.initialize()
-    video_id = storage.add_video("video.mov", "hash", 1000, 100, 100)
-    detection = CardDetection(
-        frame_index=1,
-        timestamp_ms=100,
-        polygon=((0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)),
-        confidence=0.8,
+    video_id = storage.add_video("/videos/input.mov", "hash", 1000, 1920, 1080)
+
+    instance_id = storage.add_card_instance(video_id=video_id, track_id="card_1")
+    view_id = storage.add_card_view(
+        card_instance_id=instance_id,
+        frame_index=12,
+        timestamp_ms=400,
+        detection=CornerDetection(
+            corners=((0.0, 0.0), (10.0, 0.0), (10.0, 20.0), (0.0, 20.0)),
+            confidence=0.8,
+            metadata={"model": "fake"},
+        ),
+        rectified_path="output/rectified/card_1.jpg",
+        quality_score={"sharpness": 0.92},
+        is_canonical=True,
     )
-    score = QualityScore(total=0.5, components={"confidence": 0.8})
-    first_detection = storage.add_detection(video_id, detection, "a.jpg", None, score, 10, 10)
-    second_detection = storage.add_detection(video_id, detection, "b.jpg", None, score, 10, 10)
-    accepted_id = storage.add_saved_card(first_detection, "a.jpg", 0.5)
-    storage.add_saved_card(second_detection, "b.jpg", 0.4)
-    storage.set_review_decision(accepted_id, "accepted", "")
+    evidence_id = storage.add_evidence_frame(
+        card_view_id=view_id,
+        source_frame_path="output/frames/f12.jpg",
+        frame_width=1920,
+        frame_height=1080,
+        metrics={"blur": 90.0},
+    )
 
-    accepted = storage.list_saved_cards(review_state="accepted")
+    assert instance_id == 1
+    assert view_id == 1
+    assert evidence_id == 1
 
-    assert [card["image_path"] for card in accepted] == ["a.jpg"]
+    rows = storage.list_card_instances(video_id)
+    assert len(rows) == 1
+    assert rows[0]["id"] == instance_id
+    assert rows[0]["video_id"] == video_id
+    assert rows[0]["track_id"] == "card_1"
+
+
+def test_storage_v21_serializes_card_view_and_evidence_json(tmp_path: Path):
+    storage = Storage(tmp_path / "cards.sqlite")
+    storage.initialize()
+    video_id = storage.add_video("/videos/input.mov", "hash", 1000, 1920, 1080)
+    instance_id = storage.add_card_instance(video_id=video_id, track_id="card_2")
+    view_id = storage.add_card_view(
+        card_instance_id=instance_id,
+        frame_index=24,
+        timestamp_ms=800,
+        detection=CornerDetection(
+            corners=((1.0, 2.0), (11.0, 2.0), (11.0, 22.0), (1.0, 22.0)),
+            confidence=0.95,
+            metadata={"backend": "onnx", "version": "2.1"},
+        ),
+    )
+    storage.add_evidence_frame(
+        card_view_id=view_id,
+        source_frame_path="output/frames/f24.jpg",
+        frame_width=1280,
+        frame_height=720,
+        metrics={"brightness": 0.75, "contrast": 0.6},
+    )
+
+    with storage._connect() as conn:
+        view_row = conn.execute(
+            """
+            SELECT corners_json, confidence, metadata_json, rectified_path,
+                   quality_score_json, is_canonical
+            FROM card_views
+            WHERE id = ?
+            """,
+            (view_id,),
+        ).fetchone()
+        evidence_row = conn.execute(
+            "SELECT metrics_json FROM evidence_frames WHERE card_view_id = ?",
+            (view_id,),
+        ).fetchone()
+
+    assert view_row is not None
+    assert json.loads(view_row["corners_json"]) == [
+        [1.0, 2.0],
+        [11.0, 2.0],
+        [11.0, 22.0],
+        [1.0, 22.0],
+    ]
+    assert view_row["confidence"] == 0.95
+    assert json.loads(view_row["metadata_json"]) == {"backend": "onnx", "version": "2.1"}
+    assert view_row["rectified_path"] is None
+    assert view_row["quality_score_json"] is None
+    assert view_row["is_canonical"] == 0
+    assert evidence_row is not None
+    assert json.loads(evidence_row["metrics_json"]) == {"brightness": 0.75, "contrast": 0.6}

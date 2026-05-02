@@ -5,7 +5,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .models import CardDetection, QualityScore
+from .models import CornerDetection
 
 
 class Storage:
@@ -30,38 +30,35 @@ class Storage:
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
 
-                CREATE TABLE IF NOT EXISTS detections (
+                CREATE TABLE IF NOT EXISTS card_instances (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     video_id INTEGER NOT NULL REFERENCES videos(id),
+                    track_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS card_views (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    card_instance_id INTEGER NOT NULL REFERENCES card_instances(id),
                     frame_index INTEGER NOT NULL,
                     timestamp_ms INTEGER NOT NULL,
-                    polygon_json TEXT NOT NULL,
+                    corners_json TEXT NOT NULL,
                     confidence REAL NOT NULL,
-                    label TEXT NOT NULL,
+                    rectified_path TEXT,
+                    quality_score_json TEXT,
+                    is_canonical INTEGER NOT NULL DEFAULT 0,
                     metadata_json TEXT NOT NULL,
-                    crop_path TEXT NOT NULL,
-                    source_frame_path TEXT,
-                    crop_width INTEGER NOT NULL,
-                    crop_height INTEGER NOT NULL,
-                    final_score REAL NOT NULL,
-                    score_components_json TEXT NOT NULL,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
 
-                CREATE TABLE IF NOT EXISTS saved_cards (
+                CREATE TABLE IF NOT EXISTS evidence_frames (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    detection_id INTEGER NOT NULL REFERENCES detections(id),
-                    image_path TEXT NOT NULL,
-                    final_score REAL NOT NULL,
-                    review_state TEXT NOT NULL DEFAULT 'pending',
-                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-                );
-
-                CREATE TABLE IF NOT EXISTS review_decisions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    saved_card_id INTEGER NOT NULL REFERENCES saved_cards(id),
-                    decision TEXT NOT NULL,
-                    notes TEXT NOT NULL,
+                    card_view_id INTEGER NOT NULL REFERENCES card_views(id),
+                    source_frame_path TEXT NOT NULL,
+                    frame_width INTEGER NOT NULL,
+                    frame_height INTEGER NOT NULL,
+                    metrics_json TEXT NOT NULL,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
                 """
@@ -90,104 +87,99 @@ class Storage:
         with self._connect() as conn:
             conn.execute("UPDATE videos SET status = ? WHERE id = ?", (status, video_id))
 
-    def add_detection(
+    def add_card_instance(
         self,
         video_id: int,
-        detection: CardDetection,
-        crop_path: str,
-        source_frame_path: Optional[str],
-        score: QualityScore,
-        crop_width: int,
-        crop_height: int,
+        track_id: str,
     ) -> int:
         with self._connect() as conn:
             cursor = conn.execute(
                 """
-                INSERT INTO detections (
-                    video_id, frame_index, timestamp_ms, polygon_json, confidence, label,
-                    metadata_json, crop_path, source_frame_path, crop_width, crop_height,
-                    final_score, score_components_json
+                INSERT INTO card_instances (video_id, track_id)
+                VALUES (?, ?)
+                """,
+                (video_id, track_id),
+            )
+            return int(cursor.lastrowid)
+
+    def add_card_view(
+        self,
+        card_instance_id: int,
+        frame_index: int,
+        timestamp_ms: int,
+        detection: CornerDetection,
+        rectified_path: Optional[str] = None,
+        quality_score: Optional[Dict[str, float]] = None,
+        is_canonical: bool = False,
+    ) -> int:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO card_views (
+                    card_instance_id,
+                    frame_index,
+                    timestamp_ms,
+                    corners_json,
+                    confidence,
+                    rectified_path,
+                    quality_score_json,
+                    is_canonical,
+                    metadata_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    video_id,
-                    detection.frame_index,
-                    detection.timestamp_ms,
-                    json.dumps(detection.polygon),
+                    card_instance_id,
+                    frame_index,
+                    timestamp_ms,
+                    json.dumps(detection.corners),
                     detection.confidence,
-                    detection.label,
+                    rectified_path,
+                    json.dumps(quality_score) if quality_score is not None else None,
+                    int(is_canonical),
                     json.dumps(detection.metadata),
-                    crop_path,
-                    source_frame_path,
-                    crop_width,
-                    crop_height,
-                    score.total,
-                    json.dumps(score.components),
                 ),
             )
             return int(cursor.lastrowid)
 
-    def add_saved_card(self, detection_id: int, image_path: str, final_score: float) -> int:
+    def add_evidence_frame(
+        self,
+        card_view_id: int,
+        source_frame_path: str,
+        frame_width: int,
+        frame_height: int,
+        metrics: Dict[str, float],
+    ) -> int:
         with self._connect() as conn:
             cursor = conn.execute(
                 """
-                INSERT INTO saved_cards (detection_id, image_path, final_score)
-                VALUES (?, ?, ?)
+                INSERT INTO evidence_frames (
+                    card_view_id, source_frame_path, frame_width, frame_height, metrics_json
+                )
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (detection_id, image_path, final_score),
+                (card_view_id, source_frame_path, frame_width, frame_height, json.dumps(metrics)),
             )
             return int(cursor.lastrowid)
 
-    def set_review_decision(self, saved_card_id: int, decision: str, notes: str) -> int:
-        if decision not in {"accepted", "rejected", "pending"}:
-            raise ValueError("decision must be accepted, rejected, or pending")
+    def list_card_instances(self, video_id: int) -> List[Dict[str, Any]]:
         with self._connect() as conn:
-            cursor = conn.execute(
+            rows = conn.execute(
                 """
-                INSERT INTO review_decisions (saved_card_id, decision, notes)
-                VALUES (?, ?, ?)
+                SELECT id, video_id, track_id, created_at, updated_at
+                FROM card_instances
+                WHERE video_id = ?
+                ORDER BY id ASC
                 """,
-                (saved_card_id, decision, notes),
-            )
-            conn.execute(
-                "UPDATE saved_cards SET review_state = ? WHERE id = ?",
-                (decision, saved_card_id),
-            )
-            return int(cursor.lastrowid)
-
-    def list_saved_cards(self, review_state: Optional[str] = None) -> List[Dict[str, Any]]:
-        sql = """
-            SELECT
-                saved_cards.id,
-                saved_cards.detection_id,
-                saved_cards.image_path,
-                saved_cards.final_score,
-                saved_cards.review_state,
-                videos.source_path,
-                detections.timestamp_ms,
-                detections.score_components_json
-            FROM saved_cards
-            JOIN detections ON detections.id = saved_cards.detection_id
-            JOIN videos ON videos.id = detections.video_id
-        """
-        params = ()
-        if review_state is not None:
-            sql += " WHERE saved_cards.review_state = ?"
-            params = (review_state,)
-        sql += " ORDER BY saved_cards.final_score DESC, saved_cards.id ASC"
-        with self._connect() as conn:
-            rows = conn.execute(sql, params).fetchall()
+                (video_id,),
+            ).fetchall()
         return [
             {
                 "id": int(row["id"]),
-                "detection_id": int(row["detection_id"]),
-                "image_path": row["image_path"],
-                "final_score": float(row["final_score"]),
-                "review_state": row["review_state"],
-                "source_path": row["source_path"],
-                "timestamp_ms": int(row["timestamp_ms"]),
-                "score_components": json.loads(row["score_components_json"]),
+                "video_id": int(row["video_id"]),
+                "track_id": row["track_id"],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
             }
             for row in rows
         ]
