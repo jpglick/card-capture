@@ -428,6 +428,7 @@ class ContrastBasedSampler:
         min_presence_frames: int = 3,
         candidates_per_window: int = 3,
         device: str = "auto",
+        window_merge_gap: int = 5,
     ):
         """
         Args:
@@ -438,6 +439,7 @@ class ContrastBasedSampler:
             min_presence_frames: Minimum consecutive frames to form a presence window
             candidates_per_window: Number of sharpest frames to yield per window
             device: Device for GPU acceleration ("auto", "cpu", "mps", "cuda")
+            window_merge_gap: Maximum frame gap between windows to merge (handles jitter)
         """
         self.video_path = video_path
         self.scan_fps = scan_fps
@@ -445,6 +447,7 @@ class ContrastBasedSampler:
         self.contrast_threshold = contrast_threshold
         self.min_presence_frames = min_presence_frames
         self.candidates_per_window = candidates_per_window
+        self.window_merge_gap = window_merge_gap
         
         # Device resolution
         if device == "auto":
@@ -510,7 +513,46 @@ class ContrastBasedSampler:
         finally:
             cap.release()
 
+        windows = self._merge_nearby_windows(windows, max_gap=self.window_merge_gap)
         return windows
+
+    def _merge_nearby_windows(self, windows: list[PresenceWindow], max_gap: int = 5) -> list[PresenceWindow]:
+        """
+        Merge presence windows that are separated by <= max_gap frames.
+        Handles card movement jitter that creates brief variance dips.
+        
+        Args:
+            windows: List of PresenceWindow objects from Pass 1
+            max_gap: Maximum frame gap between windows to consider for merging
+        
+        Returns:
+            Merged list of PresenceWindow objects
+        """
+        if not windows:
+            return []
+        
+        merged = []
+        current_window = windows[0]
+        
+        for next_window in windows[1:]:
+            gap = next_window.start_frame - current_window.end_frame
+            
+            if gap <= max_gap:
+                # Merge: extend current window to include next window
+                current_window = PresenceWindow(
+                    start_frame=current_window.start_frame,
+                    end_frame=next_window.end_frame,
+                    frame_candidates=[]
+                )
+            else:
+                # Gap too large: save current and start new window
+                merged.append(current_window)
+                current_window = next_window
+        
+        # Add final window
+        merged.append(current_window)
+        
+        return merged
 
     def _score_sharpness_in_window(self, window: PresenceWindow) -> PresenceWindow:
         """
