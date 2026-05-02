@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import torch
 
-from card_capture.gpu_utils import get_device, compute_variance_gpu, compute_sharpness_gpu
+from card_capture.gpu_utils import get_device, compute_variance_gpu, compute_sharpness_gpu, compute_motion_gpu
 
 
 # ---------------------------------------------------------------------------
@@ -89,3 +89,30 @@ def test_compute_sharpness_gpu_blurry_vs_sharp():
     
     # Sharp image should have higher sharpness
     assert sharp_val > blurry_val
+
+
+# ---------------------------------------------------------------------------
+# Motion Detection Tests
+# ---------------------------------------------------------------------------
+
+def test_motion_detection_no_motion():
+    """Identical frames should have motion ~0."""
+    frame = np.full((50, 50), 128, dtype=np.uint8)
+    motion = compute_motion_gpu(frame, frame)
+    assert motion < 0.1
+
+
+def test_motion_detection_high_motion():
+    """Maximum difference should show high motion."""
+    frame1 = np.zeros((50, 50), dtype=np.uint8)
+    frame2 = np.full((50, 50), 255, dtype=np.uint8)
+    motion = compute_motion_gpu(frame1, frame2)
+    assert motion > 250
+
+
+def test_motion_detection_rgb_input():
+    """RGB input should auto-convert to grayscale."""
+    frame1 = np.zeros((50, 50, 3), dtype=np.uint8)
+    frame2 = np.full((50, 50, 3), 200, dtype=np.uint8)
+    motion = compute_motion_gpu(frame1, frame2)
+    assert 190 < motion < 210  # ~200 ± noise

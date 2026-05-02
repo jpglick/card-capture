@@ -106,3 +106,33 @@ def compute_sharpness_gpu(frame: np.ndarray, device: torch.device) -> float:
     """
     # For now, reuse variance computation since they're the same metric
     return compute_variance_gpu(frame, device)
+
+
+def compute_motion_gpu(frame1: np.ndarray, frame2: np.ndarray, device: str = "auto") -> float:
+    """Compute mean absolute pixel difference between consecutive frames (motion metric).
+    
+    Args:
+        frame1: Previous frame (H, W) or (H, W, C), uint8 grayscale or color
+        frame2: Current frame, same shape and type
+        device: torch device ("mps", "cuda", "cpu", or "auto")
+    
+    Returns:
+        Mean pixel delta (0-255 scale for uint8 frames)
+    """
+    if device == "auto":
+        device = get_device()
+    
+    # Convert to grayscale if RGB
+    if len(frame1.shape) == 3:
+        frame1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
+    if len(frame2.shape) == 3:
+        frame2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
+    
+    # Convert to tensors on specified device
+    t1 = torch.from_numpy(frame1).float().to(device)
+    t2 = torch.from_numpy(frame2).float().to(device)
+    
+    # Mean absolute difference
+    motion = torch.abs(t1 - t2).mean().item()
+    
+    return motion
