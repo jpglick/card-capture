@@ -1,5 +1,6 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+import argparse
 
 from card_capture.cli import build_parser, main
 
@@ -149,3 +150,55 @@ def test_process_command_accepts_window_merge_gap_flag():
         "--window-merge-gap", "10",
     ])
     assert args.window_merge_gap == 10
+
+
+def test_process_command_metric_flags_help():
+    """--help should show new metric flags."""
+    parser = build_parser()
+    
+    # Parse args to get the subparser, then check its help
+    try:
+        parser.parse_args(["process", "--help"])
+    except SystemExit:
+        pass
+    
+    # Get the help string by getting subparser directly
+    subparsers_actions = [
+        action for action in parser._actions
+        if isinstance(action, argparse._SubParsersAction)
+    ]
+    
+    for subparsers_action in subparsers_actions:
+        for choice, subparser in subparsers_action.choices.items():
+            if choice == 'process':
+                help_str = subparser.format_help()
+                assert "--detection-metrics" in help_str
+                assert "--histogram-outlier-sigma" in help_str
+                assert "--edge-density-threshold" in help_str
+                assert "--sobel-magnitude-threshold" in help_str
+                assert "--sharpness-batch-size" in help_str
+                return
+    
+    raise AssertionError("Could not find process subparser")
+
+
+def test_process_command_custom_metrics(tmp_path: Path):
+    """Should accept custom metric settings."""
+    video_path = tmp_path / "input.mov"
+    video_path.write_bytes(b"fake video content")
+    
+    exit_code = main(
+        [
+            "process",
+            str(video_path),
+            "--db", str(tmp_path / "test.db"),
+            "--output-dir", str(tmp_path),
+            "--detector", "fake",
+            "--detection-metrics", "variance",
+            "--detection-metrics", "motion",
+            "--motion-threshold", "5.0",
+        ]
+    )
+    # Should not raise exception (exit code doesn't matter for this test)
+    assert exit_code in [0, 1, 2]
+

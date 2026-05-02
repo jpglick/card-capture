@@ -114,6 +114,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="Max frame gap between presence windows to merge (handles card movement jitter). Default: 5",
     )
     process.add_argument(
+        "--detection-metrics",
+        action="append",
+        choices=["variance", "motion", "histogram", "edge"],
+        help="Detection metrics to enable (can use multiple times). Default: variance",
+    )
+    process.add_argument(
+        "--histogram-outlier-sigma",
+        type=_positive_float,
+        default=1.5,
+        help="Z-score threshold for histogram outlier detection (default: 1.5)",
+    )
+    process.add_argument(
+        "--edge-density-threshold",
+        type=_unit_float,
+        default=0.15,
+        help="Fraction of high-edge pixels needed for edge detection (default: 0.15)",
+    )
+    process.add_argument(
+        "--sobel-magnitude-threshold",
+        type=_positive_float,
+        default=50.0,
+        help="Sobel edge magnitude threshold, 0-255 (default: 50.0)",
+    )
+    process.add_argument(
+        "--sharpness-batch-size",
+        type=int,
+        default=None,
+        help="GPU batch size for sharpness scoring (auto-detect if None)",
+    )
+    process.add_argument(
         "--device", default="auto",
         help="Device for model inference: auto (default, uses MPS on Mac), cpu, mps, cuda",
     )
@@ -161,6 +191,8 @@ def _run_process(args: argparse.Namespace) -> int:
                 device=args.device,
             )
         elif args.sampler == "contrast":
+            # Use default detection_metrics (["variance"]) if not specified
+            detection_metrics = args.detection_metrics if args.detection_metrics else ["variance"]
             sampler = ContrastBasedSampler(
                 video_path=args.video_path,
                 scan_fps=args.scan_fps,
@@ -169,6 +201,11 @@ def _run_process(args: argparse.Namespace) -> int:
                 min_presence_frames=args.min_presence_frames,
                 candidates_per_window=args.candidates_per_window,
                 window_merge_gap=args.window_merge_gap,
+                motion_threshold=args.motion_threshold,
+                histogram_sigma=args.histogram_outlier_sigma,
+                edge_density_threshold=args.edge_density_threshold,
+                sobel_magnitude_threshold=args.sobel_magnitude_threshold,
+                detection_metrics=detection_metrics,
             )
         else:  # stability
             sampler = StabilityBasedSampler(
