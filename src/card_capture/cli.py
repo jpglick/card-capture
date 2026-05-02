@@ -6,7 +6,7 @@ from typing import Optional, Sequence
 
 from .detectors import CardcaptorUltralyticsDetector, FakeCardDetector
 from .pipeline import ProcessingOptions, VideoProcessor
-from .sampler import ContrastBasedSampler, DetectionGuidedSampler, StabilityBasedSampler, SyntheticSampler, VideoSampler
+from .sampler import SyntheticSampler, VideoSampler
 from .storage import Storage
 
 
@@ -40,102 +40,59 @@ def build_parser() -> argparse.ArgumentParser:
     process.add_argument("video_path", type=Path)
     process.add_argument("--output-dir", type=Path, default=Path("card_capture_output"))
     process.add_argument("--db", type=Path, default=Path("card_capture_output/cards.sqlite"))
-    process.add_argument("--sample-fps", type=float, default=5.0)
-    process.add_argument("--max-candidates", type=int, default=10)
-    process.add_argument("--confidence", type=float, default=0.25)
     process.add_argument(
         "--detector",
-        choices=["cardcaptor", "fake"],
-        default="cardcaptor",
-        help="cardcaptor for real detection, fake for smoke tests",
+        choices=["docaligner", "fake"],
+        default="docaligner",
+        help="docaligner for production detection, fake for smoke tests",
     )
     process.add_argument(
-        "--sampler",
-        choices=["stability", "detection", "contrast", "raw"],
-        default="stability",
-        help="stability: motion-based (default); detection: card-presence-based; contrast: color-variance-based; raw: cadence-based",
+        "--reader-backend",
+        choices=["auto", "decord", "pyav"],
+        default="auto",
+        help="Frame reader backend: auto (default), decord, or pyav",
     )
     process.add_argument(
-        "--scan-fps", type=_positive_float, default=10.0,
-        help="Pass-1 scan cadence in frames per second (default: 10)",
+        "--queue-size",
+        type=_positive_int,
+        default=64,
+        help="Worker queue max size (default: 64)",
     )
     process.add_argument(
-        "--scan-width", type=_positive_int, default=160,
-        help="Pass-1 scan frame width in pixels (default: 160)",
+        "--inference-batch-size",
+        type=_positive_int,
+        default=16,
+        help="Consumer inference batch size (default: 16)",
     )
     process.add_argument(
-        "--motion-threshold", type=_positive_float, default=8.0,
-        help="Max mean pixel diff (0-255) to count as stable (default: 8.0)",
-    )
-    process.add_argument(
-        "--min-stable-frames", type=_positive_int, default=5,
-        help="Min consecutive stable scan frames to form a window (default: 5)",
-    )
-    process.add_argument(
-        "--detection-width", type=_positive_int, default=640,
-        help="Frame width passed to YOLO detector, proportionally scaled (default: 640)",
-    )
-    process.add_argument(
-        "--detections-to-stop", type=int, default=1,
-        help="Stop after this many quality detections; 0 = disabled (default: 1)",
-    )
-    process.add_argument(
-        "--quality-floor", type=_unit_float, default=0.5,
-        help="Minimum quality score to count toward early stop (default: 0.5)",
-    )
-    process.add_argument(
-        "--candidates-per-window", type=_positive_int, default=5,
-        help="Candidate frames yielded per stable/detection window, evenly distributed (default: 5)",
-    )
-    process.add_argument(
-        "--detection-scan-fps", type=_positive_float, default=3.0,
-        help="Pass-1 scan cadence for detection-guided sampler (default: 3)",
-    )
-    process.add_argument(
-        "--min-detection-frames", type=_positive_int, default=3,
-        help="Min consecutive detection frames to form a detection window (default: 3)",
-    )
-    process.add_argument(
-        "--contrast-threshold",
-        type=float,
-        default=1000.0,
-        help="Minimum color variance to detect card presence (Pass 1). Default: 1000.0",
-    )
-    process.add_argument(
-        "--min-presence-frames",
-        type=int,
-        default=3,
-        help="Minimum consecutive frames to form a presence window. Default: 3",
-    )
-    process.add_argument(
-        "--window-merge-gap",
-        type=int,
-        default=5,
-        help="Max frame gap between presence windows to merge (handles card movement jitter). Default: 5",
-    )
-    process.add_argument(
-        "--detection-metrics",
-        action="append",
-        choices=["variance", "motion", "histogram", "edge"],
-        help="Detection metrics to enable (can use multiple times). Default: variance",
-    )
-    process.add_argument(
-        "--histogram-outlier-sigma",
-        type=_positive_float,
-        default=1.5,
-        help="Z-score threshold for histogram outlier detection (default: 1.5)",
-    )
-    process.add_argument(
-        "--edge-density-threshold",
+        "--corner-confidence",
         type=_unit_float,
-        default=0.15,
-        help="Fraction of high-edge pixels needed for edge detection (default: 0.15)",
+        default=0.5,
+        help="Minimum corner confidence threshold in [0.0, 1.0] (default: 0.5)",
     )
     process.add_argument(
-        "--sobel-magnitude-threshold",
+        "--blur-threshold",
         type=_positive_float,
-        default=50.0,
-        help="Sobel edge magnitude threshold, 0-255 (default: 50.0)",
+        default=30.0,
+        help="Minimum blur/sharpness threshold for triage (default: 30.0)",
+    )
+    process.add_argument(
+        "--variance-threshold",
+        type=_positive_float,
+        default=20.0,
+        help="Minimum pixel variance threshold for triage (default: 20.0)",
+    )
+    process.add_argument(
+        "--empty-pixel-threshold",
+        type=_unit_float,
+        default=0.98,
+        help="Maximum empty-pixel ratio threshold in [0.0, 1.0] (default: 0.98)",
+    )
+    process.add_argument(
+        "--detection-width",
+        type=_positive_int,
+        default=640,
+        help="Frame width passed to the detector, proportionally scaled (default: 640)",
     )
     process.add_argument(
         "--device", default="auto",
@@ -167,59 +124,31 @@ def _run_process(args: argparse.Namespace) -> int:
     if args.detector == "fake":
         detector = FakeCardDetector()
         sampler = SyntheticSampler()
-    else:
+    else:  # docaligner
         detector = CardcaptorUltralyticsDetector(
-            confidence_threshold=args.confidence,
+            confidence_threshold=args.corner_confidence,
             detection_width=args.detection_width,
             device=args.device,
         )
-        if args.sampler == "raw":
-            sampler = VideoSampler()
-        elif args.sampler == "detection":
-            sampler = DetectionGuidedSampler(
-                scan_fps=args.detection_scan_fps,
-                scan_width=args.scan_width,
-                detection_confidence=args.confidence,
-                min_detection_frames=args.min_detection_frames,
-                candidates_per_window=args.candidates_per_window,
-                device=args.device,
-            )
-        elif args.sampler == "contrast":
-            # Use default detection_metrics (["variance"]) if not specified
-            detection_metrics = args.detection_metrics if args.detection_metrics else ["variance"]
-            sampler = ContrastBasedSampler(
-                video_path=args.video_path,
-                scan_fps=args.scan_fps,
-                scan_width=args.scan_width,
-                contrast_threshold=args.contrast_threshold,
-                min_presence_frames=args.min_presence_frames,
-                candidates_per_window=args.candidates_per_window,
-                window_merge_gap=args.window_merge_gap,
-                motion_threshold=args.motion_threshold,
-                histogram_sigma=args.histogram_outlier_sigma,
-                edge_density_threshold=args.edge_density_threshold,
-                sobel_magnitude_threshold=args.sobel_magnitude_threshold,
-                detection_metrics=detection_metrics,
-            )
-        else:  # stability
-            sampler = StabilityBasedSampler(
-                scan_fps=args.scan_fps,
-                scan_width=args.scan_width,
-                motion_threshold=args.motion_threshold,
-                min_stable_frames=args.min_stable_frames,
-                candidates_per_window=args.candidates_per_window,
-            )
+        sampler = VideoSampler()
 
     processor = VideoProcessor(storage=storage, sampler=sampler, detector=detector)
     result = processor.process(
         args.video_path,
         ProcessingOptions(
             output_dir=args.output_dir,
-            corner_confidence_threshold=args.confidence,
+            reader_backend=args.reader_backend,
+            queue_size=args.queue_size,
+            inference_batch_size=args.inference_batch_size,
+            corner_confidence_threshold=args.corner_confidence,
+            blur_threshold=args.blur_threshold,
+            variance_threshold=args.variance_threshold,
+            empty_pixel_threshold=args.empty_pixel_threshold,
         ),
     )
     print(
         f"Processed video_id={result.video_id}: "
+        f"{result.frame_count} frames ({result.accepted_frame_count} accepted), "
         f"{result.detection_count} detections, {result.saved_instance_count} saved"
     )
     return 0

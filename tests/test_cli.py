@@ -1,19 +1,124 @@
 from pathlib import Path
-from unittest.mock import MagicMock, patch
-import argparse
+from unittest.mock import patch
+
+import pytest
 
 from card_capture.cli import build_parser, main
+from card_capture.pipeline import ProcessingOptions
 
 
 def test_parser_rejects_missing_process_video_path():
     parser = build_parser()
-
-    try:
+    with pytest.raises(SystemExit) as exc:
         parser.parse_args(["process"])
-    except SystemExit as exc:
-        assert exc.code == 2
-    else:
-        raise AssertionError("expected parser to reject missing video path")
+    assert exc.value.code == 2
+
+
+def test_process_subparser_accepts_v21_flags():
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "process",
+            "video.mov",
+            "--detector",
+            "docaligner",
+            "--reader-backend",
+            "pyav",
+            "--queue-size",
+            "8",
+            "--inference-batch-size",
+            "4",
+            "--corner-confidence",
+            "0.75",
+            "--blur-threshold",
+            "12.5",
+            "--variance-threshold",
+            "45.0",
+            "--empty-pixel-threshold",
+            "0.9",
+        ]
+    )
+    assert args.detector == "docaligner"
+    assert args.reader_backend == "pyav"
+    assert args.queue_size == 8
+    assert args.inference_batch_size == 4
+    assert args.corner_confidence == 0.75
+    assert args.blur_threshold == 12.5
+    assert args.variance_threshold == 45.0
+    assert args.empty_pixel_threshold == 0.9
+
+
+@pytest.mark.parametrize(
+    ("flag", "value"),
+    [
+        ("--reader-backend", "opencv"),
+        ("--queue-size", "0"),
+        ("--queue-size", "-1"),
+        ("--inference-batch-size", "0"),
+        ("--corner-confidence", "-0.1"),
+        ("--corner-confidence", "1.1"),
+        ("--blur-threshold", "0"),
+        ("--variance-threshold", "0"),
+        ("--empty-pixel-threshold", "-0.1"),
+        ("--empty-pixel-threshold", "1.01"),
+    ],
+)
+def test_process_subparser_rejects_invalid_v21_values(flag: str, value: str):
+    parser = build_parser()
+    with pytest.raises(SystemExit) as exc:
+        parser.parse_args(["process", "video.mov", flag, value])
+    assert exc.value.code == 2
+
+
+def test_process_wires_v21_options_into_processing_options(tmp_path: Path):
+    video_path = tmp_path / "input.mov"
+    video_path.write_bytes(b"fake video content")
+
+    with patch("card_capture.cli.VideoProcessor") as mock_processor:
+        mock_result = mock_processor.return_value.process.return_value
+        mock_result.video_id = 123
+        mock_result.frame_count = 10
+        mock_result.accepted_frame_count = 6
+        mock_result.detection_count = 3
+        mock_result.saved_instance_count = 2
+
+        exit_code = main(
+            [
+                "process",
+                str(video_path),
+                "--output-dir",
+                str(tmp_path / "out"),
+                "--db",
+                str(tmp_path / "cards.sqlite"),
+                "--detector",
+                "fake",
+                "--reader-backend",
+                "decord",
+                "--queue-size",
+                "7",
+                "--inference-batch-size",
+                "5",
+                "--corner-confidence",
+                "0.66",
+                "--blur-threshold",
+                "22.0",
+                "--variance-threshold",
+                "33.0",
+                "--empty-pixel-threshold",
+                "0.92",
+            ]
+        )
+
+    assert exit_code == 0
+    _, options = mock_processor.return_value.process.call_args.args
+    assert isinstance(options, ProcessingOptions)
+    assert options.reader_backend == "decord"
+    assert options.queue_size == 7
+    assert options.inference_batch_size == 5
+    assert options.corner_confidence_threshold == 0.66
+    assert options.blur_threshold == 22.0
+    assert options.variance_threshold == 33.0
+    assert options.empty_pixel_threshold == 0.92
 
 
 def test_cli_process_fake_detector_writes_database(tmp_path: Path):
@@ -37,167 +142,3 @@ def test_cli_process_fake_detector_writes_database(tmp_path: Path):
 
     assert exit_code == 0
     assert db_path.exists()
-
-
-def test_process_subparser_accepts_new_flags():
-    from card_capture.cli import build_parser
-    parser = build_parser()
-    args = parser.parse_args([
-        "process", "video.mov",
-        "--detection-width", "320",
-        "--scan-fps", "5",
-        "--scan-width", "120",
-        "--motion-threshold", "12.0",
-        "--min-stable-frames", "4",
-        "--sampler", "stability",
-        "--detections-to-stop", "2",
-        "--quality-floor", "0.6",
-        "--candidates-per-window", "3",
-    ])
-    assert args.detection_width == 320
-    assert args.scan_fps == 5.0
-    assert args.scan_width == 120
-    assert args.motion_threshold == 12.0
-    assert args.min_stable_frames == 4
-    assert args.sampler == "stability"
-    assert args.detections_to_stop == 2
-    assert args.quality_floor == 0.6
-    assert args.candidates_per_window == 3
-
-
-def test_sampler_raw_uses_video_sampler(tmp_path: Path):
-    """--sampler raw must construct VideoSampler, not StabilityBasedSampler."""
-    video_path = tmp_path / "v.mov"
-    video_path.write_bytes(b"x")
-
-    fake_result = MagicMock()
-    fake_result.video_id = 1
-    fake_result.detection_count = 0
-    fake_result.saved_count = 0
-    fake_result.output_dir = tmp_path / "out"
-
-    with patch("card_capture.cli.VideoProcessor") as MockProcessor, \
-         patch("card_capture.cli.VideoSampler") as MockVideoSampler, \
-         patch("card_capture.cli.StabilityBasedSampler") as MockStability:
-        MockProcessor.return_value.process.return_value = fake_result
-        main([
-            "process", str(video_path),
-            "--sampler", "raw",
-            "--db", str(tmp_path / "db.sqlite"),
-            "--output-dir", str(tmp_path / "out"),
-        ])
-
-    MockVideoSampler.assert_called_once()
-    MockStability.assert_not_called()
-
-
-def test_detector_fake_always_uses_synthetic_sampler(tmp_path: Path):
-    """--detector fake must use SyntheticSampler even when --sampler raw is passed."""
-    video_path = tmp_path / "v.mov"
-    video_path.write_bytes(b"x")
-
-    fake_result = MagicMock()
-    fake_result.video_id = 1
-    fake_result.detection_count = 0
-    fake_result.saved_count = 0
-    fake_result.output_dir = tmp_path / "out"
-
-    with patch("card_capture.cli.VideoProcessor") as MockProcessor, \
-         patch("card_capture.cli.SyntheticSampler") as MockSynthetic, \
-         patch("card_capture.cli.VideoSampler") as MockVideoSampler:
-        MockProcessor.return_value.process.return_value = fake_result
-        main([
-            "process", str(video_path),
-            "--detector", "fake",
-            "--sampler", "raw",
-            "--db", str(tmp_path / "db.sqlite"),
-            "--output-dir", str(tmp_path / "out"),
-        ])
-
-    MockSynthetic.assert_called_once()
-    MockVideoSampler.assert_not_called()
-
-
-def test_cli_rejects_nonpositive_scan_fps():
-    """--scan-fps 0 must be rejected by argparse."""
-    parser = build_parser()
-    try:
-        parser.parse_args(["process", "video.mov", "--scan-fps", "0"])
-    except SystemExit as exc:
-        assert exc.code == 2
-    else:
-        raise AssertionError("expected rejection of --scan-fps 0")
-
-
-def test_cli_rejects_out_of_range_quality_floor():
-    """--quality-floor 1.5 must be rejected by argparse."""
-    parser = build_parser()
-    try:
-        parser.parse_args(["process", "video.mov", "--quality-floor", "1.5"])
-    except SystemExit as exc:
-        assert exc.code == 2
-    else:
-        raise AssertionError("expected rejection of --quality-floor 1.5")
-
-
-def test_process_command_accepts_window_merge_gap_flag():
-    """CLI should accept --window-merge-gap flag."""
-    parser = build_parser()
-    args = parser.parse_args([
-        "process",
-        "video.mov",
-        "--sampler", "contrast",
-        "--window-merge-gap", "10",
-    ])
-    assert args.window_merge_gap == 10
-
-
-def test_process_command_metric_flags_help():
-    """--help should show new metric flags."""
-    parser = build_parser()
-    
-    # Parse args to get the subparser, then check its help
-    try:
-        parser.parse_args(["process", "--help"])
-    except SystemExit:
-        pass
-    
-    # Get the help string by getting subparser directly
-    subparsers_actions = [
-        action for action in parser._actions
-        if isinstance(action, argparse._SubParsersAction)
-    ]
-    
-    for subparsers_action in subparsers_actions:
-        for choice, subparser in subparsers_action.choices.items():
-            if choice == 'process':
-                help_str = subparser.format_help()
-                assert "--detection-metrics" in help_str
-                assert "--histogram-outlier-sigma" in help_str
-                assert "--edge-density-threshold" in help_str
-                assert "--sobel-magnitude-threshold" in help_str
-                return
-    
-    raise AssertionError("Could not find process subparser")
-
-
-def test_process_command_custom_metrics(tmp_path: Path):
-    """Should accept custom metric settings."""
-    video_path = tmp_path / "input.mov"
-    video_path.write_bytes(b"fake video content")
-    
-    exit_code = main(
-        [
-            "process",
-            str(video_path),
-            "--db", str(tmp_path / "test.db"),
-            "--output-dir", str(tmp_path),
-            "--detector", "fake",
-            "--detection-metrics", "variance",
-            "--detection-metrics", "motion",
-            "--motion-threshold", "5.0",
-        ]
-    )
-    # Should not raise exception (exit code doesn't matter for this test)
-    assert exit_code in [0, 1, 2]
-
