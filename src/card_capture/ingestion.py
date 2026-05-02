@@ -2,21 +2,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Iterator, Protocol
 
 import cv2
 import numpy as np
 
+from .models import FramePacket
+
 
 class FrameReader(Protocol):
-    def iter_frames(self, video_path: Path | str):
+    def iter_frames(self, video_path: Path | str) -> Iterator[FramePacket]:
         ...
 
 
 def _decord_available() -> bool:
     try:
         import decord  # noqa: F401
-    except ImportError:
+    except Exception:
         return False
     return True
 
