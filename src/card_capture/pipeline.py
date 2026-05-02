@@ -298,7 +298,10 @@ def _raise_child_error_if_present(error_queue, producer, consumer) -> None:
 
 
 def _raise_on_bad_exitcode(process: mp.Process) -> None:
-    if process.exitcode not in (0, None):
+    if process.is_alive():
+        _stop_process(process)
+        raise RuntimeError(f"{process.name} did not exit cleanly before timeout")
+    if process.exitcode != 0:
         raise RuntimeError(f"{process.name} exited with code {process.exitcode}")
 
 
