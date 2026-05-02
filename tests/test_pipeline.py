@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 import numpy as np
 import pytest
@@ -273,3 +274,14 @@ def test_drain_detection_queue_times_out_when_worker_is_wedged():
             consumer=consumer,
             idle_timeout_s=0.02,
         )
+
+
+def test_pyproject_declares_pipeline_v21_runtime_dependencies():
+    pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    pyproject = pyproject_path.read_text(encoding="utf-8")
+    match = re.search(r"pipeline_v21\s*=\s*\[(.*?)\]", pyproject, re.DOTALL)
+
+    assert match is not None
+    runtime_block = match.group(1)
+    for dep_name in ("onnxruntime", "decord", "av"):
+        assert f'"{dep_name}"' in runtime_block
