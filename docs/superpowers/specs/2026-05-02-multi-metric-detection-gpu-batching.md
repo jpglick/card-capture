@@ -109,10 +109,24 @@ Pass 2: Full-res sharpness scoring (GPU-batched)
 **Purpose:** Catch textured/patterned cards that may have lower overall variance but high local edge density.
 
 **Algorithm:**
-1. Compute Sobel edge magnitude at low resolution (same as scan image)
-2. Compute percentage of high-edge pixels: `edge_pixels = count(|sobel| > edge_threshold) / total_pixels` (default edge_threshold: 50)
-3. Threshold: `high_edges_detected = edge_pixels > edge_density_threshold` (default: 0.15, i.e., >15% edge pixels)
-4. Run on GPU: `torch.nn.functional.conv2d` with Sobel kernels
+1. Compute Sobel edge magnitude at low resolution (same as Pass 1 scan: `scan_width` pixels)
+2. Sobel kernels (standard):
+   ```
+   Sobel X (horizontal edges):
+   [[-1,  0,  1],
+    [-2,  0,  2],
+    [-1,  0,  1]]
+   
+   Sobel Y (vertical edges):
+   [[-1, -2, -1],
+    [ 0,  0,  0],
+    [ 1,  2,  1]]
+   
+   Magnitude = sqrt(Gx² + Gy²)
+   ```
+3. Compute percentage of high-edge pixels: `edge_pixels = count(magnitude > edge_magnitude_threshold) / total_pixels` (default edge_magnitude_threshold: 50)
+4. Threshold: `high_edges_detected = edge_pixels > edge_density_threshold` (default: 0.15, i.e., >15% edge pixels)
+5. Run on GPU: `torch.nn.functional.conv2d` with Sobel kernels, compute magnitude, apply threshold
 
 **Rationale:**
 - Textured/patterned cards have high edge content but may have low overall variance
@@ -124,8 +138,8 @@ Pass 2: Full-res sharpness scoring (GPU-batched)
   - Higher values: only very high-edge frames (fewer detections)
   - Lower values: catch any textured content (more detections)
 - `--sobel-magnitude-threshold` (default: 50, range 20-150)
-  - Higher values: only strong edges count (fewer edge pixels)
-  - Lower values: count weaker edges (more edge pixels)
+  - Higher values: only strong edges count (fewer edge pixels detected)
+  - Lower values: count weaker edges (more edge pixels detected)
 
 #### Metric Fusion
 
