@@ -210,6 +210,67 @@ card-capture process video.mov \
 ```
 Use ML-based detection when lighting is variable or background changes.
 
+### Multi-Metric Detection (Advanced)
+
+By default, card detection uses Laplacian variance only. You can enable additional metrics for improved accuracy:
+
+**Basic Usage (Variance Only - Default)**
+```bash
+PYTHONPATH=src python3 -m card_capture.cli process \
+  /path/to/video.mov \
+  --output-dir card_capture_output \
+  --db card_capture_output/cards.sqlite
+```
+
+**Enable Motion Detection (Detects Movement)**
+```bash
+PYTHONPATH=src python3 -m card_capture.cli process \
+  /path/to/video.mov \
+  --output-dir card_capture_output \
+  --db card_capture_output/cards.sqlite \
+  --detection-metrics variance \
+  --detection-metrics motion \
+  --motion-threshold 8.0
+```
+
+**Multi-Metric Detection (Variance + Motion + Edge)**
+```bash
+PYTHONPATH=src python3 -m card_capture.cli process \
+  /path/to/video.mov \
+  --output-dir card_capture_output \
+  --db card_capture_output/cards.sqlite \
+  --detection-metrics variance \
+  --detection-metrics motion \
+  --detection-metrics edge \
+  --motion-threshold 8.0 \
+  --edge-density-threshold 0.15 \
+  --sobel-magnitude-threshold 50.0
+```
+
+**Detection Metrics Reference**
+
+| Metric | CLI Flag | Default | Purpose |
+|--------|----------|---------|---------|
+| Variance | `--detection-metrics variance` | Enabled | Laplacian variance (baseline) |
+| Motion | `--detection-metrics motion` | Disabled | Frame-to-frame pixel delta (detects movement) |
+| Histogram | `--detection-metrics histogram` | Disabled | Statistical outlier detection (distribution analysis) |
+| Edge | `--detection-metrics edge` | Disabled | Sobel edge density (texture detection) |
+
+**Performance Notes**
+
+- Multi-metric detection uses GPU acceleration for 3.5-5.6x speedup on Pass 2 sharpness scoring
+- Motion detection requires keeping previous frame in memory (minimal overhead)
+- Edge detection (Sobel) is lightweight but catches textured cards
+- Histogram detection under development (placeholder in current version)
+- Metrics use OR logic: any metric triggering = presence detected; Pass 2 filters false positives
+
+**Troubleshooting**
+
+If detection is missing cards, try:
+1. Increase motion sensitivity: `--motion-threshold 5.0` (lower = more sensitive)
+2. Add edge detection: `--detection-metrics edge` (catches textured cards)
+3. Check Laplacian variance threshold: `--contrast-threshold 500.0` (lower = more sensitive)
+
 ## Development
 
 Run tests:
