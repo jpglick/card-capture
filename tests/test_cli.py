@@ -142,3 +142,13 @@ def test_cli_process_fake_detector_writes_database(tmp_path: Path):
 
     assert exit_code == 0
     assert db_path.exists()
+
+
+def test_readme_mentions_reader_backend_flag():
+    readme = Path("README.md").read_text(encoding="utf-8")
+    assert "--reader-backend" in readme
+
+
+def test_quick_reference_mentions_multiprocessing_pipeline():
+    quick_reference = Path("QUICK_REFERENCE.md").read_text(encoding="utf-8").lower()
+    assert "producer/consumer pipeline" in quick_reference
