@@ -550,10 +550,12 @@ class ContrastBasedSampler:
             
             if gap <= max_gap:
                 # Merge: extend current window to include next window
+                detection_methods = list(set(current_window.detection_methods + next_window.detection_methods))
                 current_window = PresenceWindow(
                     start_frame=current_window.start_frame,
                     end_frame=next_window.end_frame,
-                    frame_candidates=[]
+                    frame_candidates=[],
+                    detection_methods=detection_methods
                 )
             else:
                 # Gap too large: save current and start new window
