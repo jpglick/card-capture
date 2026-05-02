@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator, List, Optional, Tuple
@@ -463,6 +464,7 @@ class ContrastBasedSampler:
         Returns:
             List of PresenceWindow objects with frame ranges (no candidates yet).
         """
+        pass1_start = time.time()
         windows = []
         cap = cv2.VideoCapture(self.video_path)
         
@@ -513,7 +515,14 @@ class ContrastBasedSampler:
         finally:
             cap.release()
 
+        pass1_elapsed = time.time() - pass1_start
+        
+        # Merge windows (including in timing)
+        merge_start = time.time()
         windows = self._merge_nearby_windows(windows, max_gap=self.window_merge_gap)
+        merge_elapsed = time.time() - merge_start
+        
+        print(f"[Timing] Pass 1 (variance scan): {pass1_elapsed:.2f}s | Merge: {merge_elapsed:.3f}s | Windows: {len(windows)}")
         return windows
 
     def _merge_nearby_windows(self, windows: list[PresenceWindow], max_gap: int = 5) -> list[PresenceWindow]:
@@ -594,9 +603,21 @@ class ContrastBasedSampler:
         Yields:
             PresenceWindow objects with frame_candidates populated
         """
+        overall_start = time.time()
         presence_windows = self._find_presence_windows()
         
+        pass2_start = time.time()
+        scored_windows = []
         for window in presence_windows:
             window = self._score_sharpness_in_window(window)
             if window.frame_candidates:
-                yield window
+                scored_windows.append(window)
+        pass2_elapsed = time.time() - pass2_start
+        
+        print(f"[Timing] Pass 2 (sharpness scoring): {pass2_elapsed:.2f}s | Candidates: {len(scored_windows)}")
+        
+        overall_elapsed = time.time() - overall_start
+        print(f"[Timing] Total sampling time: {overall_elapsed:.2f}s")
+        
+        for window in scored_windows:
+            yield window
