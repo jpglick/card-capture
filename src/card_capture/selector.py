@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
-from typing import Iterable, List, Tuple
+import uuid
+from dataclasses import dataclass, field
+from typing import Iterable, List, Tuple, Optional
 
 from .models import QualityScore
 
@@ -14,6 +15,69 @@ class ScoredCandidate:
     image_path: str
     score: QualityScore
     corners: List[Tuple[float, float]] | None = None
+
+
+@dataclass
+class TrackState:
+    instance_id: str
+    candidates: List[ScoredCandidate] = field(default_factory=list)
+    last_centroid: Optional[Tuple[float, float]] = None
+    active: bool = True
+
+
+class HysteresisTracker:
+    def __init__(self, t_high: float = 0.55, t_low: float = 0.20, max_dist: float = 75.0):
+        """
+        Initialize the HysteresisTracker.
+        
+        Args:
+            t_high: Score threshold to start a new track
+            t_low: Score threshold to maintain an existing track
+            max_dist: Maximum Euclidean distance to associate a candidate with a track
+        """
+        self.t_high = t_high
+        self.t_low = t_low
+        self.max_dist = max_dist
+        self.active_tracks: List[TrackState] = []
+
+    def process(self, candidate: ScoredCandidate):
+        """
+        Process a new candidate and associate it with a track or start a new one.
+        """
+        if not candidate.corners:
+            return
+
+        centroid = _calculate_centroid(candidate.corners)
+        best_track = None
+        min_dist = float('inf')
+
+        # Try to associate with existing active tracks
+        for track in self.active_tracks:
+            if not track.active or track.last_centroid is None:
+                continue
+            
+            dist = _euclidean_distance(centroid, track.last_centroid)
+            if dist < self.max_dist and dist < min_dist:
+                min_dist = dist
+                best_track = track
+
+        if best_track and candidate.score.total > self.t_low:
+            # Maintain track
+            best_track.candidates.append(candidate)
+            best_track.last_centroid = centroid
+        elif candidate.score.total > self.t_high:
+            # Start new track
+            new_track = TrackState(
+                instance_id=str(uuid.uuid4()),
+                candidates=[candidate],
+                last_centroid=centroid,
+                active=True
+            )
+            self.active_tracks.append(new_track)
+
+    def finalize(self) -> List[TrackState]:
+        """Return all tracks."""
+        return self.active_tracks
 
 
 @dataclass
