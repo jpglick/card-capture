@@ -109,7 +109,7 @@ def test_pipeline_persists_v21_rows_and_result_counts(tmp_path: Path):
         storage=storage,
         sampler=FakeSampler(frame_count=3),
         detector=FakeBatchDetector(confidence=0.95),
-    ).process(video_path, ProcessingOptions(output_dir=tmp_path / "output", queue_size=4))
+    ).process(video_path, ProcessingOptions(output_dir=tmp_path / "output", queue_size=4, background_frames=0))
 
     assert result.frame_count == 3
     assert result.accepted_frame_count == 3

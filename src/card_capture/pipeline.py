@@ -81,6 +81,8 @@ class ProcessingOptions:
     group_gap_ms: int = 300
     spatial_variance_threshold: float = 150.0
     telemetry_scope: str = "canonical"
+    background_frames: int = 30
+    background_threshold: float = 15.0
 
 
 
@@ -93,10 +95,10 @@ class NullStateDetector:
 
     def is_workspace_empty(self, frame: np.ndarray) -> bool:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        if self.background_model is None:
+            self.background_model = np.zeros_like(gray, dtype=np.float32)
+
         if self.frame_count < self.frames:
-            if self.background_model is None:
-                self.background_model = np.zeros_like(gray, dtype=np.float32)
-            
             self.background_model = (
                 (self.background_model * self.frame_count + gray) / (self.frame_count + 1)
             )
@@ -106,6 +108,10 @@ class NullStateDetector:
         diff = cv2.absdiff(gray, self.background_model.astype(np.uint8))
         return float(np.mean(diff)) < self.threshold
 
+
+class SessionManager:
+    def __init__(self):
+        self.active_session_id: Optional[str] = None
 
 class VideoProcessor:
     def __init__(
@@ -124,6 +130,15 @@ class VideoProcessor:
         self.scorer = scorer or QualityScorer()
         self.selector = selector
         self.null_detector = None
+        self.session_manager = SessionManager()
+        self.tracker = HysteresisTracker(
+            max_dist=150.0,
+            min_track_length=3,
+            max_gap_frames=10,
+        )
+
+    def flush_tracker(self):
+        self.tracker.finalize()
 
     def process(self, video_path: Path, options: ProcessingOptions, debug_config: Any = None) -> ProcessingResult:
         video_path = Path(video_path).resolve()
@@ -164,12 +179,26 @@ class VideoProcessor:
         )
         for candidate in candidates:
             raw_image = cv2.imread(str(detection_rows[candidate.detection_id].source_frame_path))
-            if raw_image is not None and self.null_detector.is_workspace_empty(raw_image):
-                for track in tracker.active_tracks:
-                    track.active = False
+            is_empty = self.null_detector.is_workspace_empty(raw_image) if raw_image is not None else True
+            
+            if is_empty:
+                if self.session_manager.active_session_id is not None:
+                    # Active -> Empty transition
+                    self.flush_tracker()
+                    self.session_manager.active_session_id = None
                 continue
-            tracker.process(candidate)
-        tracks = tracker.finalize()
+            
+            if self.session_manager.active_session_id is None:
+                # Empty -> Active transition
+                self.session_manager.active_session_id = str(candidate.timestamp_ms)
+                
+            self.tracker.process(candidate)
+        
+        # Finalize after the loop
+        if self.session_manager.active_session_id is not None:
+            self.flush_tracker()
+
+        tracks = self.tracker.finalize()
 
         normalizer = PrecisionNormalizer()
         deduplicator = VisualDeduplicator()
