@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import sqlite3
 from pathlib import Path
@@ -36,6 +37,8 @@ class Storage:
                     track_id TEXT NOT NULL,
                     visual_hash TEXT,
                     is_duplicate_of INTEGER REFERENCES card_instances(id),
+                    angle TEXT,
+                    fused_image_path TEXT,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
@@ -50,6 +53,12 @@ class Storage:
                     rectified_path TEXT,
                     quality_score_json TEXT,
                     is_canonical INTEGER NOT NULL DEFAULT 0,
+                    glare_x REAL,
+                    glare_y REAL,
+                    sharpness REAL,
+                    glare_mask_b64 TEXT,
+                    laplacian_heatmap_b64 TEXT,
+                    initial_confidence REAL,
                     metadata_json TEXT NOT NULL,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
@@ -97,8 +106,28 @@ class Storage:
                     queue_wait REAL NOT NULL,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
+
+                CREATE TABLE IF NOT EXISTS track_telemetry (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    video_id INTEGER NOT NULL REFERENCES videos(id),
+                    track_id TEXT NOT NULL,
+                    frame_index INTEGER NOT NULL,
+                    polygon_area REAL NOT NULL,
+                    aspect_ratio REAL NOT NULL,
+                    centroid_x REAL NOT NULL,
+                    centroid_y REAL NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
                 """
             )
+            self._ensure_column(conn, "card_instances", "angle", "TEXT")
+            self._ensure_column(conn, "card_instances", "fused_image_path", "TEXT")
+            self._ensure_column(conn, "card_views", "glare_x", "REAL")
+            self._ensure_column(conn, "card_views", "glare_y", "REAL")
+            self._ensure_column(conn, "card_views", "sharpness", "REAL")
+            self._ensure_column(conn, "card_views", "glare_mask_b64", "TEXT")
+            self._ensure_column(conn, "card_views", "laplacian_heatmap_b64", "TEXT")
+            self._ensure_column(conn, "card_views", "initial_confidence", "REAL")
 
     def add_video(
         self,
@@ -146,18 +175,31 @@ class Storage:
             )
             return int(cursor.lastrowid)
 
+    def add_track_telemetry(
+        self, video_id: int, track_id: str, frame_index: int, polygon_area: float, aspect_ratio: float, centroid_x: float, centroid_y: float
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO track_telemetry (video_id, track_id, frame_index, polygon_area, aspect_ratio, centroid_x, centroid_y)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (video_id, track_id, frame_index, polygon_area, aspect_ratio, centroid_x, centroid_y)
+            )
+
     def add_card_instance(
         self,
         video_id: int,
         track_id: str,
+        angle: Optional[str] = None,
     ) -> int:
         with self._connect() as conn:
             cursor = conn.execute(
                 """
-                INSERT INTO card_instances (video_id, track_id)
-                VALUES (?, ?)
+                INSERT INTO card_instances (video_id, track_id, angle)
+                VALUES (?, ?, ?)
                 """,
-                (video_id, track_id),
+                (video_id, track_id, angle),
             )
             return int(cursor.lastrowid)
 
@@ -166,9 +208,65 @@ class Storage:
     ) -> None:
         with self._connect() as conn:
             conn.execute(
-                "UPDATE card_instances SET visual_hash = ?, is_duplicate_of = ? WHERE id = ?",
+                """
+                UPDATE card_instances
+                SET visual_hash = ?, is_duplicate_of = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
                 (visual_hash, duplicate_of_id, instance_id),
             )
+
+    def update_instance_fusion(self, instance_id: int, fused_path: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE card_instances
+                SET fused_image_path = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (fused_path, instance_id),
+            )
+
+    def find_canonical_for_hash(self, visual_hash: str, threshold: int = 6) -> Optional[int]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, visual_hash
+                FROM card_instances
+                WHERE visual_hash IS NOT NULL AND is_duplicate_of IS NULL
+                """
+            ).fetchall()
+        for row in rows:
+            if self._hamming_distance(visual_hash, row["visual_hash"]) <= threshold:
+                return int(row["id"])
+        return None
+
+    def find_canonical_for_hashes(
+        self, visual_hashes: list[str], threshold: int = 6
+    ) -> Optional[int]:
+        if not visual_hashes:
+            return None
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, visual_hash
+                FROM card_instances
+                WHERE visual_hash IS NOT NULL AND is_duplicate_of IS NULL
+                """
+            ).fetchall()
+        best_id: Optional[int] = None
+        best_dist: Optional[int] = None
+        for row in rows:
+            d = min(
+                self._hamming_distance(candidate, row["visual_hash"])
+                for candidate in visual_hashes
+            )
+            if best_dist is None or d < best_dist:
+                best_dist = d
+                best_id = int(row["id"])
+        if best_dist is not None and best_dist <= threshold:
+            return best_id
+        return None
 
     def add_card_view(
         self,
@@ -179,6 +277,12 @@ class Storage:
         rectified_path: Optional[str] = None,
         quality_score: Optional[Dict[str, float]] = None,
         is_canonical: bool = False,
+        glare_x: Optional[float] = None,
+        glare_y: Optional[float] = None,
+        sharpness: Optional[float] = None,
+        glare_mask: Optional[bytes] = None,
+        laplacian_heatmap: Optional[bytes] = None,
+        initial_confidence: Optional[float] = None,
     ) -> int:
         with self._connect() as conn:
             cursor = conn.execute(
@@ -192,9 +296,15 @@ class Storage:
                     rectified_path,
                     quality_score_json,
                     is_canonical,
+                    glare_x,
+                    glare_y,
+                    sharpness,
+                    glare_mask_b64,
+                    laplacian_heatmap_b64,
+                    initial_confidence,
                     metadata_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     card_instance_id,
@@ -205,6 +315,14 @@ class Storage:
                     rectified_path,
                     json.dumps(quality_score) if quality_score is not None else None,
                     int(is_canonical),
+                    glare_x,
+                    glare_y,
+                    sharpness,
+                    base64.b64encode(glare_mask).decode("ascii") if glare_mask else None,
+                    base64.b64encode(laplacian_heatmap).decode("ascii")
+                    if laplacian_heatmap
+                    else None,
+                    initial_confidence,
                     json.dumps(detection.metadata),
                 ),
             )
@@ -234,7 +352,16 @@ class Storage:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT id, video_id, track_id, visual_hash, is_duplicate_of, created_at, updated_at
+                SELECT
+                    id,
+                    video_id,
+                    track_id,
+                    visual_hash,
+                    is_duplicate_of,
+                    angle,
+                    fused_image_path,
+                    created_at,
+                    updated_at
                 FROM card_instances
                 WHERE video_id = ?
                 ORDER BY id ASC
@@ -248,6 +375,8 @@ class Storage:
                 "track_id": row["track_id"],
                 "visual_hash": row["visual_hash"],
                 "is_duplicate_of": row["is_duplicate_of"],
+                "angle": row["angle"],
+                "fused_image_path": row["fused_image_path"],
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
             }
@@ -398,3 +527,14 @@ class Storage:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         return conn
+
+    def _hamming_distance(self, hash1: str, hash2: str) -> int:
+        h1 = int(hash1, 16)
+        h2 = int(hash2, 16)
+        return bin(h1 ^ h2).count("1")
+
+    def _ensure_column(self, conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+        names = {row["name"] for row in rows}
+        if column not in names:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
