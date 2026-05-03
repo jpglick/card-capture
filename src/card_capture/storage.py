@@ -37,6 +37,7 @@ class Storage:
                     visual_hash TEXT,
                     is_duplicate_of INTEGER REFERENCES card_instances(id),
                     angle TEXT,
+                    fused_image_path TEXT,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
@@ -51,6 +52,9 @@ class Storage:
                     rectified_path TEXT,
                     quality_score_json TEXT,
                     is_canonical INTEGER NOT NULL DEFAULT 0,
+                    glare_x REAL,
+                    glare_y REAL,
+                    sharpness REAL,
                     metadata_json TEXT NOT NULL,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
@@ -178,16 +182,23 @@ class Storage:
                 """,
                 (visual_hash, duplicate_of_id, instance_id),
             )
+            
+    def update_instance_fusion(
+        self,
+        instance_id: int,
+        fused_path: str,
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE card_instances SET fused_image_path = ? WHERE id = ?",
+                (fused_path, instance_id),
+            )
 
     def find_canonical_for_hash(self, visual_hash: str, threshold: int = 4) -> Optional[int]:
-        # Simple pHash Hamming distance lookup in SQL is hard, so we do a python-side filtering
-        # but for efficiency we can at least filter by video_id if we wanted.
-        # Here we look across ALL instances that have a hash.
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT id, visual_hash FROM card_instances WHERE visual_hash IS NOT NULL AND is_duplicate_of IS NULL"
             ).fetchall()
-            
             for row in rows:
                 if self._hamming_distance(visual_hash, row["visual_hash"]) < threshold:
                     return int(row["id"])
@@ -207,6 +218,9 @@ class Storage:
         rectified_path: Optional[str] = None,
         quality_score: Optional[Dict[str, float]] = None,
         is_canonical: bool = False,
+        glare_x: Optional[float] = None,
+        glare_y: Optional[float] = None,
+        sharpness: Optional[float] = None,
     ) -> int:
         with self._connect() as conn:
             cursor = conn.execute(
@@ -220,9 +234,12 @@ class Storage:
                     rectified_path,
                     quality_score_json,
                     is_canonical,
+                    glare_x,
+                    glare_y,
+                    sharpness,
                     metadata_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     card_instance_id,
@@ -233,6 +250,9 @@ class Storage:
                     rectified_path,
                     json.dumps(quality_score) if quality_score is not None else None,
                     int(is_canonical),
+                    glare_x,
+                    glare_y,
+                    sharpness,
                     json.dumps(detection.metadata),
                 ),
             )
@@ -262,7 +282,7 @@ class Storage:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT id, video_id, track_id, visual_hash, is_duplicate_of, angle, created_at, updated_at
+                SELECT id, video_id, track_id, visual_hash, is_duplicate_of, angle, fused_image_path, created_at, updated_at
                 FROM card_instances
                 WHERE video_id = ?
                 ORDER BY id ASC
@@ -277,13 +297,13 @@ class Storage:
                 "visual_hash": row["visual_hash"],
                 "is_duplicate_of": row["is_duplicate_of"],
                 "angle": row["angle"],
+                "fused_image_path": row["fused_image_path"],
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
             }
             for row in rows
         ]
 
-    # Compatibility layer for legacy pipeline/review call sites.
     def add_detection(
         self,
         video_id: int,
