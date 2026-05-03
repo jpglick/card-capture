@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import statistics
 import uuid
 from dataclasses import dataclass, field
 from typing import Iterable, List, Tuple, Optional
@@ -23,6 +24,7 @@ class TrackState:
     candidates: List[ScoredCandidate] = field(default_factory=list)
     last_centroid: Optional[Tuple[float, float]] = None
     active: bool = True
+    angle: str = "Front"
 
 
 class HysteresisTracker:
@@ -62,9 +64,23 @@ class HysteresisTracker:
                 best_track = track
 
         if best_track and candidate.score.total > self.t_low:
-            # Maintain track
-            best_track.candidates.append(candidate)
-            best_track.last_centroid = centroid
+            # Check for flip
+            if self.detect_flips(best_track, candidate):
+                # Split track
+                best_track.active = False
+                new_angle = "Back" if best_track.angle == "Front" else "Front"
+                new_track = TrackState(
+                    instance_id=str(uuid.uuid4()),
+                    candidates=[candidate],
+                    last_centroid=centroid,
+                    active=True,
+                    angle=new_angle
+                )
+                self.active_tracks.append(new_track)
+            else:
+                # Maintain track
+                best_track.candidates.append(candidate)
+                best_track.last_centroid = centroid
         elif candidate.score.total > self.t_high:
             # Start new track
             new_track = TrackState(
@@ -74,6 +90,43 @@ class HysteresisTracker:
                 active=True
             )
             self.active_tracks.append(new_track)
+
+    def detect_flips(self, track: TrackState, candidate: ScoredCandidate) -> bool:
+        """
+        Monitor the polygon area of detections in a track to detect flips.
+        
+        Args:
+            track: The track to check
+            candidate: The new candidate being processed
+            
+        Returns:
+            True if a flip is detected
+        """
+        if not track.candidates or not candidate.corners:
+            return False
+            
+        areas = [_get_polygon_area(c.corners) for c in track.candidates if c.corners]
+        if not areas:
+            return False
+            
+        median_area = statistics.median(areas)
+        current_area = _get_polygon_area(candidate.corners)
+        
+        # Check for "collapse" (< 40% of median) in the last 10 frames
+        recent_candidates = track.candidates[-10:]
+        has_collapse = False
+        for c in recent_candidates:
+            if c.corners:
+                area = _get_polygon_area(c.corners)
+                if area < 0.4 * median_area:
+                    has_collapse = True
+                    break
+        
+        # Expansion (> 80% of median)
+        if has_collapse and current_area > 0.8 * median_area:
+            return True
+            
+        return False
 
     def finalize(self) -> List[TrackState]:
         """Return all tracks."""
@@ -102,6 +155,25 @@ def _calculate_centroid(corners: List[Tuple[float, float]]) -> Tuple[float, floa
     avg_x = sum(c[0] for c in corners) / 4.0
     avg_y = sum(c[1] for c in corners) / 4.0
     return (avg_x, avg_y)
+
+
+def _get_polygon_area(corners: List[Tuple[float, float]]) -> float:
+    """
+    Calculate the area of a polygon using the Shoelace formula.
+    
+    Args:
+        corners: List of (x, y) tuples for the corners
+        
+    Returns:
+        The area of the polygon
+    """
+    # Shoelace formula
+    area = 0.0
+    for i in range(len(corners)):
+        j = (i + 1) % len(corners)
+        area += corners[i][0] * corners[j][1]
+        area -= corners[j][0] * corners[i][1]
+    return abs(area) / 2.0
 
 
 def _euclidean_distance(point1: Tuple[float, float], point2: Tuple[float, float]) -> float:

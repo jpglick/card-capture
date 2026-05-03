@@ -111,3 +111,59 @@ def test_hysteresis_tracker_ignores_medium_score_with_no_nearby_track():
     tracker.process(candidate)
     
     assert len(tracker.active_tracks) == 0
+
+def test_hysteresis_tracker_detects_flip_and_splits_track():
+    tracker = HysteresisTracker(t_high=0.55, t_low=0.20, max_dist=75.0)
+    
+    # 1. Start track with normal area
+    # Area = 10 * 10 = 100
+    normal_corners = [(0, 0), (10, 0), (10, 10), (0, 10)]
+    for i in range(5):
+        c = ScoredCandidate(
+            detection_id=i,
+            timestamp_ms=i * 100,
+            image_path=f"test{i}.jpg",
+            score=QualityScore(0.6, {}),
+            corners=normal_corners
+        )
+        tracker.process(c)
+    
+    assert len(tracker.active_tracks) == 1
+    assert tracker.active_tracks[0].angle == "Front"
+    
+    # 2. Collapse: small area
+    # Area = 2 * 10 = 20 (20% of normal)
+    small_corners = [(4, 0), (6, 0), (6, 10), (4, 10)]
+    c_small = ScoredCandidate(
+        detection_id=5,
+        timestamp_ms=500,
+        image_path="small.jpg",
+        score=QualityScore(0.6, {}),
+        corners=small_corners
+    )
+    tracker.process(c_small)
+    
+    assert len(tracker.active_tracks) == 1
+    assert tracker.active_tracks[0].active is True
+    
+    # 3. Expansion: back to normal area
+    c_expansion = ScoredCandidate(
+        detection_id=6,
+        timestamp_ms=600,
+        image_path="expansion.jpg",
+        score=QualityScore(0.6, {}),
+        corners=normal_corners
+    )
+    tracker.process(c_expansion)
+    
+    # Should have split into 2 tracks
+    assert len(tracker.active_tracks) == 2
+    track1 = tracker.active_tracks[0]
+    track2 = tracker.active_tracks[1]
+    
+    assert track1.active is False
+    assert track1.angle == "Front"
+    assert track2.active is True
+    assert track2.angle == "Back"
+    assert c_expansion in track2.candidates
+    assert c_small in track1.candidates
