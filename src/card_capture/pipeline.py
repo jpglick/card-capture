@@ -12,27 +12,37 @@ from typing import List, Optional
 
 import cv2
 
-from .cropper import CardCropper
+from .cropper import CardCropper, PrecisionNormalizer
 from .detectors import CardDetector
-from .ingestion import FrameTriageFilter
+from .ingestion import FrameTriageFilter, RollingWindowTriage
+from .deduplicator import VisualDeduplicator
+from .fuser import MultiFrameFuser
 from .models import (
     CornerDetection,
     DetectionPacket,
     FramePacket,
     FrameSample,
+    PerformanceTelemetry,
     ProcessingResult,
     QualityScore,
 )
 from .scoring import QualityScorer
-from .selector import CandidateSelector, ScoredCandidate
+from .selector import CandidateSelector, HysteresisTracker, ScoredCandidate
 from .storage import Storage
 
 _SENTINEL = "__card_capture_queue_sentinel__"
 _QUEUE_POLL_INTERVAL_SECONDS = 0.1
 _QUEUE_RETRY_MAX_WAIT_SECONDS = 5.0
-# Cold model startup and first-batch inference can take well over 30s on a
-# fresh environment, especially when weights are downloaded lazily.
 _DRAIN_IDLE_TIMEOUT_SECONDS = 300.0
+
+
+class PipelineTimer:
+    def __init__(self):
+        self.start_time = time.monotonic()
+        self.timings = {}
+
+    def record(self, stage: str):
+        self.timings[stage] = time.monotonic() - self.start_time
 
 
 @dataclass(frozen=True)
@@ -94,8 +104,10 @@ class VideoProcessor:
         options.output_dir.mkdir(parents=True, exist_ok=True)
         frame_dir = options.output_dir / "frames"
         best_dir = options.output_dir / "best"
+        crops_dir = options.output_dir / "crops"
         frame_dir.mkdir(parents=True, exist_ok=True)
         best_dir.mkdir(parents=True, exist_ok=True)
+        crops_dir.mkdir(parents=True, exist_ok=True)
 
         video_id = self.storage.add_video(
             source_path=str(video_path),
@@ -113,92 +125,122 @@ class VideoProcessor:
             options=options,
         )
 
-        selector = self.selector or CandidateSelector(
-            group_gap_ms=options.group_gap_ms,
-            spatial_variance_threshold=options.spatial_variance_threshold,
-            frames_per_instance=options.frames_per_instance,
-        )
-        candidates = _build_candidates(detection_rows)
-        selected = selector.select(candidates)
-        selected_ids = {candidate.detection_id for candidate in selected}
+        for row in detection_rows:
+            if row.detection_packet.telemetry:
+                self.storage.add_performance_log(
+                    video_id=video_id,
+                    frame_index=row.detection_packet.frame_index,
+                    telemetry=row.detection_packet.telemetry,
+                )
 
-        # Build mapping from candidate index to database view_id
-        index_to_view_id: dict[int, int] = {}
-        for row_index, row in enumerate(detection_rows):
+        candidates = _build_candidates(detection_rows)
+        tracker = HysteresisTracker()
+        for candidate in candidates:
+            tracker.process(candidate)
+        
+        tracks = tracker.finalize()
+        
+        normalizer = PrecisionNormalizer()
+        deduplicator = VisualDeduplicator()
+        fuser = MultiFrameFuser()
+
+        saved_count = 0
+        for track in tracks:
+            timer = PipelineTimer()
+            
             instance_id = self.storage.add_card_instance(
                 video_id=video_id,
-                track_id=f"card_{row_index + 1}",
-            )
-            confidence = float(row.detection_packet.corner_detection.confidence)
-            view_id = self.storage.add_card_view(
-                card_instance_id=instance_id,
-                frame_index=row.detection_packet.frame_index,
-                timestamp_ms=row.detection_packet.timestamp_ms,
-                detection=row.detection_packet.corner_detection,
-                rectified_path=None,
-                quality_score={"confidence": round(confidence, 6)},
-                is_canonical=row_index in selected_ids,
-            )
-            index_to_view_id[row_index] = view_id
-            self.storage.add_evidence_frame(
-                card_view_id=view_id,
-                source_frame_path=row.source_frame_path,
-                frame_width=row.detection_packet.width,
-                frame_height=row.detection_packet.height,
-                metrics=row.triage_metrics,
+                track_id=track.instance_id,
+                angle=track.angle,
             )
 
-        for selected_index, candidate in enumerate(selected):
-            source_path = Path(candidate.image_path)
-            best_path = best_dir / f"video_{video_id}_best_{selected_index + 1}.jpg"
-            if source_path.exists():
-                shutil.copyfile(source_path, best_path)
+            sorted_candidates = sorted(track.candidates, key=lambda c: c.score.total, reverse=True)
+            canonical_candidates = sorted_candidates[:options.frames_per_instance]
+
+            normalized_images = []
+            for i, candidate in enumerate(canonical_candidates):
+                row = detection_rows[candidate.detection_id]
+                raw_image = cv2.imread(row.source_frame_path)
+                if raw_image is not None:
+                    normalized = normalizer.normalize(raw_image, candidate.corners)
+                    normalized_images.append(normalized)
+                    
+                    rectified_path = crops_dir / f"instance_{instance_id}_view_{i}_rectified.jpg"
+                    cv2.imwrite(str(rectified_path), normalized)
+
+            # Global Deduplication
+            phash = None
+            if normalized_images:
+                phash = deduplicator.compute_phash(normalized_images[0])
+                duplicate_of = self.storage.find_canonical_for_hash(phash)
+                self.storage.update_instance_deduplication(instance_id, phash, duplicate_of)
+                
+                # Fusion
+                fused = fuser.fuse(normalized_images)
+                fused_path = best_dir / f"instance_{instance_id}_fused.jpg"
+                cv2.imwrite(str(fused_path), fused)
+                self.storage.update_instance_fusion(instance_id, str(fused_path))
+
+            timer.record("t_refine")
+            t_refine_per_frame = timer.timings["t_refine"] / len(track.candidates) if track.candidates else 0
             
-            self.storage.add_saved_card(
-                detection_id=index_to_view_id[candidate.detection_id],
-                image_path=str(best_path),
-                final_score=candidate.score.total,
-            )
+            for candidate in track.candidates:
+                row = detection_rows[candidate.detection_id]
+                view_id = self.storage.add_card_view(
+                    card_instance_id=instance_id,
+                    frame_index=row.detection_packet.frame_index,
+                    timestamp_ms=row.detection_packet.timestamp_ms,
+                    detection=row.detection_packet.corner_detection,
+                    glare_x=0.0, glare_y=0.0, sharpness=1.0, # Placeholder metrics
+                    is_canonical=candidate in canonical_candidates,
+                )
+                
+                self.storage.add_performance_log(
+                    video_id=video_id,
+                    frame_index=row.detection_packet.frame_index,
+                    telemetry=PerformanceTelemetry(
+                        t_ingest=row.detection_packet.telemetry.t_ingest if row.detection_packet.telemetry else 0,
+                        t_refine=t_refine_per_frame,
+                    )
+                )
 
-        self.storage.update_video_status(video_id, "complete" if selected else "no_detections")
+                self.storage.add_evidence_frame(
+                    card_view_id=view_id,
+                    source_frame_path=row.source_frame_path,
+                    frame_width=row.detection_packet.width,
+                    frame_height=row.detection_packet.height,
+                    metrics=row.triage_metrics,
+                )
+            saved_count += 1
+
+        self.storage.update_video_status(video_id, "complete")
         return ProcessingResult(
             video_id=video_id,
             frame_count=stats.frame_count,
             accepted_frame_count=stats.accepted_frame_count,
             detection_count=len(detection_rows),
-            saved_instance_count=len(selected),
+            saved_instance_count=saved_count,
             output_dir=options.output_dir,
         )
-
 
 def _build_candidates(rows: list[_DetectionEnvelope]) -> list[ScoredCandidate]:
     candidates: list[ScoredCandidate] = []
     for index, row in enumerate(rows):
         confidence = float(row.detection_packet.corner_detection.confidence)
         score = QualityScore(total=confidence, components={"confidence": round(confidence, 6)})
-        # Convert Polygon (4-tuple of Points) to list of (x, y) tuples for spatial clustering
         corners = row.detection_packet.corner_detection.corners
-        corner_list = [(float(pt[0]), float(pt[1])) for pt in corners]
         candidates.append(
             ScoredCandidate(
                 detection_id=index,
                 timestamp_ms=row.detection_packet.timestamp_ms,
                 image_path=row.source_frame_path,
                 score=score,
-                corners=corner_list,
+                corners=[(float(pt[0]), float(pt[1])) for pt in corners],
             )
         )
     return candidates
 
-
-def _run_pipeline_workers(
-    video_path: Path,
-    video_id: int,
-    frame_dir: Path,
-    sampler,
-    detector,
-    options: ProcessingOptions,
-) -> tuple[_ProducerStats, list[_DetectionEnvelope]]:
+def _run_pipeline_workers(video_path: Path, video_id: int, frame_dir: Path, sampler, detector, options: ProcessingOptions) -> tuple[_ProducerStats, list[_DetectionEnvelope]]:
     ctx = mp.get_context("spawn")
     frame_queue = ctx.Queue(maxsize=options.queue_size)
     detection_queue = ctx.Queue(maxsize=options.queue_size)
@@ -206,348 +248,104 @@ def _run_pipeline_workers(
     stats_queue = ctx.Queue(maxsize=1)
     producer = ctx.Process(
         target=_producer_main,
-        args=(
-            str(video_path),
-            video_id,
-            str(frame_dir),
-            sampler,
-            options.blur_threshold,
-            options.variance_threshold,
-            options.empty_pixel_threshold,
-            frame_queue,
-            stats_queue,
-            error_queue,
-        ),
+        args=(str(video_path), video_id, str(frame_dir), sampler, options.blur_threshold, options.variance_threshold, options.empty_pixel_threshold, frame_queue, stats_queue, error_queue),
         name="producer",
     )
     consumer = ctx.Process(
         target=_consumer_main,
-        args=(
-            detector,
-            options.inference_batch_size,
-            options.corner_confidence_threshold,
-            frame_queue,
-            detection_queue,
-            error_queue,
-        ),
+        args=(detector, options.inference_batch_size, options.corner_confidence_threshold, frame_queue, detection_queue, error_queue),
         name="consumer",
     )
     producer.start()
     consumer.start()
-
     try:
-        detections = _drain_detection_queue(
-            detection_queue,
-            error_queue,
-            producer,
-            consumer,
-            idle_timeout_s=_DRAIN_IDLE_TIMEOUT_SECONDS,
-        )
+        detections = _drain_detection_queue(detection_queue, error_queue, producer, consumer, _DRAIN_IDLE_TIMEOUT_SECONDS)
         producer.join(timeout=10)
         consumer.join(timeout=10)
         _raise_child_error_if_present(error_queue, producer, consumer)
-        _raise_on_bad_exitcode(producer)
-        _raise_on_bad_exitcode(consumer)
-        stats = _read_producer_stats(stats_queue)
-        return stats, detections
-    except Exception:
-        _stop_process(producer)
-        _stop_process(consumer)
-        producer.join(timeout=2)
-        consumer.join(timeout=2)
-        raise
+        return _read_producer_stats(stats_queue), detections
     finally:
-        frame_queue.close()
-        detection_queue.close()
-        error_queue.close()
-        stats_queue.close()
-
+        _stop_process(producer); _stop_process(consumer)
+        frame_queue.close(); detection_queue.close(); error_queue.close(); stats_queue.close()
 
 def _read_producer_stats(stats_queue) -> _ProducerStats:
-    try:
-        stats = stats_queue.get(timeout=2)
-    except Empty as exc:
-        raise RuntimeError("producer did not publish frame statistics") from exc
-    if isinstance(stats, _ProducerStats):
-        return stats
-    raise RuntimeError(f"unexpected producer stats payload: {type(stats)!r}")
+    try: return stats_queue.get(timeout=2)
+    except Empty: raise RuntimeError("producer did not publish statistics")
 
-
-def _drain_detection_queue(
-    detection_queue,
-    error_queue,
-    producer,
-    consumer,
-    idle_timeout_s: float,
-) -> list[_DetectionEnvelope]:
+def _drain_detection_queue(detection_queue, error_queue, producer, consumer, idle_timeout_s) -> list[_DetectionEnvelope]:
     rows: list[_DetectionEnvelope] = []
     last_activity = time.monotonic()
     while True:
-        _raise_child_error_if_present(error_queue, producer, consumer)
         try:
             item = detection_queue.get(timeout=_QUEUE_POLL_INTERVAL_SECONDS)
         except Empty:
-            if not producer.is_alive() and not consumer.is_alive():
-                _raise_child_error_if_present(error_queue, producer, consumer)
-                raise RuntimeError("consumer exited before emitting sentinel")
-            if time.monotonic() - last_activity > idle_timeout_s:
-                raise RuntimeError("timed out waiting for consumer output or sentinel")
+            if not producer.is_alive() and not consumer.is_alive(): raise RuntimeError("consumer exited before sentinel")
+            if time.monotonic() - last_activity > idle_timeout_s: raise RuntimeError("timed out waiting")
             continue
         last_activity = time.monotonic()
-        if item == _SENTINEL:
-            return rows
-        if not isinstance(item, _DetectionEnvelope):
-            raise RuntimeError(f"unexpected detection queue payload: {type(item)!r}")
+        if item == _SENTINEL: return rows
         rows.append(item)
 
-
 def _raise_child_error_if_present(error_queue, producer, consumer) -> None:
-    try:
-        error = error_queue.get_nowait()
-    except Empty:
-        return
-    _stop_process(producer)
-    _stop_process(consumer)
-    if isinstance(error, dict):
-        worker = error.get("worker", "child")
-        message = error.get("message", "unknown error")
-        tb = error.get("traceback", "")
-        detail = f"{worker} process failed: {message}"
-        if tb:
-            detail = f"{detail}\n{tb}"
-        raise RuntimeError(detail)
-    raise RuntimeError(f"child process failed with payload: {error!r}")
-
-
-def _raise_on_bad_exitcode(process: mp.Process) -> None:
-    if process.is_alive():
-        _stop_process(process)
-        raise RuntimeError(f"{process.name} did not exit cleanly before timeout")
-    if process.exitcode != 0:
-        raise RuntimeError(f"{process.name} exited with code {process.exitcode}")
-
+    try: error = error_queue.get_nowait()
+    except Empty: return
+    _stop_process(producer); _stop_process(consumer)
+    raise RuntimeError(str(error))
 
 def _stop_process(process: mp.Process) -> None:
-    if process.is_alive():
-        process.terminate()
-
-
-def _put_with_retry(
-    q,
-    item,
-    timeout: float = _QUEUE_POLL_INTERVAL_SECONDS,
-    max_wait_s: float = _QUEUE_RETRY_MAX_WAIT_SECONDS,
-) -> None:
-    if max_wait_s <= 0:
-        raise ValueError("max_wait_s must be positive")
-
-    start = time.monotonic()
-    backoff = 0.01
-    while True:
-        try:
-            q.put(item, timeout=timeout)
-            return
-        except Full:
-            if time.monotonic() - start >= max_wait_s:
-                raise RuntimeError(
-                    f"timed out after {max_wait_s:.2f}s while enqueuing control/data payload"
-                )
-            time.sleep(backoff)
-            backoff = min(backoff * 2.0, 0.2)
-
+    if process.is_alive(): process.terminate()
 
 def _put_or_fail(q, item) -> None:
-    _put_with_retry(
-        q,
-        item,
-        timeout=_QUEUE_POLL_INTERVAL_SECONDS,
-        max_wait_s=_QUEUE_RETRY_MAX_WAIT_SECONDS,
-    )
+    try: q.put(item, timeout=_QUEUE_RETRY_MAX_WAIT_SECONDS)
+    except Full: raise RuntimeError("queue full")
 
-
-def _producer_main(
-    video_path: str,
-    video_id: int,
-    frame_dir: str,
-    sampler,
-    blur_threshold: float,
-    variance_threshold: float,
-    empty_pixel_threshold: float,
-    frame_queue,
-    stats_queue,
-    error_queue,
-) -> None:
-    frame_count = 0
-    accepted_frame_count = 0
-    triage = FrameTriageFilter(
-        variance_threshold=variance_threshold,
-        empty_ratio_threshold=empty_pixel_threshold,
-        blur_threshold=blur_threshold,
-    )
+def _producer_main(video_path: str, video_id: int, frame_dir: str, sampler, blur_threshold: float, variance_threshold: float, empty_pixel_threshold: float, frame_queue, stats_queue, error_queue) -> None:
+    frame_count = 0; accepted_frame_count = 0
+    triage = FrameTriageFilter(variance_threshold=variance_threshold, empty_ratio_threshold=empty_pixel_threshold, blur_threshold=blur_threshold)
+    adaptive_triage = RollingWindowTriage(window_size=30, keep_percentile=0.5)
     try:
         for frame in sampler.sample(Path(video_path), 0.0):
+            timer = PipelineTimer()
             frame_count += 1
             accepted, metrics = triage.evaluate(frame.image)
-            if not accepted:
-                continue
+            timer.record("t_ingest")
+            if not accepted or not adaptive_triage.evaluate_score(frame.frame_index, metrics["blur"]): continue
             accepted_frame_count += 1
             source_frame_path = Path(frame_dir) / f"video_{video_id}_frame_{frame.frame_index}.jpg"
             cv2.imwrite(str(source_frame_path), frame.image)
-            _put_or_fail(
-                frame_queue,
-                _FrameEnvelope(
-                    frame_packet=FramePacket(
-                        frame_index=frame.frame_index,
-                        timestamp_ms=frame.timestamp_ms,
-                        image=frame.image,
-                        width=frame.width,
-                        height=frame.height,
-                        triage_metrics=metrics,
-                    ),
-                    source_frame_path=str(source_frame_path),
-                ),
-            )
-    except Exception as exc:  # pragma: no cover - exercised in parent integration test.
-        _put_with_retry(
-            error_queue,
-            _serialize_error("producer", exc),
-            timeout=_QUEUE_POLL_INTERVAL_SECONDS,
-            max_wait_s=_QUEUE_RETRY_MAX_WAIT_SECONDS,
-        )
+            timer.record("t_io")
+            _put_or_fail(frame_queue, _FrameEnvelope(frame_packet=FramePacket(
+                frame_index=frame.frame_index, timestamp_ms=frame.timestamp_ms, image=frame.image, width=frame.width, height=frame.height,
+                triage_metrics=metrics, telemetry=PerformanceTelemetry(t_ingest=timer.timings.get("t_ingest", 0.0), t_io=timer.timings.get("t_io", 0.0))
+            ), source_frame_path=str(source_frame_path)))
     finally:
-        _put_with_retry(
-            stats_queue,
-            _ProducerStats(frame_count=frame_count, accepted_frame_count=accepted_frame_count),
-            timeout=_QUEUE_POLL_INTERVAL_SECONDS,
-            max_wait_s=_QUEUE_RETRY_MAX_WAIT_SECONDS,
-        )
-        _put_with_retry(
-            frame_queue,
-            _SENTINEL,
-            timeout=_QUEUE_POLL_INTERVAL_SECONDS,
-            max_wait_s=_QUEUE_RETRY_MAX_WAIT_SECONDS,
-        )
+        _put_or_fail(stats_queue, _ProducerStats(frame_count=frame_count, accepted_frame_count=accepted_frame_count))
+        _put_or_fail(frame_queue, _SENTINEL)
 
-
-def _consumer_main(
-    detector,
-    inference_batch_size: int,
-    corner_confidence_threshold: float,
-    frame_queue,
-    detection_queue,
-    error_queue,
-) -> None:
+def _consumer_main(detector, inference_batch_size: int, corner_confidence_threshold: float, frame_queue, detection_queue, error_queue) -> None:
     batch: list[_FrameEnvelope] = []
-    try:
-        while True:
-            item = frame_queue.get()
-            if item == _SENTINEL:
-                _consume_batch(
-                    detector,
-                    batch,
-                    corner_confidence_threshold,
-                    detection_queue,
-                )
-                _put_with_retry(
-                    detection_queue,
-                    _SENTINEL,
-                    timeout=_QUEUE_POLL_INTERVAL_SECONDS,
-                    max_wait_s=_QUEUE_RETRY_MAX_WAIT_SECONDS,
-                )
-                return
-            if not isinstance(item, _FrameEnvelope):
-                raise RuntimeError(f"unexpected frame queue payload: {type(item)!r}")
-            batch.append(item)
-            if len(batch) >= inference_batch_size:
-                _consume_batch(
-                    detector,
-                    batch,
-                    corner_confidence_threshold,
-                    detection_queue,
-                )
-                batch = []
-    except Exception as exc:  # pragma: no cover - exercised in parent integration test.
-        _put_with_retry(
-            error_queue,
-            _serialize_error("consumer", exc),
-            timeout=_QUEUE_POLL_INTERVAL_SECONDS,
-            max_wait_s=_QUEUE_RETRY_MAX_WAIT_SECONDS,
-        )
-        _put_with_retry(
-            detection_queue,
-            _SENTINEL,
-            timeout=_QUEUE_POLL_INTERVAL_SECONDS,
-            max_wait_s=_QUEUE_RETRY_MAX_WAIT_SECONDS,
-        )
+    while True:
+        item = frame_queue.get()
+        if item == _SENTINEL:
+            _consume_batch(detector, batch, corner_confidence_threshold, detection_queue)
+            _put_or_fail(detection_queue, _SENTINEL)
+            return
+        batch.append(item)
+        if len(batch) >= inference_batch_size:
+            _consume_batch(detector, batch, corner_confidence_threshold, detection_queue)
+            batch = []
 
-
-def _consume_batch(
-    detector,
-    batch: list[_FrameEnvelope],
-    corner_confidence_threshold: float,
-    detection_queue,
-) -> None:
-    if not batch:
-        return
-
-    if hasattr(detector, "detect_batch"):
-        frames = [row.frame_packet for row in batch]
-        detections = detector.detect_batch(frames, confidence_threshold=corner_confidence_threshold)
-        source_by_frame = {(row.frame_packet.frame_index, row.frame_packet.timestamp_ms): row for row in batch}
-        for detection_packet in detections:
-            if detection_packet.corner_detection.confidence < corner_confidence_threshold:
-                continue
-            source = source_by_frame.get((detection_packet.frame_index, detection_packet.timestamp_ms))
-            if source is None:
-                continue
-            _put_or_fail(
-                detection_queue,
-                _DetectionEnvelope(
-                    detection_packet=detection_packet,
-                    source_frame_path=source.source_frame_path,
-                    triage_metrics=source.frame_packet.triage_metrics,
-                ),
-            )
-        return
-
-    for row in batch:
-        legacy_frame = FrameSample(
-            frame_index=row.frame_packet.frame_index,
-            timestamp_ms=row.frame_packet.timestamp_ms,
-            image=row.frame_packet.image,
-            width=row.frame_packet.width,
-            height=row.frame_packet.height,
-        )
-        for detection in detector.detect(legacy_frame):
-            if detection.confidence < corner_confidence_threshold:
-                continue
-            _put_or_fail(
-                detection_queue,
-                _DetectionEnvelope(
-                    detection_packet=DetectionPacket(
-                        frame_index=detection.frame_index,
-                        timestamp_ms=detection.timestamp_ms,
-                        width=row.frame_packet.width,
-                        height=row.frame_packet.height,
-                        corner_detection=CornerDetection(
-                            corners=detection.polygon,
-                            confidence=detection.confidence,
-                            metadata=dict(detection.metadata),
-                        ),
-                    ),
-                    source_frame_path=row.source_frame_path,
-                    triage_metrics=row.frame_packet.triage_metrics,
-                ),
-            )
-
-
-def _serialize_error(worker: str, exc: Exception) -> dict[str, str]:
-    return {
-        "worker": worker,
-        "message": str(exc),
-        "traceback": traceback.format_exc(),
-    }
-
+def _consume_batch(detector, batch, corner_confidence_threshold, detection_queue) -> None:
+    if not batch: return
+    timer = PipelineTimer()
+    detections = detector.detect_batch([row.frame_packet for row in batch], confidence_threshold=corner_confidence_threshold)
+    timer.record("t_detect")
+    for detection_packet in detections:
+        _put_or_fail(detection_queue, _DetectionEnvelope(
+            detection_packet=detection_packet,
+            source_frame_path=next(r.source_frame_path for r in batch if r.frame_packet.frame_index == detection_packet.frame_index),
+            triage_metrics=next(r.frame_packet.triage_metrics for r in batch if r.frame_packet.frame_index == detection_packet.frame_index)
+        ))
 
 def _file_hash(path: Path) -> str:
     digest = hashlib.sha256()
