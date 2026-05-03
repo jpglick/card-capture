@@ -111,3 +111,30 @@ def test_hysteresis_tracker_ignores_medium_score_with_no_nearby_track():
     tracker.process(candidate)
     
     assert len(tracker.active_tracks) == 0
+
+
+def test_hysteresis_tracker_bridges_gap_as_flip_event():
+    tracker = HysteresisTracker(t_high=0.55, t_low=0.20, max_dist=150.0, max_gap_frames=10)
+    c1 = ScoredCandidate(
+        detection_id=1,
+        timestamp_ms=100,
+        image_path="test1.jpg",
+        score=QualityScore(0.8, {}),
+        corners=[(0, 0), (10, 0), (10, 10), (0, 10)],
+        frame_index=100,
+    )
+    c2 = ScoredCandidate(
+        detection_id=2,
+        timestamp_ms=300,
+        image_path="test2.jpg",
+        score=QualityScore(0.5, {}),
+        corners=[(2, 2), (12, 2), (12, 12), (2, 12)],
+        frame_index=106,
+    )
+
+    tracker.process(c1)
+    tracker.process(c2)
+
+    assert len(tracker.active_tracks) == 2
+    assert tracker.active_tracks[0].active is False
+    assert tracker.active_tracks[1].angle == "Back"

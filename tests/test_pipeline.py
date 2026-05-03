@@ -5,14 +5,17 @@ import numpy as np
 import pytest
 from queue import Empty, Full
 
-from card_capture.models import CardDetection, CornerDetection, DetectionPacket, FramePacket, FrameSample
+from card_capture.models import CardDetection, CornerDetection, DetectionPacket, FramePacket, FrameSample, QualityScore
 from card_capture.pipeline import (
     ProcessingOptions,
     VideoProcessor,
     _SENTINEL,
     _drain_detection_queue,
     _put_with_retry,
+    _select_canonical_entries,
 )
+from card_capture.deduplicator import VisualDeduplicator
+from card_capture.selector import ScoredCandidate
 from card_capture.storage import Storage
 
 
@@ -113,7 +116,7 @@ def test_pipeline_persists_v21_rows_and_result_counts(tmp_path: Path):
     assert result.detection_count == 3
     assert result.saved_instance_count == 1
 
-    assert _row_count(storage, "card_instances") == 3
+    assert _row_count(storage, "card_instances") == 1
     assert _row_count(storage, "card_views") == 3
     assert _row_count(storage, "evidence_frames") == 3
 
@@ -125,7 +128,7 @@ def test_pipeline_persists_v21_rows_and_result_counts(tmp_path: Path):
             "SELECT source_frame_path FROM evidence_frames ORDER BY id"
         ).fetchall()
     assert canonical_views is not None
-    assert int(canonical_views["c"]) == 1
+    assert int(canonical_views["c"]) == 3
     assert len(evidence_rows) == 3
     assert all(Path(row["source_frame_path"]).exists() for row in evidence_rows)
 
@@ -173,10 +176,11 @@ def test_pipeline_falls_back_to_legacy_detect_contract(tmp_path: Path):
     assert result.frame_count == 2
     assert result.accepted_frame_count == 2
     assert result.detection_count == 2
-    assert result.saved_instance_count == 2
-    assert _row_count(storage, "card_instances") == 2
-    assert _row_count(storage, "card_views") == 2
-    assert _row_count(storage, "evidence_frames") == 2
+    # v3 Stage 2 verification drops tracks shorter than 3 frames.
+    assert result.saved_instance_count == 0
+    assert _row_count(storage, "card_instances") == 0
+    assert _row_count(storage, "card_views") == 0
+    assert _row_count(storage, "evidence_frames") == 0
 
 
 def test_pipeline_propagates_consumer_errors(tmp_path: Path):
@@ -274,6 +278,38 @@ def test_drain_detection_queue_times_out_when_worker_is_wedged():
             consumer=consumer,
             idle_timeout_s=0.02,
         )
+
+
+def test_select_canonical_entries_prefers_same_appearance_cluster():
+    deduplicator = VisualDeduplicator()
+    entries = [
+        {
+            "candidate": ScoredCandidate(1, 100, "a.jpg", QualityScore(0.92, {})),
+            "sharpness": 300.0,
+            "visual_hash": "0000000000000000",
+        },
+        {
+            "candidate": ScoredCandidate(2, 200, "b.jpg", QualityScore(0.90, {})),
+            "sharpness": 280.0,
+            "visual_hash": "0000000000000003",
+        },
+        {
+            "candidate": ScoredCandidate(3, 300, "c.jpg", QualityScore(0.88, {})),
+            "sharpness": 260.0,
+            "visual_hash": "0000000000000007",
+        },
+        {
+            "candidate": ScoredCandidate(4, 400, "d.jpg", QualityScore(0.91, {})),
+            "sharpness": 320.0,
+            "visual_hash": "ffffffffffffffff",
+        },
+    ]
+
+    selected = _select_canonical_entries(entries, deduplicator)
+    selected_ids = {entry["candidate"].detection_id for entry in selected}
+
+    assert len(selected) == 3
+    assert selected_ids == {1, 2, 3}
 
 
 def test_pyproject_declares_pipeline_v21_runtime_dependencies():

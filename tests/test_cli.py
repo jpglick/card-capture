@@ -20,32 +20,12 @@ def test_process_subparser_accepts_v21_flags():
         [
             "process",
             "video.mov",
-            "--detector",
-            "docaligner",
-            "--reader-backend",
-            "pyav",
-            "--queue-size",
-            "8",
-            "--inference-batch-size",
-            "4",
-            "--corner-confidence",
-            "0.75",
-            "--blur-threshold",
-            "12.5",
-            "--variance-threshold",
-            "45.0",
-            "--empty-pixel-threshold",
-            "0.9",
+            "--config",
+            "my_config.json"
         ]
     )
-    assert args.detector == "docaligner"
-    assert args.reader_backend == "pyav"
-    assert args.queue_size == 8
-    assert args.inference_batch_size == 4
-    assert args.corner_confidence == 0.75
-    assert args.blur_threshold == 12.5
-    assert args.variance_threshold == 45.0
-    assert args.empty_pixel_threshold == 0.9
+    assert str(args.config) == "my_config.json"
+    assert str(args.video_path) == "video.mov"
 
 
 @pytest.mark.parametrize(
@@ -61,6 +41,7 @@ def test_process_subparser_accepts_v21_flags():
         ("--variance-threshold", "0"),
         ("--empty-pixel-threshold", "-0.1"),
         ("--empty-pixel-threshold", "1.01"),
+        ("--telemetry-scope", "partial"),
     ],
 )
 def test_process_subparser_rejects_invalid_v21_values(flag: str, value: str):
@@ -73,6 +54,20 @@ def test_process_subparser_rejects_invalid_v21_values(flag: str, value: str):
 def test_process_wires_v21_options_into_processing_options(tmp_path: Path):
     video_path = tmp_path / "input.mov"
     video_path.write_bytes(b"fake video content")
+
+    import json
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({
+        "detector": "fake",
+        "reader_backend": "decord",
+        "queue_size": 7,
+        "inference_batch_size": 5,
+        "corner_confidence": 0.66,
+        "blur_threshold": 22.0,
+        "variance_threshold": 33.0,
+        "empty_pixel_threshold": 0.92,
+        "telemetry_scope": "canonical"
+    }))
 
     with patch("card_capture.cli.VideoProcessor") as mock_processor:
         mock_result = mock_processor.return_value.process.return_value
@@ -90,22 +85,8 @@ def test_process_wires_v21_options_into_processing_options(tmp_path: Path):
                 str(tmp_path / "out"),
                 "--db",
                 str(tmp_path / "cards.sqlite"),
-                "--detector",
-                "fake",
-                "--reader-backend",
-                "decord",
-                "--queue-size",
-                "7",
-                "--inference-batch-size",
-                "5",
-                "--corner-confidence",
-                "0.66",
-                "--blur-threshold",
-                "22.0",
-                "--variance-threshold",
-                "33.0",
-                "--empty-pixel-threshold",
-                "0.92",
+                "--config",
+                str(config_path),
             ]
         )
 
@@ -119,6 +100,7 @@ def test_process_wires_v21_options_into_processing_options(tmp_path: Path):
     assert options.blur_threshold == 22.0
     assert options.variance_threshold == 33.0
     assert options.empty_pixel_threshold == 0.92
+    assert options.telemetry_scope == "canonical"
 
 
 def test_cli_process_fake_detector_writes_database(tmp_path: Path):
@@ -126,6 +108,10 @@ def test_cli_process_fake_detector_writes_database(tmp_path: Path):
     video_path.write_bytes(b"fake video content")
     output_dir = tmp_path / "output"
     db_path = tmp_path / "cards.sqlite"
+    config_path = tmp_path / "config.json"
+    
+    import json
+    config_path.write_text(json.dumps({"detector": "fake"}))
 
     exit_code = main(
         [
@@ -135,8 +121,8 @@ def test_cli_process_fake_detector_writes_database(tmp_path: Path):
             str(output_dir),
             "--db",
             str(db_path),
-            "--detector",
-            "fake",
+            "--config",
+            str(config_path),
         ]
     )
 

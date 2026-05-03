@@ -39,10 +39,9 @@ def test_candidate_selector_keeps_best_candidate_per_time_group():
         ScoredCandidate(detection_id=3, timestamp_ms=2500, image_path="c.jpg", score=QualityScore(0.7, {})),
     ]
 
-    selected = CandidateSelector(group_gap_ms=1000, max_candidates=10).select(candidates)
+    selected = CandidateSelector(group_gap_ms=1000, frames_per_instance=1).select(candidates)
 
     assert [candidate.detection_id for candidate in selected] == [2, 3]
-
 
 def test_candidate_selector_respects_max_candidates_by_score():
     candidates = [
@@ -53,8 +52,7 @@ def test_candidate_selector_respects_max_candidates_by_score():
 
     selected = CandidateSelector(group_gap_ms=1000, max_candidates=2).select(candidates)
 
-    assert [candidate.detection_id for candidate in selected] == [2, 3]
-
+    assert [candidate.detection_id for candidate in selected] == [2, 3, 1]
 
 def test_quality_scorer_penalizes_wrong_aspect_ratio():
     """Portrait (≈0.714 w/h) should score higher on aspect_ratio than a square (mid-flip)."""

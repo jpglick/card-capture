@@ -65,7 +65,7 @@ def test_detector_rescales_polygon_to_original_frame_space():
     obb_mock.cls.cpu.return_value.numpy.return_value = np.array([0])
     # Points in 640x480 detection space: a 100x100 square
     obb_mock.xyxyxyxy.cpu.return_value.numpy.return_value = np.array(
-        [[[100.0, 100.0], [200.0, 100.0], [200.0, 200.0], [100.0, 200.0]]],
+        [[[100.0, 100.0], [500.0, 100.0], [500.0, 300.0], [100.0, 300.0]]],
         dtype=np.float32,
     )
     result_mock = MagicMock()
@@ -80,9 +80,9 @@ def test_detector_rescales_polygon_to_original_frame_space():
     poly = detections[0].polygon
     # scale_x = 1280/640 = 2.0, scale_y = 960/480 = 2.0
     assert poly[0] == (200.0, 200.0)
-    assert poly[1] == (400.0, 200.0)
-    assert poly[2] == (400.0, 400.0)
-    assert poly[3] == (200.0, 400.0)
+    assert poly[1] == (1000.0, 200.0)
+    assert poly[2] == (1000.0, 600.0)
+    assert poly[3] == (200.0, 600.0)
 
 
 def test_detector_rescales_polygon_with_asymmetric_scale_factors():
@@ -96,7 +96,7 @@ def test_detector_rescales_polygon_with_asymmetric_scale_factors():
     obb_mock.conf.cpu.return_value.numpy.return_value = np.array([0.9])
     obb_mock.cls.cpu.return_value.numpy.return_value = np.array([0])
     obb_mock.xyxyxyxy.cpu.return_value.numpy.return_value = np.array(
-        [[[320.0, 360.0], [320.0, 360.0], [320.0, 360.0], [320.0, 360.0]]],
+        [[[100.0, 100.0], [500.0, 100.0], [500.0, 300.0], [100.0, 300.0]]],
         dtype=np.float32,
     )
     result_mock = MagicMock()
@@ -108,10 +108,10 @@ def test_detector_rescales_polygon_with_asymmetric_scale_factors():
         detections = detector.detect(frame)
 
     poly = detections[0].polygon
-    # x: 320 * (1280/640) = 320 * 2.0 = 640.0
-    # y: 360 * (721/360) = 721.0 (not 720.0)
-    assert poly[0][0] == pytest.approx(640.0)
-    assert poly[0][1] == pytest.approx(721.0)
+    # x: 100 * (1280/640) = 100 * 2.0 = 200.0
+    # y: 100 * (721/360) ≈ 200.2778
+    assert poly[0][0] == pytest.approx(200.0)
+    assert poly[0][1] == pytest.approx(200.27777777777777)
 
 
 def test_detector_skips_resize_when_frame_exactly_matches_detection_width():

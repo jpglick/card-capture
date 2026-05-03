@@ -1,6 +1,6 @@
 import numpy as np
 
-from card_capture.cropper import CardCropper, order_points_clockwise
+from card_capture.cropper import CardCropper, _orient_for_target_canvas, order_points_clockwise
 
 
 def test_order_points_clockwise_returns_top_left_first():
@@ -25,3 +25,18 @@ def test_cropper_returns_deskewed_crop_with_expected_dimensions():
     assert crop.width == 80
     assert crop.height == 80
     assert int(crop.image.mean()) == 255
+
+
+def test_orient_for_target_canvas_rotates_landscape_to_portrait_mapping():
+    ordered = (
+        (20.0, 40.0),   # TL
+        (180.0, 40.0),  # TR
+        (180.0, 100.0), # BR
+        (20.0, 100.0),  # BL
+    )
+    oriented = _orient_for_target_canvas(ordered, target_width=750, target_height=1050)
+
+    pts = np.array(oriented, dtype=np.float32)
+    top = np.linalg.norm(pts[1] - pts[0])
+    right = np.linalg.norm(pts[2] - pts[1])
+    assert top < right

@@ -154,3 +154,19 @@ def test_storage_supports_deduplication(tmp_path: Path):
     assert row1["is_duplicate_of"] is None
     assert row2["visual_hash"] == visual_hash_2
     assert row2["is_duplicate_of"] == instance_id_1
+
+
+def test_storage_find_canonical_for_hashes_uses_best_orientation(tmp_path: Path):
+    storage = Storage(tmp_path / "cards.sqlite")
+    storage.initialize()
+    video_id = storage.add_video("/videos/input.mov", "hash", 1000, 1920, 1080)
+    instance_id = storage.add_card_instance(video_id=video_id, track_id="card_1")
+    # canonical hash in DB
+    canonical_hash = "00000000000000ff"
+    storage.update_instance_deduplication(instance_id, canonical_hash)
+
+    # first candidate is far; second candidate is a close rotational equivalent
+    found = storage.find_canonical_for_hashes(
+        ["ffffffffffffffff", "00000000000000f8"], threshold=6
+    )
+    assert found == instance_id
