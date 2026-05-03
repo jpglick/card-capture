@@ -57,3 +57,20 @@ class FrameTriageFilter:
             and empty_ratio <= self.empty_ratio_threshold
         )
         return accepted, metrics
+
+class RollingWindowTriage:
+    def __init__(self, window_size: int = 30, keep_percentile: float = 0.5):
+        self.window_size = window_size
+        self.keep_percentile = keep_percentile
+        self.buffer: list[tuple[int, float]] = []
+
+    def evaluate_score(self, index: int, score: float) -> bool:
+        self.buffer.append((index, score))
+        if len(self.buffer) < self.window_size:
+            return True
+        current_buffer = sorted(self.buffer, key=lambda x: x[1], reverse=True)
+        keep_count = max(1, int(len(current_buffer) * self.keep_percentile))
+        top_indices = {x[0] for x in current_buffer[:keep_count]}
+        result = index in top_indices
+        self.buffer = [x for x in self.buffer if x[0] > index - self.window_size]
+        return result
