@@ -122,3 +122,31 @@ def test_storage_records_performance_telemetry(tmp_path: Path):
     assert row["t_refine"] == 3.0
     assert row["t_io"] == 4.0
     assert row["queue_wait"] == 5.0
+
+def test_storage_deduplication_updates(tmp_path: Path):
+    storage = Storage(tmp_path / "cards.sqlite")
+    storage.initialize()
+    video_id = storage.add_video("/videos/input.mov", "hash", 1000, 1920, 1080)
+
+    # Create two instances
+    instance1_id = storage.add_card_instance(video_id=video_id, track_id="card_1")
+    instance2_id = storage.add_card_instance(video_id=video_id, track_id="card_2")
+
+    # Update instance 1 with a hash
+    visual_hash = "abcdef1234567890"
+    storage.update_instance_deduplication(instance1_id, visual_hash=visual_hash)
+
+    # Update instance 2 as a duplicate of instance 1
+    storage.update_instance_deduplication(instance2_id, visual_hash=visual_hash, duplicate_of_id=instance1_id)
+
+    # Verify updates in listing
+    instances = storage.list_card_instances(video_id)
+    assert len(instances) == 2
+
+    i1 = next(i for i in instances if i["id"] == instance1_id)
+    assert i1["visual_hash"] == visual_hash
+    assert i1["is_duplicate_of"] is None
+
+    i2 = next(i for i in instances if i["id"] == instance2_id)
+    assert i2["visual_hash"] == visual_hash
+    assert i2["is_duplicate_of"] == instance1_id

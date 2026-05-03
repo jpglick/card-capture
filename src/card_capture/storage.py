@@ -34,6 +34,8 @@ class Storage:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     video_id INTEGER NOT NULL REFERENCES videos(id),
                     track_id TEXT NOT NULL,
+                    visual_hash TEXT,
+                    is_duplicate_of INTEGER REFERENCES card_instances(id),
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
@@ -159,6 +161,22 @@ class Storage:
             )
             return int(cursor.lastrowid)
 
+    def update_instance_deduplication(
+        self,
+        instance_id: int,
+        visual_hash: str,
+        duplicate_of_id: Optional[int] = None,
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE card_instances
+                SET visual_hash = ?, is_duplicate_of = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (visual_hash, duplicate_of_id, instance_id),
+            )
+
     def add_card_view(
         self,
         card_instance_id: int,
@@ -223,7 +241,7 @@ class Storage:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT id, video_id, track_id, created_at, updated_at
+                SELECT id, video_id, track_id, visual_hash, is_duplicate_of, created_at, updated_at
                 FROM card_instances
                 WHERE video_id = ?
                 ORDER BY id ASC
@@ -235,6 +253,8 @@ class Storage:
                 "id": int(row["id"]),
                 "video_id": int(row["video_id"]),
                 "track_id": row["track_id"],
+                "visual_hash": row["visual_hash"],
+                "is_duplicate_of": row["is_duplicate_of"],
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
             }
