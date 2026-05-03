@@ -15,6 +15,7 @@ class ScoredCandidate:
     image_path: str
     score: QualityScore
     corners: List[Tuple[float, float]] | None = None
+    frame_index: Optional[int] = None
 
 
 @dataclass
@@ -22,62 +23,108 @@ class TrackState:
     instance_id: str
     candidates: List[ScoredCandidate] = field(default_factory=list)
     last_centroid: Optional[Tuple[float, float]] = None
+    last_frame_index: Optional[int] = None
     active: bool = True
+    angle: str = "Front"
 
 
 class HysteresisTracker:
-    def __init__(self, t_high: float = 0.55, t_low: float = 0.20, max_dist: float = 75.0):
-        """
-        Initialize the HysteresisTracker.
-        
-        Args:
-            t_high: Score threshold to start a new track
-            t_low: Score threshold to maintain an existing track
-            max_dist: Maximum Euclidean distance to associate a candidate with a track
-        """
+    def __init__(
+        self,
+        t_high: float = 0.55,
+        t_low: float = 0.20,
+        max_dist: float = 75.0,
+        min_track_length: int = 3,
+        max_gap_frames: int = 10,
+    ):
         self.t_high = t_high
         self.t_low = t_low
         self.max_dist = max_dist
+        self.min_track_length = min_track_length
+        self.max_gap_frames = max_gap_frames
         self.active_tracks: List[TrackState] = []
 
     def process(self, candidate: ScoredCandidate):
-        """
-        Process a new candidate and associate it with a track or start a new one.
-        """
         if not candidate.corners:
             return
 
+        import statistics
         centroid = _calculate_centroid(candidate.corners)
         best_track = None
         min_dist = float('inf')
 
-        # Try to associate with existing active tracks
         for track in self.active_tracks:
             if not track.active or track.last_centroid is None:
                 continue
-            
+
+            if (
+                candidate.frame_index is not None
+                and track.last_frame_index is not None
+                and candidate.frame_index - track.last_frame_index > self.max_gap_frames
+            ):
+                continue
+
             dist = _euclidean_distance(centroid, track.last_centroid)
             if dist < self.max_dist and dist < min_dist:
                 min_dist = dist
                 best_track = track
 
         if best_track and candidate.score.total > self.t_low:
-            # Maintain track
-            best_track.candidates.append(candidate)
-            best_track.last_centroid = centroid
+            gap_frames = 1
+            if candidate.frame_index is not None and best_track.last_frame_index is not None:
+                gap_frames = max(1, candidate.frame_index - best_track.last_frame_index)
+
+            gap_flip = 1 < gap_frames <= self.max_gap_frames
+            if gap_flip or self.detect_flip(best_track, candidate):
+                best_track.active = False
+                next_angle = "Back" if best_track.angle == "Front" else "Front"
+                self.active_tracks.append(
+                    TrackState(
+                        instance_id=str(uuid.uuid4()),
+                        candidates=[candidate],
+                        last_centroid=centroid,
+                        last_frame_index=candidate.frame_index,
+                        angle=next_angle,
+                    )
+                )
+            else:
+                best_track.candidates.append(candidate)
+                best_track.last_centroid = centroid
+                best_track.last_frame_index = candidate.frame_index
         elif candidate.score.total > self.t_high:
-            # Start new track
             new_track = TrackState(
                 instance_id=str(uuid.uuid4()),
                 candidates=[candidate],
                 last_centroid=centroid,
+                last_frame_index=candidate.frame_index,
                 active=True
             )
             self.active_tracks.append(new_track)
 
+    def detect_flip(self, track: TrackState, candidate: ScoredCandidate) -> bool:
+        if not candidate.corners or not track.candidates:
+            return False
+
+        import statistics
+        areas = [_get_polygon_area(c.corners) for c in track.candidates if c.corners]
+        if not areas:
+            return False
+
+        median_area = statistics.median(areas)
+        current_area = _get_polygon_area(candidate.corners)
+        current_ratio = _aspect_ratio(candidate.corners)
+
+        recent = track.candidates[-10:]
+        collapsed = any(
+            c.corners and _get_polygon_area(c.corners) <= 0.2 * median_area for c in recent
+        )
+        median_ratio = statistics.median([_aspect_ratio(c.corners) for c in recent if c.corners])
+        ratio_changed = abs(current_ratio - median_ratio) > 0.08
+        expanded = current_area >= 0.8 * median_area
+        return collapsed and expanded and ratio_changed
+
     def finalize(self) -> List[TrackState]:
-        """Return all tracks."""
-        return self.active_tracks
+        return [t for t in self.active_tracks if len(t.candidates) >= self.min_track_length]
 
 
 @dataclass
@@ -211,3 +258,23 @@ class CandidateSelector:
             key=lambda c: c.score.total,
             reverse=True,
         )
+
+def _get_polygon_area(corners: List[Tuple[float, float]]) -> float:
+    area = 0.0
+    n = len(corners)
+    for i in range(n):
+        j = (i + 1) % n
+        area += corners[i][0] * corners[j][1]
+        area -= corners[j][0] * corners[i][1]
+    return abs(area) / 2.0
+
+def _aspect_ratio(corners: List[Tuple[float, float]]) -> float:
+    import numpy as np
+    pts = np.array(corners, dtype="float32")
+    width_top = np.linalg.norm(pts[1] - pts[0])
+    width_bottom = np.linalg.norm(pts[2] - pts[3])
+    height_right = np.linalg.norm(pts[2] - pts[1])
+    height_left = np.linalg.norm(pts[3] - pts[0])
+    width = max(1, int(round(max(width_top, width_bottom))))
+    height = max(1, int(round(max(height_right, height_left))))
+    return width / height if height > 0 else 1.0

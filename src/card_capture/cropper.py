@@ -28,6 +28,25 @@ def order_points_clockwise(points: Sequence[Point]) -> Polygon:
     )
 
 
+def _orient_for_target_canvas(ordered: Polygon, target_width: int, target_height: int) -> Polygon:
+    pts = np.array(ordered, dtype="float32")
+    target_ratio = float(target_width) / float(target_height) if target_height > 0 else 1.0
+    top_edge = float(np.linalg.norm(pts[1] - pts[0]))
+    right_edge = float(np.linalg.norm(pts[2] - pts[1]))
+
+    # Enforce portrait mapping for portrait targets:
+    # if top edge is longer than right edge, polygon is sideways.
+    if target_ratio < 1.0 and top_edge > right_edge:
+        pts = np.roll(pts, shift=1, axis=0)
+
+    return (
+        (float(pts[0][0]), float(pts[0][1])),
+        (float(pts[1][0]), float(pts[1][1])),
+        (float(pts[2][0]), float(pts[2][1])),
+        (float(pts[3][0]), float(pts[3][1])),
+    )
+
+
 class CardCropper:
     def crop(self, image: np.ndarray, polygon: Sequence[Point]) -> CropResult:
         ordered = order_points_clockwise(polygon)
@@ -59,7 +78,8 @@ class PrecisionNormalizer:
 
     def normalize(self, image: np.ndarray, corners: Sequence[Point]) -> np.ndarray:
         ordered = order_points_clockwise(corners)
-        pts = np.array(ordered, dtype="float32")
+        oriented = _orient_for_target_canvas(ordered, self.width, self.height)
+        pts = np.array(oriented, dtype="float32")
         destination = np.array(
             [[0, 0], [self.width, 0], [self.width, self.height], [0, self.height]],
             dtype="float32",

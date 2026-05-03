@@ -2,10 +2,13 @@ import cv2
 import numpy as np
 
 class VisualDeduplicator:
-    def __init__(self, threshold: int = 4):
+    def __init__(self, threshold: int = 6):
         self.threshold = threshold
 
     def compute_phash(self, image: np.ndarray) -> str:
+        if image is None or image.size == 0:
+            raise ValueError("Invalid image provided")
+
         h, w = image.shape[:2]
         margin_h, margin_w = int(h * 0.2), int(w * 0.2)
         inner = image[margin_h:h-margin_h, margin_w:w-margin_w]
@@ -21,9 +24,12 @@ class VisualDeduplicator:
             for j in range(8):
                 bits.append("1" if dct_low[i, j] > median else "0")
         
-        return hex(int("".join(bits), 2))
+        return f"{int(''.join(bits), 2):016x}"
 
-    def is_duplicate(self, hash1: str, hash2: str) -> bool:
+    def hamming_distance(self, hash1: str, hash2: str) -> int:
         h1 = int(hash1, 16)
         h2 = int(hash2, 16)
-        return bin(h1 ^ h2).count('1') < self.threshold
+        return bin(h1 ^ h2).count("1")
+
+    def is_duplicate(self, hash1: str, hash2: str) -> bool:
+        return self.hamming_distance(hash1, hash2) <= self.threshold

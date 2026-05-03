@@ -15,6 +15,8 @@
       dt { font-weight: 700; }
       form { display: flex; gap: 8px; margin-top: 10px; }
       input[type="text"] { min-width: 0; flex: 1; }
+      .filmstrip { display: flex; gap: 6px; overflow-x: auto; margin-top: 10px; }
+      .filmstrip img { width: 72px; height: 100px; object-fit: cover; border: 1px solid #ccc; border-radius: 4px; }
     </style>
   </head>
   <body>
@@ -32,7 +34,15 @@
       <article>
         {% if card.angle %}<span class="badge">{{ card.angle }}</span>{% endif %}
         <img src="{{ '/fused_images/' ~ card.instance_id if card.fused_image_path else '/images/' ~ card.id }}" alt="Card image">
+        {% if card.canonical_views %}
+        <div class="filmstrip">
+          {% for view in card.canonical_views %}
+          <img src="{{ '/card_views/' ~ view.view_id }}" alt="Canonical view {{ loop.index }}">
+          {% endfor %}
+        </div>
+        {% endif %}
         <dl>
+          <dt>Instance</dt><dd>{{ card.instance_id if card.instance_id else "N/A" }}</dd>
           <dt>Score</dt><dd>{{ "%.3f"|format(card.final_score) }}</dd>
           <dt>State</dt><dd>{{ card.review_state }}</dd>
           <dt>Video</dt><dd>{{ card.source_path }}</dd>

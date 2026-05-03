@@ -51,11 +51,9 @@ class FrameTriageFilter:
             "variance": variance,
             "empty_ratio": empty_ratio,
         }
-        accepted = (
-            variance >= self.variance_threshold
-            and blur >= self.blur_threshold
-            and empty_ratio <= self.empty_ratio_threshold
-        )
+        # v3 wide-funnel behavior: avoid fixed blur/variance gatekeeping and only
+        # drop near-empty frames. Relative ranking is handled by RollingWindowTriage.
+        accepted = empty_ratio <= self.empty_ratio_threshold
         return accepted, metrics
 
 class RollingWindowTriage:
