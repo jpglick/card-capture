@@ -8,9 +8,10 @@
       header { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
       nav a { margin-right: 12px; color: #245; }
       .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; margin-top: 20px; }
-      article { background: white; border: 1px solid #ddd; border-radius: 8px; padding: 12px; }
+      article { background: white; border: 1px solid #ddd; border-radius: 8px; padding: 12px; position: relative; }
       img { width: 100%; height: auto; display: block; background: #eee; }
-      dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 8px; font-size: 14px; }
+      .badge { position: absolute; top: 16px; right: 16px; background: rgba(0,0,0,0.7); color: white; padding: 4px 8px; border-radius: 4px; font-size: 12px; }
+      dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 8px; font-size: 14px; margin-top: 10px; }
       dt { font-weight: 700; }
       form { display: flex; gap: 8px; margin-top: 10px; }
       input[type="text"] { min-width: 0; flex: 1; }
@@ -29,7 +30,8 @@
     <main class="grid">
       {% for card in cards %}
       <article>
-        <img src="/images/{{ card.id }}" alt="Detected card crop">
+        {% if card.angle %}<span class="badge">{{ card.angle }}</span>{% endif %}
+        <img src="{{ '/fused_images/' ~ card.instance_id if card.fused_image_path else '/images/' ~ card.id }}" alt="Card image">
         <dl>
           <dt>Score</dt><dd>{{ "%.3f"|format(card.final_score) }}</dd>
           <dt>State</dt><dd>{{ card.review_state }}</dd>
