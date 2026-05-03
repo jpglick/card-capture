@@ -25,3 +25,14 @@ def test_cropper_returns_deskewed_crop_with_expected_dimensions():
     assert crop.width == 80
     assert crop.height == 80
     assert int(crop.image.mean()) == 255
+
+
+def test_precision_normalization_output_size():
+    from card_capture.cropper import PrecisionNormalizer
+
+    normalizer = PrecisionNormalizer()
+    image = np.zeros((2000, 2000, 3), dtype=np.uint8)
+    # Define a skewed rectangle
+    corners = [(100, 100), (1100, 120), (1150, 1600), (80, 1550)]
+    result = normalizer.normalize(image, corners)
+    assert result.shape == (1050, 750, 3)
