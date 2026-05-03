@@ -14,17 +14,18 @@ import cv2
 
 from .cropper import CardCropper
 from .detectors import CardDetector
-from .ingestion import FrameTriageFilter
+from .ingestion import FrameTriageFilter, RollingWindowTriage
 from .models import (
     CornerDetection,
     DetectionPacket,
     FramePacket,
     FrameSample,
+    PerformanceTelemetry,
     ProcessingResult,
     QualityScore,
 )
 from .scoring import QualityScorer
-from .selector import CandidateSelector, ScoredCandidate
+from .selector import CandidateSelector, HysteresisTracker, ScoredCandidate
 from .storage import Storage
 
 _SENTINEL = "__card_capture_queue_sentinel__"
@@ -33,6 +34,15 @@ _QUEUE_RETRY_MAX_WAIT_SECONDS = 5.0
 # Cold model startup and first-batch inference can take well over 30s on a
 # fresh environment, especially when weights are downloaded lazily.
 _DRAIN_IDLE_TIMEOUT_SECONDS = 300.0
+
+
+class PipelineTimer:
+    def __init__(self):
+        self.start_time = time.monotonic()
+        self.timings = {}
+
+    def record(self, stage: str):
+        self.timings[stage] = time.monotonic() - self.start_time
 
 
 @dataclass(frozen=True)
@@ -113,60 +123,90 @@ class VideoProcessor:
             options=options,
         )
 
-        selector = self.selector or CandidateSelector(
-            group_gap_ms=options.group_gap_ms,
-            spatial_variance_threshold=options.spatial_variance_threshold,
-            frames_per_instance=options.frames_per_instance,
-        )
-        candidates = _build_candidates(detection_rows)
-        selected = selector.select(candidates)
-        selected_ids = {candidate.detection_id for candidate in selected}
+        # Log performance telemetry to the database
+        for row in detection_rows:
+            if row.detection_packet.telemetry:
+                self.storage.add_performance_log(
+                    video_id=video_id,
+                    frame_index=row.detection_packet.frame_index,
+                    telemetry=row.detection_packet.telemetry,
+                )
 
-        # Build mapping from candidate index to database view_id
+        # v3 adaptive pipeline: Use HysteresisTracker for spatial tracking and flip detection
+        candidates = _build_candidates(detection_rows)
+        tracker = HysteresisTracker()
+        for candidate in candidates:
+            tracker.process(candidate)
+        
+        tracks = tracker.finalize()
+        
+        # Track which detections are selected as high-quality (canonical)
+        selected_detection_ids = set()
+        for track in tracks:
+            # For each track, select top N frames by quality
+            sorted_candidates = sorted(
+                track.candidates,
+                key=lambda c: c.score.total,
+                reverse=True
+            )
+            for best_c in sorted_candidates[:options.frames_per_instance]:
+                selected_detection_ids.add(best_c.detection_id)
+
+        # Persist tracks and views to database
         index_to_view_id: dict[int, int] = {}
-        for row_index, row in enumerate(detection_rows):
+        for track in tracks:
             instance_id = self.storage.add_card_instance(
                 video_id=video_id,
-                track_id=f"card_{row_index + 1}",
+                track_id=track.instance_id,
             )
-            confidence = float(row.detection_packet.corner_detection.confidence)
-            view_id = self.storage.add_card_view(
-                card_instance_id=instance_id,
-                frame_index=row.detection_packet.frame_index,
-                timestamp_ms=row.detection_packet.timestamp_ms,
-                detection=row.detection_packet.corner_detection,
-                rectified_path=None,
-                quality_score={"confidence": round(confidence, 6)},
-                is_canonical=row_index in selected_ids,
-            )
-            index_to_view_id[row_index] = view_id
-            self.storage.add_evidence_frame(
-                card_view_id=view_id,
-                source_frame_path=row.source_frame_path,
-                frame_width=row.detection_packet.width,
-                frame_height=row.detection_packet.height,
-                metrics=row.triage_metrics,
-            )
+            for candidate in track.candidates:
+                row = detection_rows[candidate.detection_id]
+                is_canonical = candidate.detection_id in selected_detection_ids
+                
+                confidence = float(row.detection_packet.corner_detection.confidence)
+                view_id = self.storage.add_card_view(
+                    card_instance_id=instance_id,
+                    frame_index=row.detection_packet.frame_index,
+                    timestamp_ms=row.detection_packet.timestamp_ms,
+                    detection=row.detection_packet.corner_detection,
+                    rectified_path=None,
+                    quality_score={"confidence": round(confidence, 6)},
+                    is_canonical=is_canonical,
+                )
+                index_to_view_id[candidate.detection_id] = view_id
+                
+                self.storage.add_evidence_frame(
+                    card_view_id=view_id,
+                    source_frame_path=row.source_frame_path,
+                    frame_width=row.detection_packet.width,
+                    frame_height=row.detection_packet.height,
+                    metrics=row.triage_metrics,
+                )
 
-        for selected_index, candidate in enumerate(selected):
-            source_path = Path(candidate.image_path)
-            best_path = best_dir / f"video_{video_id}_best_{selected_index + 1}.jpg"
+        # Handle saved_cards (the ones we copy to "best" folder)
+        saved_count = 0
+        for detection_id in sorted(selected_detection_ids):
+            row = detection_rows[detection_id]
+            source_path = Path(row.source_frame_path)
+            saved_count += 1
+            best_path = best_dir / f"video_{video_id}_best_{saved_count}.jpg"
+            
             if source_path.exists():
                 shutil.copyfile(source_path, best_path)
             
             self.storage.add_saved_card(
-                detection_id=index_to_view_id[candidate.detection_id],
+                detection_id=index_to_view_id[detection_id],
                 image_path=str(best_path),
-                final_score=candidate.score.total,
+                final_score=row.detection_packet.corner_detection.confidence,
             )
 
-        self.storage.update_video_status(video_id, "complete" if selected else "no_detections")
+        self.storage.update_video_status(video_id, "complete" if saved_count > 0 else "no_detections")
         return ProcessingResult(
             video_id=video_id,
             frame_count=stats.frame_count,
             accepted_frame_count=stats.accepted_frame_count,
             detection_count=len(detection_rows),
-            saved_instance_count=len(selected),
+            saved_instance_count=saved_count,
             output_dir=options.output_dir,
         )
 
@@ -384,15 +424,29 @@ def _producer_main(
         empty_ratio_threshold=empty_pixel_threshold,
         blur_threshold=blur_threshold,
     )
+    adaptive_triage = RollingWindowTriage(window_size=30, keep_percentile=0.5)
     try:
         for frame in sampler.sample(Path(video_path), 0.0):
+            timer = PipelineTimer()
             frame_count += 1
             accepted, metrics = triage.evaluate(frame.image)
+            timer.record("t_ingest")
+            
             if not accepted:
                 continue
+            
+            # Use blur score for rolling window triage to prioritize sharp frames
+            if not adaptive_triage.evaluate_score(frame.frame_index, metrics["blur"]):
+                continue
+
             accepted_frame_count += 1
             source_frame_path = Path(frame_dir) / f"video_{video_id}_frame_{frame.frame_index}.jpg"
             cv2.imwrite(str(source_frame_path), frame.image)
+            timer.record("t_io")
+
+            t_ingest = timer.timings.get("t_ingest", 0.0)
+            t_io = timer.timings.get("t_io", 0.0) - t_ingest
+
             _put_or_fail(
                 frame_queue,
                 _FrameEnvelope(
@@ -403,6 +457,10 @@ def _producer_main(
                         width=frame.width,
                         height=frame.height,
                         triage_metrics=metrics,
+                        telemetry=PerformanceTelemetry(
+                            t_ingest=t_ingest,
+                            t_io=t_io,
+                        ),
                     ),
                     source_frame_path=str(source_frame_path),
                 ),
@@ -491,8 +549,12 @@ def _consume_batch(
         return
 
     if hasattr(detector, "detect_batch"):
+        timer = PipelineTimer()
         frames = [row.frame_packet for row in batch]
         detections = detector.detect_batch(frames, confidence_threshold=corner_confidence_threshold)
+        timer.record("t_detect")
+        t_detect_per_frame = timer.timings["t_detect"] / len(batch)
+
         source_by_frame = {(row.frame_packet.frame_index, row.frame_packet.timestamp_ms): row for row in batch}
         for detection_packet in detections:
             if detection_packet.corner_detection.confidence < corner_confidence_threshold:
@@ -500,10 +562,25 @@ def _consume_batch(
             source = source_by_frame.get((detection_packet.frame_index, detection_packet.timestamp_ms))
             if source is None:
                 continue
+
+            prod_telemetry = source.frame_packet.telemetry or PerformanceTelemetry()
+            telemetry = PerformanceTelemetry(
+                t_ingest=prod_telemetry.t_ingest,
+                t_io=prod_telemetry.t_io,
+                t_detect=t_detect_per_frame,
+            )
+
             _put_or_fail(
                 detection_queue,
                 _DetectionEnvelope(
-                    detection_packet=detection_packet,
+                    detection_packet=DetectionPacket(
+                        frame_index=detection_packet.frame_index,
+                        timestamp_ms=detection_packet.timestamp_ms,
+                        width=detection_packet.width,
+                        height=detection_packet.height,
+                        corner_detection=detection_packet.corner_detection,
+                        telemetry=telemetry,
+                    ),
                     source_frame_path=source.source_frame_path,
                     triage_metrics=source.frame_packet.triage_metrics,
                 ),
@@ -518,7 +595,19 @@ def _consume_batch(
             width=row.frame_packet.width,
             height=row.frame_packet.height,
         )
-        for detection in detector.detect(legacy_frame):
+        timer = PipelineTimer()
+        detections = list(detector.detect(legacy_frame))
+        timer.record("t_detect")
+        t_detect = timer.timings["t_detect"]
+
+        prod_telemetry = row.frame_packet.telemetry or PerformanceTelemetry()
+        telemetry = PerformanceTelemetry(
+            t_ingest=prod_telemetry.t_ingest,
+            t_io=prod_telemetry.t_io,
+            t_detect=t_detect,
+        )
+
+        for detection in detections:
             if detection.confidence < corner_confidence_threshold:
                 continue
             _put_or_fail(
@@ -534,6 +623,7 @@ def _consume_batch(
                             confidence=detection.confidence,
                             metadata=dict(detection.metadata),
                         ),
+                        telemetry=telemetry,
                     ),
                     source_frame_path=row.source_frame_path,
                     triage_metrics=row.frame_packet.triage_metrics,

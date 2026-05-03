@@ -58,25 +58,27 @@ class FrameTriageFilter:
         )
         return accepted, metrics
 
+
 class RollingWindowTriage:
     def __init__(self, window_size: int = 30, keep_percentile: float = 0.5):
         self.window_size = window_size
         self.keep_percentile = keep_percentile
-        self.buffer = []  # list of (index, score)
+        self.buffer: list[tuple[int, float]] = []
 
     def evaluate_score(self, index: int, score: float) -> bool:
         self.buffer.append((index, score))
+        
+        # Wide Funnel: If window is not yet full, accept everything to avoid missing early cards.
         if len(self.buffer) < self.window_size:
-            return False # Wait for window to fill or use a different strategy
+            return True
+            
+        # Sort current buffer to find rank
+        current_buffer = sorted(self.buffer, key=lambda x: x[1], reverse=True)
+        keep_count = max(1, int(len(current_buffer) * self.keep_percentile))
+        top_indices = {x[0] for x in current_buffer[:keep_count]}
         
-        # Simple implementation: sort buffer by score, keep top X
-        self.buffer.sort(key=lambda x: x[1], reverse=True)
-        keep_count = int(len(self.buffer) * self.keep_percentile)
-        top_indices = {x[0] for x in self.buffer[:keep_count]}
-        
-        # Check if the current frame was in the top
         result = index in top_indices
         
-        # Slide window
+        # Slide window: keep only last window_size frames
         self.buffer = [x for x in self.buffer if x[0] > index - self.window_size]
         return result
