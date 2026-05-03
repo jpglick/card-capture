@@ -83,6 +83,30 @@ class ProcessingOptions:
     telemetry_scope: str = "canonical"
 
 
+
+class NullStateDetector:
+    def __init__(self, frames: int = 30, threshold: float = 15.0):
+        self.frames = frames
+        self.threshold = threshold
+        self.background_model = None
+        self.frame_count = 0
+
+    def is_workspace_empty(self, frame: np.ndarray) -> bool:
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        if self.frame_count < self.frames:
+            if self.background_model is None:
+                self.background_model = np.zeros_like(gray, dtype=np.float32)
+            
+            self.background_model = (
+                (self.background_model * self.frame_count + gray) / (self.frame_count + 1)
+            )
+            self.frame_count += 1
+            return True
+        
+        diff = cv2.absdiff(gray, self.background_model.astype(np.uint8))
+        return float(np.mean(diff)) < self.threshold
+
+
 class VideoProcessor:
     def __init__(
         self,
@@ -99,11 +123,15 @@ class VideoProcessor:
         self.cropper = cropper or CardCropper()
         self.scorer = scorer or QualityScorer()
         self.selector = selector
+        self.null_detector = None
 
     def process(self, video_path: Path, options: ProcessingOptions, debug_config: Any = None) -> ProcessingResult:
         video_path = Path(video_path).resolve()
         if not video_path.exists():
             raise FileNotFoundError(f"Video does not exist: {video_path}")
+            
+        self.null_detector = NullStateDetector(frames=options.background_frames, threshold=options.background_threshold)
+
 
         output_dir = options.output_dir.resolve()
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -135,6 +163,11 @@ class VideoProcessor:
             max_gap_frames=10,
         )
         for candidate in candidates:
+            raw_image = cv2.imread(str(detection_rows[candidate.detection_id].source_frame_path))
+            if raw_image is not None and self.null_detector.is_workspace_empty(raw_image):
+                for track in tracker.active_tracks:
+                    track.active = False
+                continue
             tracker.process(candidate)
         tracks = tracker.finalize()
 
