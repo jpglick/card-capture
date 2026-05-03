@@ -98,6 +98,24 @@ def build_parser() -> argparse.ArgumentParser:
         "--device", default="auto",
         help="Device for model inference: auto (default, uses MPS on Mac), cpu, mps, cuda",
     )
+    process.add_argument(
+        "--group-gap-ms",
+        type=_positive_int,
+        default=300,
+        help="Temporal gap threshold for card grouping in milliseconds (default: 300ms, reduced from 1000ms)",
+    )
+    process.add_argument(
+        "--spatial-variance-threshold",
+        type=_positive_float,
+        default=75.0,
+        help="Spatial distance threshold for grouping detections by corner centroid in pixels (default: 75.0)",
+    )
+    process.add_argument(
+        "--frames-per-instance",
+        type=_positive_int,
+        default=2,
+        help="Number of best frames to select per detected card instance (captures front + back by default)",
+    )
 
     review = subparsers.add_parser("review", help="Start the local review UI")
     review.add_argument("--db", type=Path, default=Path("card_capture_output/cards.sqlite"))
@@ -130,7 +148,7 @@ def _run_process(args: argparse.Namespace) -> int:
             detection_width=args.detection_width,
             device=args.device,
         )
-        sampler = VideoSampler()
+        sampler = VideoSampler(reader_backend=args.reader_backend)
 
     processor = VideoProcessor(storage=storage, sampler=sampler, detector=detector)
     result = processor.process(
@@ -144,6 +162,9 @@ def _run_process(args: argparse.Namespace) -> int:
             blur_threshold=args.blur_threshold,
             variance_threshold=args.variance_threshold,
             empty_pixel_threshold=args.empty_pixel_threshold,
+            group_gap_ms=args.group_gap_ms,
+            spatial_variance_threshold=args.spatial_variance_threshold,
+            frames_per_instance=args.frames_per_instance,
         ),
     )
     print(

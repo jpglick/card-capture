@@ -30,6 +30,22 @@ card-capture process <video> \
   --device {auto,cpu,mps,cuda}
 ```
 
+## Install Notes
+
+- `pip install -e ".[pipeline_v21]"` installs the supported pip-side pipeline dependencies: `av` and `onnxruntime`.
+- `decord` is a separate install because PyPI does not ship Apple Silicon macOS wheels.
+- `--reader-backend auto` prefers `decord` when importable and otherwise falls back to `pyav`.
+- Apple Silicon macOS: use a local micromamba/conda-forge environment, for example:
+
+```bash
+mkdir -p .tools
+cd .tools
+curl -L https://micro.mamba.pm/api/micromamba/osx-arm64/latest | tar -xj
+cd ..
+.tools/bin/micromamba create -y -p "$PWD/.decord-env" -c conda-forge python=3.11 decord ffmpeg pip
+.tools/bin/micromamba run -p "$PWD/.decord-env" pip install -e ".[pipeline_v21,model,review,test]"
+```
+
 ## v2.1 Runtime Entities
 
 - `ProcessingOptions`: runtime knobs passed from CLI to pipeline.

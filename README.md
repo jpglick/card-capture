@@ -8,10 +8,53 @@ Extract high-quality sports card stills from local video files.
 pip install -e .
 ```
 
+Install the v2.1 pipeline runtime dependencies:
+
+```bash
+pip install -e ".[pipeline_v21]"
+```
+
 To use the ML-based card detection features, also install the optional model dependencies:
 
 ```bash
 pip install -e ".[model]"
+```
+
+To use the review UI:
+
+```bash
+pip install -e ".[review]"
+```
+
+### Decord Backend
+
+`--reader-backend auto` now prefers `decord` when it is importable and falls back to `pyav` otherwise.
+
+`decord` is installed separately from `.[pipeline_v21]` because PyPI does not publish wheels for Apple Silicon macOS, and its macOS PyPI wheels are limited to older Intel CPython builds.
+
+Install `decord` with one of these paths:
+
+- Linux x86_64 / Windows amd64 with a supported Python:
+
+```bash
+pip install decord
+```
+
+- Apple Silicon macOS:
+
+```bash
+mkdir -p .tools
+cd .tools
+curl -L https://micro.mamba.pm/api/micromamba/osx-arm64/latest | tar -xj
+cd ..
+.tools/bin/micromamba create -y -p "$PWD/.decord-env" -c conda-forge python=3.11 decord ffmpeg pip
+.tools/bin/micromamba run -p "$PWD/.decord-env" pip install -e ".[pipeline_v21,model,review,test]"
+```
+
+Then run the app through that environment:
+
+```bash
+.tools/bin/micromamba run -p "$PWD/.decord-env" card-capture process ~/path/to/video.mov --reader-backend decord
 ```
 
 ## Quick Start
@@ -46,7 +89,7 @@ Parent Process (storage writes + candidate selection + best image export)
 ### v2.1 Flags
 
 Core throughput and filtering flags:
-- `--reader-backend {auto,decord,pyav}`: frame ingestion backend (`auto` picks the best available backend).
+- `--reader-backend {auto,decord,pyav}`: frame ingestion backend (`auto` prefers `decord`, otherwise falls back to `pyav`).
 - `--queue-size N`: max queue size shared by stage1 and stage2 workers.
 - `--inference-batch-size N`: consumer batch size for detector inference.
 - `--corner-confidence X`: minimum accepted corner confidence (`0.0` to `1.0`).

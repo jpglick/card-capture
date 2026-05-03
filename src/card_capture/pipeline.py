@@ -30,7 +30,9 @@ from .storage import Storage
 _SENTINEL = "__card_capture_queue_sentinel__"
 _QUEUE_POLL_INTERVAL_SECONDS = 0.1
 _QUEUE_RETRY_MAX_WAIT_SECONDS = 5.0
-_DRAIN_IDLE_TIMEOUT_SECONDS = 30.0
+# Cold model startup and first-batch inference can take well over 30s on a
+# fresh environment, especially when weights are downloaded lazily.
+_DRAIN_IDLE_TIMEOUT_SECONDS = 300.0
 
 
 @dataclass(frozen=True)
@@ -62,6 +64,9 @@ class ProcessingOptions:
     blur_threshold: float = 30.0
     variance_threshold: float = 20.0
     empty_pixel_threshold: float = 0.98
+    group_gap_ms: int = 300
+    spatial_variance_threshold: float = 75.0
+    frames_per_instance: int = 2
 
 
 class VideoProcessor:
@@ -108,11 +113,17 @@ class VideoProcessor:
             options=options,
         )
 
-        selector = self.selector or CandidateSelector()
+        selector = self.selector or CandidateSelector(
+            group_gap_ms=options.group_gap_ms,
+            spatial_variance_threshold=options.spatial_variance_threshold,
+            frames_per_instance=options.frames_per_instance,
+        )
         candidates = _build_candidates(detection_rows)
         selected = selector.select(candidates)
         selected_ids = {candidate.detection_id for candidate in selected}
 
+        # Build mapping from candidate index to database view_id
+        index_to_view_id: dict[int, int] = {}
         for row_index, row in enumerate(detection_rows):
             instance_id = self.storage.add_card_instance(
                 video_id=video_id,
@@ -128,6 +139,7 @@ class VideoProcessor:
                 quality_score={"confidence": round(confidence, 6)},
                 is_canonical=row_index in selected_ids,
             )
+            index_to_view_id[row_index] = view_id
             self.storage.add_evidence_frame(
                 card_view_id=view_id,
                 source_frame_path=row.source_frame_path,
@@ -141,6 +153,12 @@ class VideoProcessor:
             best_path = best_dir / f"video_{video_id}_best_{selected_index + 1}.jpg"
             if source_path.exists():
                 shutil.copyfile(source_path, best_path)
+            
+            self.storage.add_saved_card(
+                detection_id=index_to_view_id[candidate.detection_id],
+                image_path=str(best_path),
+                final_score=candidate.score.total,
+            )
 
         self.storage.update_video_status(video_id, "complete" if selected else "no_detections")
         return ProcessingResult(
@@ -158,12 +176,16 @@ def _build_candidates(rows: list[_DetectionEnvelope]) -> list[ScoredCandidate]:
     for index, row in enumerate(rows):
         confidence = float(row.detection_packet.corner_detection.confidence)
         score = QualityScore(total=confidence, components={"confidence": round(confidence, 6)})
+        # Convert Polygon (4-tuple of Points) to list of (x, y) tuples for spatial clustering
+        corners = row.detection_packet.corner_detection.corners
+        corner_list = [(float(pt[0]), float(pt[1])) for pt in corners]
         candidates.append(
             ScoredCandidate(
                 detection_id=index,
                 timestamp_ms=row.detection_packet.timestamp_ms,
                 image_path=row.source_frame_path,
                 score=score,
+                corners=corner_list,
             )
         )
     return candidates

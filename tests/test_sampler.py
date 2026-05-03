@@ -12,6 +12,7 @@ from card_capture.sampler import (
     StableWindow,
     ContrastBasedSampler,
     PresenceWindow,
+    VideoSampler,
 )
 
 
@@ -244,6 +245,60 @@ def test_raises_on_missing_video(tmp_path):
     sampler = StabilityBasedSampler()
     with pytest.raises(ValueError, match="Could not decode video"):
         list(sampler.sample(tmp_path / "nonexistent.avi", sample_fps=5.0))
+
+
+def test_video_sampler_uses_decord_backend_when_requested(monkeypatch, tmp_path):
+    sampler = VideoSampler(reader_backend="decord")
+    expected = [
+        FrameSample(
+            frame_index=7,
+            timestamp_ms=233,
+            image=np.zeros((4, 5, 3), dtype=np.uint8),
+            width=5,
+            height=4,
+        )
+    ]
+    backend_calls = []
+
+    monkeypatch.setattr("card_capture.sampler._resolve_reader_backend", lambda preferred: preferred)
+
+    def _fake_decord(self, video_path, sample_fps):
+        backend_calls.append((Path(video_path), sample_fps))
+        yield from expected
+
+    monkeypatch.setattr(VideoSampler, "_sample_with_decord", _fake_decord)
+
+    results = list(sampler.sample(tmp_path / "input.mov", sample_fps=3.0))
+
+    assert results == expected
+    assert backend_calls == [(tmp_path / "input.mov", 3.0)]
+
+
+def test_video_sampler_uses_pyav_backend_when_auto_falls_back(monkeypatch, tmp_path):
+    sampler = VideoSampler(reader_backend="auto")
+    expected = [
+        FrameSample(
+            frame_index=1,
+            timestamp_ms=100,
+            image=np.zeros((6, 8, 3), dtype=np.uint8),
+            width=8,
+            height=6,
+        )
+    ]
+    backend_calls = []
+
+    monkeypatch.setattr("card_capture.sampler._resolve_reader_backend", lambda preferred: "pyav")
+
+    def _fake_pyav(self, video_path, sample_fps):
+        backend_calls.append((Path(video_path), sample_fps))
+        yield from expected
+
+    monkeypatch.setattr(VideoSampler, "_sample_with_pyav", _fake_pyav)
+
+    results = list(sampler.sample(tmp_path / "input.mov", sample_fps=0.0))
+
+    assert results == expected
+    assert backend_calls == [(tmp_path / "input.mov", 0.0)]
 
 
 # ---------------------------------------------------------------------------

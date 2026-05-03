@@ -283,5 +283,6 @@ def test_pyproject_declares_pipeline_v21_runtime_dependencies():
 
     assert match is not None
     runtime_block = match.group(1)
-    for dep_name in ("onnxruntime", "decord", "av"):
+    for dep_name in ("onnxruntime", "av"):
         assert f'"{dep_name}"' in runtime_block
+    assert '"decord"' not in runtime_block
