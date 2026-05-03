@@ -60,3 +60,32 @@ def test_processing_result_has_v21_counts():
     assert result.accepted_frame_count == 24
     assert result.detection_count == 17
     assert result.saved_instance_count == 6
+
+
+def test_packets_can_carry_telemetry():
+    from card_capture.models import PerformanceTelemetry
+
+    telemetry = PerformanceTelemetry(t_ingest=0.1, t_detect=0.2)
+
+    image = np.zeros((32, 48, 3), dtype=np.uint8)
+    frame_packet = FramePacket(
+        frame_index=1,
+        timestamp_ms=10,
+        image=image,
+        width=48,
+        height=32,
+        triage_metrics={},
+        telemetry=telemetry,
+    )
+    assert frame_packet.telemetry == telemetry
+
+    corners = ((1.0, 1.0), (11.0, 1.0), (11.0, 9.0), (1.0, 9.0))
+    detection_packet = DetectionPacket(
+        frame_index=1,
+        timestamp_ms=10,
+        width=1280,
+        height=720,
+        corner_detection=CornerDetection(corners=corners, confidence=0.9),
+        telemetry=telemetry,
+    )
+    assert detection_packet.telemetry == telemetry

@@ -5,7 +5,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .models import CardDetection, CornerDetection, QualityScore
+from .models import CardDetection, CornerDetection, PerformanceTelemetry, QualityScore
 
 
 class Storage:
@@ -83,6 +83,18 @@ class Storage:
                     notes TEXT NOT NULL,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
+
+                CREATE TABLE IF NOT EXISTS performance_logs (
+                    log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    video_id INTEGER NOT NULL REFERENCES videos(id),
+                    frame_index INTEGER NOT NULL,
+                    t_ingest REAL NOT NULL,
+                    t_detect REAL NOT NULL,
+                    t_refine REAL NOT NULL,
+                    t_io REAL NOT NULL,
+                    queue_wait REAL NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
                 """
             )
 
@@ -108,6 +120,29 @@ class Storage:
     def update_video_status(self, video_id: int, status: str) -> None:
         with self._connect() as conn:
             conn.execute("UPDATE videos SET status = ? WHERE id = ?", (status, video_id))
+
+    def add_performance_log(
+        self, video_id: int, frame_index: int, telemetry: PerformanceTelemetry
+    ) -> int:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO performance_logs (
+                    video_id, frame_index, t_ingest, t_detect, t_refine, t_io, queue_wait
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    video_id,
+                    frame_index,
+                    telemetry.t_ingest,
+                    telemetry.t_detect,
+                    telemetry.t_refine,
+                    telemetry.t_io,
+                    telemetry.queue_wait,
+                ),
+            )
+            return int(cursor.lastrowid)
 
     def add_card_instance(
         self,

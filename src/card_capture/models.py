@@ -61,6 +61,7 @@ class FramePacket:
     width: int
     height: int
     triage_metrics: Dict[str, float]
+    telemetry: Optional[PerformanceTelemetry] = None
 
 
 @dataclass(frozen=True)
@@ -77,3 +78,13 @@ class DetectionPacket:
     width: int
     height: int
     corner_detection: CornerDetection
+    telemetry: Optional[PerformanceTelemetry] = None
+
+
+@dataclass(frozen=True)
+class PerformanceTelemetry:
+    t_ingest: float = 0.0
+    t_detect: float = 0.0
+    t_refine: float = 0.0
+    t_io: float = 0.0
+    queue_wait: float = 0.0

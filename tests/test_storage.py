@@ -95,3 +95,30 @@ def test_storage_v21_serializes_card_view_and_evidence_json(tmp_path: Path):
     assert view_row["is_canonical"] == 0
     assert evidence_row is not None
     assert json.loads(evidence_row["metrics_json"]) == {"brightness": 0.75, "contrast": 0.6}
+
+
+def test_storage_records_performance_telemetry(tmp_path: Path):
+    from card_capture.models import PerformanceTelemetry
+
+    storage = Storage(tmp_path / "cards.sqlite")
+    storage.initialize()
+    video_id = storage.add_video("/videos/input.mov", "hash", 1000, 1920, 1080)
+
+    telemetry = PerformanceTelemetry(
+        t_ingest=1.0, t_detect=2.0, t_refine=3.0, t_io=4.0, queue_wait=5.0
+    )
+
+    storage.add_performance_log(video_id=video_id, frame_index=10, telemetry=telemetry)
+
+    with storage._connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM performance_logs WHERE video_id = ?", (video_id,)
+        ).fetchone()
+
+    assert row is not None
+    assert row["frame_index"] == 10
+    assert row["t_ingest"] == 1.0
+    assert row["t_detect"] == 2.0
+    assert row["t_refine"] == 3.0
+    assert row["t_io"] == 4.0
+    assert row["queue_wait"] == 5.0
