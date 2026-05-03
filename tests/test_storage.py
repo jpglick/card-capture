@@ -122,3 +122,35 @@ def test_storage_records_performance_telemetry(tmp_path: Path):
     assert row["t_refine"] == 3.0
     assert row["t_io"] == 4.0
     assert row["queue_wait"] == 5.0
+
+
+def test_storage_supports_deduplication(tmp_path: Path):
+    storage = Storage(tmp_path / "cards.sqlite")
+    storage.initialize()
+    video_id = storage.add_video("/videos/input.mov", "hash", 1000, 1920, 1080)
+
+    instance_id_1 = storage.add_card_instance(video_id=video_id, track_id="card_1")
+    instance_id_2 = storage.add_card_instance(video_id=video_id, track_id="card_2")
+
+    visual_hash_1 = "hash_1"
+    visual_hash_2 = "hash_2"
+
+    storage.update_instance_deduplication(instance_id_1, visual_hash_1)
+    storage.update_instance_deduplication(
+        instance_id_2, visual_hash_2, duplicate_of_id=instance_id_1
+    )
+
+    with storage._connect() as conn:
+        row1 = conn.execute(
+            "SELECT visual_hash, is_duplicate_of FROM card_instances WHERE id = ?",
+            (instance_id_1,),
+        ).fetchone()
+        row2 = conn.execute(
+            "SELECT visual_hash, is_duplicate_of FROM card_instances WHERE id = ?",
+            (instance_id_2,),
+        ).fetchone()
+
+    assert row1["visual_hash"] == visual_hash_1
+    assert row1["is_duplicate_of"] is None
+    assert row2["visual_hash"] == visual_hash_2
+    assert row2["is_duplicate_of"] == instance_id_1
