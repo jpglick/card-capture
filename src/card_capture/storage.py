@@ -36,6 +36,7 @@ class Storage:
                     track_id TEXT NOT NULL,
                     visual_hash TEXT,
                     is_duplicate_of INTEGER REFERENCES card_instances(id),
+                    angle TEXT,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
@@ -150,14 +151,15 @@ class Storage:
         self,
         video_id: int,
         track_id: str,
+        angle: Optional[str] = None,
     ) -> int:
         with self._connect() as conn:
             cursor = conn.execute(
                 """
-                INSERT INTO card_instances (video_id, track_id)
-                VALUES (?, ?)
+                INSERT INTO card_instances (video_id, track_id, angle)
+                VALUES (?, ?, ?)
                 """,
-                (video_id, track_id),
+                (video_id, track_id, angle),
             )
             return int(cursor.lastrowid)
 
@@ -176,6 +178,25 @@ class Storage:
                 """,
                 (visual_hash, duplicate_of_id, instance_id),
             )
+
+    def find_canonical_for_hash(self, visual_hash: str, threshold: int = 4) -> Optional[int]:
+        # Simple pHash Hamming distance lookup in SQL is hard, so we do a python-side filtering
+        # but for efficiency we can at least filter by video_id if we wanted.
+        # Here we look across ALL instances that have a hash.
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id, visual_hash FROM card_instances WHERE visual_hash IS NOT NULL AND is_duplicate_of IS NULL"
+            ).fetchall()
+            
+            for row in rows:
+                if self._hamming_distance(visual_hash, row["visual_hash"]) < threshold:
+                    return int(row["id"])
+        return None
+
+    def _hamming_distance(self, hash1: str, hash2: str) -> int:
+        h1 = int(hash1, 16)
+        h2 = int(hash2, 16)
+        return bin(h1 ^ h2).count('1')
 
     def add_card_view(
         self,
@@ -241,7 +262,7 @@ class Storage:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT id, video_id, track_id, visual_hash, is_duplicate_of, created_at, updated_at
+                SELECT id, video_id, track_id, visual_hash, is_duplicate_of, angle, created_at, updated_at
                 FROM card_instances
                 WHERE video_id = ?
                 ORDER BY id ASC
@@ -255,6 +276,7 @@ class Storage:
                 "track_id": row["track_id"],
                 "visual_hash": row["visual_hash"],
                 "is_duplicate_of": row["is_duplicate_of"],
+                "angle": row["angle"],
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
             }

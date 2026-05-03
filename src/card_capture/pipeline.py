@@ -12,9 +12,10 @@ from typing import List, Optional
 
 import cv2
 
-from .cropper import CardCropper
+from .cropper import CardCropper, PrecisionNormalizer
 from .detectors import CardDetector
 from .ingestion import FrameTriageFilter, RollingWindowTriage
+from .deduplicator import VisualDeduplicator
 from .models import (
     CornerDetection,
     DetectionPacket,
@@ -31,8 +32,6 @@ from .storage import Storage
 _SENTINEL = "__card_capture_queue_sentinel__"
 _QUEUE_POLL_INTERVAL_SECONDS = 0.1
 _QUEUE_RETRY_MAX_WAIT_SECONDS = 5.0
-# Cold model startup and first-batch inference can take well over 30s on a
-# fresh environment, especially when weights are downloaded lazily.
 _DRAIN_IDLE_TIMEOUT_SECONDS = 300.0
 
 
@@ -104,8 +103,10 @@ class VideoProcessor:
         options.output_dir.mkdir(parents=True, exist_ok=True)
         frame_dir = options.output_dir / "frames"
         best_dir = options.output_dir / "best"
+        crops_dir = options.output_dir / "crops"
         frame_dir.mkdir(parents=True, exist_ok=True)
         best_dir.mkdir(parents=True, exist_ok=True)
+        crops_dir.mkdir(parents=True, exist_ok=True)
 
         video_id = self.storage.add_video(
             source_path=str(video_path),
@@ -140,41 +141,90 @@ class VideoProcessor:
         
         tracks = tracker.finalize()
         
+        normalizer = PrecisionNormalizer()
+        deduplicator = VisualDeduplicator()
+
         # Track which detections are selected as high-quality (canonical)
         selected_detection_ids = set()
+        
         for track in tracks:
-            # For each track, select top N frames by quality
+            timer = PipelineTimer()
+            
+            # Persist instance with angle metadata
+            instance_id = self.storage.add_card_instance(
+                video_id=video_id,
+                track_id=track.instance_id,
+                angle=track.angle,
+            )
+
+            # Sort candidates by quality to pick canonical ones
             sorted_candidates = sorted(
                 track.candidates,
                 key=lambda c: c.score.total,
                 reverse=True
             )
-            for best_c in sorted_candidates[:options.frames_per_instance]:
-                selected_detection_ids.add(best_c.detection_id)
+            canonical_for_this_track = sorted_candidates[:options.frames_per_instance]
+            canonical_ids = {c.detection_id for c in canonical_for_this_track}
+            selected_detection_ids.update(canonical_ids)
 
-        # Persist tracks and views to database
-        index_to_view_id: dict[int, int] = {}
-        for track in tracks:
-            instance_id = self.storage.add_card_instance(
-                video_id=video_id,
-                track_id=track.instance_id,
-            )
+            # Normalize all canonical frames for this track (for future Fusion)
+            phash = None
+            for i, candidate in enumerate(canonical_for_this_track):
+                row = detection_rows[candidate.detection_id]
+                raw_image = cv2.imread(row.source_frame_path)
+                if raw_image is not None:
+                    normalized = normalizer.normalize(raw_image, candidate.corners)
+                    rectified_path = crops_dir / f"instance_{instance_id}_view_{i}_rectified.jpg"
+                    cv2.imwrite(str(rectified_path), normalized)
+                    
+                    # Compute hash for the absolute best frame
+                    if i == 0:
+                        phash = deduplicator.compute_phash(normalized)
+
+            # Perform global deduplication using the best frame's hash
+            if phash:
+                duplicate_of = self.storage.find_canonical_for_hash(phash)
+                self.storage.update_instance_deduplication(instance_id, phash, duplicate_of)
+
+            timer.record("t_refine")
+            # Update telemetry for all frames in this track with refinery time
+            t_refine_per_frame = timer.timings["t_refine"] / len(track.candidates) if track.candidates else 0
+            
+            # Persist views
             for candidate in track.candidates:
                 row = detection_rows[candidate.detection_id]
-                is_canonical = candidate.detection_id in selected_detection_ids
+                is_canonical = candidate.detection_id in canonical_ids
                 
-                confidence = float(row.detection_packet.corner_detection.confidence)
+                rectified_path = None
+                if is_canonical:
+                    # Find which canonical index this was
+                    for idx, c_cand in enumerate(canonical_for_this_track):
+                        if c_cand.detection_id == candidate.detection_id:
+                            rectified_path = str(crops_dir / f"instance_{instance_id}_view_{idx}_rectified.jpg")
+                            break
+
                 view_id = self.storage.add_card_view(
                     card_instance_id=instance_id,
                     frame_index=row.detection_packet.frame_index,
                     timestamp_ms=row.detection_packet.timestamp_ms,
                     detection=row.detection_packet.corner_detection,
-                    rectified_path=None,
-                    quality_score={"confidence": round(confidence, 6)},
+                    rectified_path=rectified_path,
+                    quality_score={"confidence": round(row.detection_packet.corner_detection.confidence, 6)},
                     is_canonical=is_canonical,
                 )
-                index_to_view_id[candidate.detection_id] = view_id
                 
+                # Update telemetry for this frame in DB
+                self.storage.add_performance_log(
+                    video_id=video_id,
+                    frame_index=row.detection_packet.frame_index,
+                    telemetry=PerformanceTelemetry(
+                        t_ingest=row.detection_packet.telemetry.t_ingest if row.detection_packet.telemetry else 0,
+                        t_detect=row.detection_packet.telemetry.t_detect if row.detection_packet.telemetry else 0,
+                        t_refine=t_refine_per_frame,
+                        t_io=row.detection_packet.telemetry.t_io if row.detection_packet.telemetry else 0,
+                    )
+                )
+
                 self.storage.add_evidence_frame(
                     card_view_id=view_id,
                     source_frame_path=row.source_frame_path,
@@ -183,22 +233,24 @@ class VideoProcessor:
                     metrics=row.triage_metrics,
                 )
 
-        # Handle saved_cards (the ones we copy to "best" folder)
+        # Handle saved_cards (the ones we copy to "best" folder) - legacy compat
         saved_count = 0
         for detection_id in sorted(selected_detection_ids):
             row = detection_rows[detection_id]
             source_path = Path(row.source_frame_path)
             saved_count += 1
             best_path = best_dir / f"video_{video_id}_best_{saved_count}.jpg"
-            
             if source_path.exists():
                 shutil.copyfile(source_path, best_path)
-            
-            self.storage.add_saved_card(
-                detection_id=index_to_view_id[detection_id],
-                image_path=str(best_path),
-                final_score=row.detection_packet.corner_detection.confidence,
-            )
+            # Find the view_id we just created
+            with self.storage._connect() as conn:
+                view_row = conn.execute("SELECT id FROM card_views WHERE card_instance_id IN (SELECT id FROM card_instances WHERE video_id = ?) AND frame_index = ? AND timestamp_ms = ?", (video_id, row.detection_packet.frame_index, row.detection_packet.timestamp_ms)).fetchone()
+                if view_row:
+                    self.storage.add_saved_card(
+                        detection_id=view_row["id"],
+                        image_path=str(best_path),
+                        final_score=row.detection_packet.corner_detection.confidence,
+                    )
 
         self.storage.update_video_status(video_id, "complete" if saved_count > 0 else "no_detections")
         return ProcessingResult(
@@ -216,7 +268,6 @@ def _build_candidates(rows: list[_DetectionEnvelope]) -> list[ScoredCandidate]:
     for index, row in enumerate(rows):
         confidence = float(row.detection_packet.corner_detection.confidence)
         score = QualityScore(total=confidence, components={"confidence": round(confidence, 6)})
-        # Convert Polygon (4-tuple of Points) to list of (x, y) tuples for spatial clustering
         corners = row.detection_packet.corner_detection.corners
         corner_list = [(float(pt[0]), float(pt[1])) for pt in corners]
         candidates.append(
@@ -435,7 +486,6 @@ def _producer_main(
             if not accepted:
                 continue
             
-            # Use blur score for rolling window triage to prioritize sharp frames
             if not adaptive_triage.evaluate_score(frame.frame_index, metrics["blur"]):
                 continue
 
@@ -465,7 +515,7 @@ def _producer_main(
                     source_frame_path=str(source_frame_path),
                 ),
             )
-    except Exception as exc:  # pragma: no cover - exercised in parent integration test.
+    except Exception as exc:
         _put_with_retry(
             error_queue,
             _serialize_error("producer", exc),
@@ -524,7 +574,7 @@ def _consumer_main(
                     detection_queue,
                 )
                 batch = []
-    except Exception as exc:  # pragma: no cover - exercised in parent integration test.
+    except Exception as exc:
         _put_with_retry(
             error_queue,
             _serialize_error("consumer", exc),
