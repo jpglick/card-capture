@@ -34,8 +34,8 @@ class HysteresisTracker:
         t_high: float = 0.55,
         t_low: float = 0.20,
         max_dist: float = 75.0,
-        min_track_length: int = 3,
-        max_gap_frames: int = 10,
+        min_track_length: int = 12,
+        max_gap_frames: int = 15,
     ):
         self.t_high = t_high
         self.t_low = t_low
@@ -102,26 +102,20 @@ class HysteresisTracker:
             self.active_tracks.append(new_track)
 
     def detect_flip(self, track: TrackState, candidate: ScoredCandidate) -> bool:
-        if not candidate.corners or not track.candidates:
+        if not candidate.corners or len(track.candidates) < 5:
             return False
 
-        import statistics
-        areas = [_get_polygon_area(c.corners) for c in track.candidates if c.corners]
-        if not areas:
+        # Look at the last 5 frames for a continuous drop in area
+        recent = track.candidates[-5:]
+        areas = [_get_polygon_area(c.corners) for c in recent if c.corners]
+        if len(areas) < 5:
             return False
-
-        median_area = statistics.median(areas)
-        current_area = _get_polygon_area(candidate.corners)
-        current_ratio = _aspect_ratio(candidate.corners)
-
-        recent = track.candidates[-10:]
-        collapsed = any(
-            c.corners and _get_polygon_area(c.corners) <= 0.2 * median_area for c in recent
-        )
-        median_ratio = statistics.median([_aspect_ratio(c.corners) for c in recent if c.corners])
-        ratio_changed = abs(current_ratio - median_ratio) > 0.08
-        expanded = current_area >= 0.8 * median_area
-        return collapsed and expanded and ratio_changed
+            
+        # Check if area decreases monotonically by at least 30% over 5 frames
+        is_dropping = all(areas[i] > areas[i+1] for i in range(len(areas)-1))
+        area_drop = (areas[0] - areas[-1]) / areas[0]
+        
+        return is_dropping and area_drop > 0.30
 
     def finalize(self) -> List[TrackState]:
         return [t for t in self.active_tracks if len(t.candidates) >= self.min_track_length]
