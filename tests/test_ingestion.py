@@ -71,3 +71,13 @@ def test_decord_available_returns_false_on_runtime_import_exception(monkeypatch)
     monkeypatch.setattr(builtins, "__import__", _import_with_decord_runtime_failure)
 
     assert _decord_available() is False
+
+def test_rolling_window_triage():
+    from card_capture.ingestion import RollingWindowTriage
+    triage = RollingWindowTriage(window_size=10, keep_percentile=0.5)
+    scores = list(range(15))
+    kept = []
+    for i, score in enumerate(scores):
+        if triage.evaluate_score(i, score):
+            kept.append(i)
+    assert kept == [9, 10, 11, 12, 13, 14]
