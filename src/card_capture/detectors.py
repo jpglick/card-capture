@@ -144,6 +144,14 @@ class CardcaptorUltralyticsDetector:
                 )
                 if len(polygon) != 4:
                     continue
+
+                import numpy as np
+                import cv2
+                frame_area = frame.width * frame.height
+                poly_area = cv2.contourArea(np.array(polygon, dtype=np.float32))
+                if not (0.1 * frame_area <= poly_area <= 0.8 * frame_area):
+                    continue
+
                 detections.append(
                     CardDetection(
                         frame_index=frame.frame_index,

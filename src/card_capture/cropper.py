@@ -39,6 +39,10 @@ class CardCropper:
         width = max(1, int(round(max(width_top, width_bottom))))
         height = max(1, int(round(max(height_right, height_left))))
 
+        if width > height:
+            pts = np.roll(pts, shift=1, axis=0)
+            width, height = height, width
+
         destination = np.array(
             [[0, 0], [width, 0], [width, height], [0, height]],
             dtype="float32",
