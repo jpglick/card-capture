@@ -6,6 +6,7 @@ src/card_capture/cli.py
 src/card_capture/cropper.py
 src/card_capture/detectors.py
 src/card_capture/gpu_utils.py
+src/card_capture/ingestion.py
 src/card_capture/models.py
 src/card_capture/pipeline.py
 src/card_capture/review.py
@@ -19,3 +20,17 @@ src/card_capture.egg-info/dependency_links.txt
 src/card_capture.egg-info/entry_points.txt
 src/card_capture.egg-info/requires.txt
 src/card_capture.egg-info/top_level.txt
+src/card_capture/templates/review.html
+tests/test_cli.py
+tests/test_cropper.py
+tests/test_detectors.py
+tests/test_gpu_utils.py
+tests/test_hysteresis_tracker.py
+tests/test_ingestion.py
+tests/test_models_v21.py
+tests/test_pipeline.py
+tests/test_review.py
+tests/test_sampler.py
+tests/test_scoring_selector.py
+tests/test_storage.py
+tests/test_storage_migration.py

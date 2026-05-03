@@ -1,14 +1,21 @@
-Metadata-Version: 2.1
+Metadata-Version: 2.4
 Name: card-capture
 Version: 0.1.0
 Summary: Extract high-quality sports card stills from local video files.
-Home-page: UNKNOWN
-License: UNKNOWN
-Platform: UNKNOWN
 Requires-Python: >=3.9
+Requires-Dist: numpy
+Requires-Dist: opencv-python
+Provides-Extra: pipeline-v21
+Requires-Dist: av; extra == "pipeline-v21"
+Requires-Dist: onnxruntime; extra == "pipeline-v21"
 Provides-Extra: model
+Requires-Dist: huggingface-hub; extra == "model"
+Requires-Dist: ultralytics; extra == "model"
 Provides-Extra: review
+Requires-Dist: fastapi; extra == "review"
+Requires-Dist: jinja2; extra == "review"
+Requires-Dist: python-multipart; extra == "review"
+Requires-Dist: uvicorn; extra == "review"
 Provides-Extra: test
-
-UNKNOWN
-
+Requires-Dist: pytest; extra == "test"
+Requires-Dist: httpx; extra == "test"

@@ -1,3 +1,2 @@
 [console_scripts]
 card-capture = card_capture.cli:main
-

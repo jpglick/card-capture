@@ -5,6 +5,10 @@ opencv-python
 huggingface-hub
 ultralytics
 
+[pipeline_v21]
+av
+onnxruntime
+
 [review]
 fastapi
 jinja2
