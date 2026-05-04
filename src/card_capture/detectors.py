@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Protocol
+import platform
 
 import cv2
 import numpy as np
@@ -29,6 +31,72 @@ class CornerDetector(Protocol):
         self, frames: list[FramePacket], confidence_threshold: float
     ) -> list[DetectionPacket]:
         ...
+
+
+@dataclass(frozen=True)
+class TorchDeviceStatus:
+    requested: str
+    resolved: str
+    mps_built: bool
+    mps_available: bool
+    cuda_available: bool
+    reason: str
+
+
+def probe_torch_device_status(requested: str = "auto") -> TorchDeviceStatus:
+    normalized = requested.strip().lower()
+    if normalized not in {"auto", "cpu", "mps", "cuda"}:
+        raise ValueError(f"unsupported device request: {requested!r}")
+
+    try:
+        import torch
+    except ImportError:
+        return TorchDeviceStatus(
+            requested=normalized,
+            resolved="cpu",
+            mps_built=False,
+            mps_available=False,
+            cuda_available=False,
+            reason="torch_not_installed",
+        )
+
+    mps_built = bool(getattr(torch.backends, "mps", None) and torch.backends.mps.is_built())
+    mps_available = bool(getattr(torch.backends, "mps", None) and torch.backends.mps.is_available())
+    cuda_available = bool(torch.cuda.is_available())
+
+    if normalized == "cpu":
+        return TorchDeviceStatus(normalized, "cpu", mps_built, mps_available, cuda_available, "forced_cpu")
+    if normalized == "mps":
+        return TorchDeviceStatus(
+            normalized,
+            "mps" if mps_available else "cpu",
+            mps_built,
+            mps_available,
+            cuda_available,
+            "forced_mps" if mps_available else "mps_unavailable",
+        )
+    if normalized == "cuda":
+        return TorchDeviceStatus(
+            normalized,
+            "cuda" if cuda_available else "cpu",
+            mps_built,
+            mps_available,
+            cuda_available,
+            "forced_cuda" if cuda_available else "cuda_unavailable",
+        )
+
+    if platform.system() == "Darwin" and platform.machine() == "arm64" and mps_available:
+        return TorchDeviceStatus(normalized, "mps", mps_built, mps_available, cuda_available, "auto_mps")
+    if cuda_available:
+        return TorchDeviceStatus(normalized, "cuda", mps_built, mps_available, cuda_available, "auto_cuda")
+    return TorchDeviceStatus(
+        normalized,
+        "cpu",
+        mps_built,
+        mps_available,
+        cuda_available,
+        "mps_unavailable" if mps_built else "no_accelerator",
+    )
 
 
 class FakeCardDetector:
@@ -108,23 +176,56 @@ class CardcaptorUltralyticsDetector:
         self._model = None
 
     def detect(self, frame: FrameSample) -> List[CardDetection]:
+        detections = self.detect_batch(
+            [
+                FramePacket(
+                    frame_index=frame.frame_index,
+                    timestamp_ms=frame.timestamp_ms,
+                    image=frame.image,
+                    width=frame.width,
+                    height=frame.height,
+                    triage_metrics={},
+                )
+            ],
+            confidence_threshold=self.confidence_threshold,
+        )
+        return [
+            CardDetection(
+                frame_index=detection.frame_index,
+                timestamp_ms=detection.timestamp_ms,
+                polygon=detection.corner_detection.corners,
+                confidence=detection.corner_detection.confidence,
+                metadata=dict(detection.corner_detection.metadata),
+            )
+            for detection in detections
+        ]
+
+    def detect_batch(
+        self, frames: list[FramePacket], confidence_threshold: float
+    ) -> list[DetectionPacket]:
+        if not frames:
+            return []
         model = self._load_model()
-        original_h, original_w = frame.image.shape[:2]
+        detect_images: list[np.ndarray] = []
+        scale_factors: list[tuple[float, float, int, int]] = []
+        for frame in frames:
+            original_h, original_w = frame.image.shape[:2]
+            if original_w > self.detection_width:
+                scaled_w = self.detection_width
+                scaled_h = max(1, int(round(original_h * self.detection_width / original_w)))
+                detect_image = cv2.resize(frame.image, (scaled_w, scaled_h))
+                scale_x = original_w / scaled_w
+                scale_y = original_h / scaled_h
+            else:
+                detect_image = frame.image
+                scale_x = 1.0
+                scale_y = 1.0
+            detect_images.append(detect_image)
+            scale_factors.append((scale_x, scale_y, frame.width, frame.height))
 
-        if original_w > self.detection_width:
-            scaled_w = self.detection_width
-            scaled_h = max(1, int(round(original_h * self.detection_width / original_w)))
-            detect_image = cv2.resize(frame.image, (scaled_w, scaled_h))
-            scale_x = original_w / scaled_w
-            scale_y = original_h / scaled_h
-        else:
-            detect_image = frame.image
-            scale_x = 1.0
-            scale_y = 1.0
-
-        results = model(detect_image, conf=self.confidence_threshold, verbose=False)
-        detections: List[CardDetection] = []
-        for result in results:
+        results = model(detect_images, conf=confidence_threshold, verbose=False)
+        detections: List[DetectionPacket] = []
+        for frame, result, (scale_x, scale_y, frame_width, frame_height) in zip(frames, results, scale_factors):
             obb = getattr(result, "obb", None)
             if obb is None or obb.conf is None:
                 continue
@@ -137,7 +238,7 @@ class CardcaptorUltralyticsDetector:
             )
             for polygon_array, confidence, label in zip(polygons, confidences, labels):
                 confidence_float = float(confidence)
-                if confidence_float < self.confidence_threshold:
+                if confidence_float < confidence_threshold:
                     continue
                 polygon = tuple(
                     (float(point[0]) * scale_x, float(point[1]) * scale_y)
@@ -146,22 +247,26 @@ class CardcaptorUltralyticsDetector:
                 if len(polygon) != 4:
                     continue
 
-                frame_area = frame.width * frame.height
+                frame_area = frame_width * frame_height
                 poly_area = cv2.contourArea(np.array(polygon, dtype=np.float32))
                 if not (0.1 * frame_area <= poly_area <= 0.8 * frame_area):
                     continue
 
                 detections.append(
-                    CardDetection(
+                    DetectionPacket(
                         frame_index=frame.frame_index,
                         timestamp_ms=frame.timestamp_ms,
-                        polygon=polygon,  # type: ignore[arg-type]
-                        confidence=confidence_float,
-                        metadata={
-                            "runtime": self.runtime,
-                            "model": self.model_name,
-                            "class_id": int(label),
-                        },
+                        width=frame.width,
+                        height=frame.height,
+                        corner_detection=CornerDetection(
+                            corners=polygon,  # type: ignore[arg-type]
+                            confidence=confidence_float,
+                            metadata={
+                                "runtime": self.runtime,
+                                "model": self.model_name,
+                                "class_id": int(label),
+                            },
+                        ),
                     )
                 )
         return detections
@@ -184,12 +289,4 @@ class CardcaptorUltralyticsDetector:
         return self._model
 
     def _resolve_device(self) -> str:
-        if self.device != "auto":
-            return self.device
-        try:
-            import torch
-            if torch.backends.mps.is_available():
-                return "mps"
-        except ImportError:
-            pass
-        return "cpu"
+        return probe_torch_device_status(self.device).resolved

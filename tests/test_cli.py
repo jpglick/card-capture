@@ -5,6 +5,7 @@ import pytest
 
 from card_capture.cli import build_parser, main
 from card_capture.pipeline import ProcessingOptions
+from card_capture.detectors import TorchDeviceStatus
 
 
 def test_parser_rejects_missing_process_video_path():
@@ -128,6 +129,85 @@ def test_cli_process_fake_detector_writes_database(tmp_path: Path):
 
     assert exit_code == 0
     assert db_path.exists()
+
+
+def test_cli_process_cancels_when_mps_unavailable_and_user_declines(tmp_path: Path):
+    video_path = tmp_path / "input.mov"
+    video_path.write_bytes(b"fake video content")
+    config_path = tmp_path / "config.json"
+
+    import json
+    config_path.write_text(json.dumps({"detector": "docaligner", "device": "auto"}))
+
+    with patch(
+        "card_capture.cli.probe_torch_device_status",
+        return_value=TorchDeviceStatus(
+            requested="auto",
+            resolved="cpu",
+            mps_built=True,
+            mps_available=False,
+            cuda_available=False,
+            reason="mps_unavailable",
+        ),
+    ), patch("sys.stdin.isatty", return_value=True), patch("builtins.input", return_value="n"):
+        exit_code = main(
+            [
+                "process",
+                str(video_path),
+                "--output-dir",
+                str(tmp_path / "out"),
+                "--db",
+                str(tmp_path / "cards.sqlite"),
+                "--config",
+                str(config_path),
+            ]
+        )
+
+    assert exit_code == 1
+
+
+def test_cli_process_continues_when_mps_unavailable_and_user_accepts(tmp_path: Path):
+    video_path = tmp_path / "input.mov"
+    video_path.write_bytes(b"fake video content")
+    config_path = tmp_path / "config.json"
+
+    import json
+    config_path.write_text(json.dumps({"detector": "docaligner", "device": "auto"}))
+
+    with patch(
+        "card_capture.cli.probe_torch_device_status",
+        return_value=TorchDeviceStatus(
+            requested="auto",
+            resolved="cpu",
+            mps_built=True,
+            mps_available=False,
+            cuda_available=False,
+            reason="mps_unavailable",
+        ),
+    ), patch("sys.stdin.isatty", return_value=True), patch("builtins.input", return_value="y"), patch(
+        "card_capture.cli.VideoProcessor"
+    ) as mock_processor:
+        mock_result = mock_processor.return_value.process.return_value
+        mock_result.video_id = 1
+        mock_result.frame_count = 1
+        mock_result.accepted_frame_count = 1
+        mock_result.detection_count = 1
+        mock_result.saved_instance_count = 1
+
+        exit_code = main(
+            [
+                "process",
+                str(video_path),
+                "--output-dir",
+                str(tmp_path / "out"),
+                "--db",
+                str(tmp_path / "cards.sqlite"),
+                "--config",
+                str(config_path),
+            ]
+        )
+
+    assert exit_code == 0
 
 
 def test_readme_mentions_reader_backend_flag():

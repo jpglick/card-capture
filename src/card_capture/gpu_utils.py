@@ -390,3 +390,81 @@ def score_sharpness_batched(frames: list[np.ndarray], device: str = "auto",
         results.extend(batch_variances)
     
     return results
+
+
+def compute_presence_metrics_batched(
+    frames: list[np.ndarray],
+    device: str = "auto",
+    batch_size: int = 32,
+    sobel_threshold: float = 50.0,
+    empty_pixel_threshold: float = 8.0,
+) -> list[dict[str, float]]:
+    """Compute low-resolution presence metrics for a batch of frames.
+
+    The planner uses these metrics to derive per-video thresholds instead of
+    relying on fixed global knobs.
+
+    Returns one dict per frame with:
+    - sharpness: Laplacian variance
+    - variance: grayscale variance
+    - edge_density: fraction of pixels above the Sobel threshold
+    - empty_ratio: fraction of pixels close to black
+    """
+    if not frames:
+        return []
+
+    if device == "auto":
+        device = get_device()
+    elif isinstance(device, str):
+        device = torch.device(device)
+
+    batch_size = max(1, min(128, batch_size))
+
+    laplacian_kernel = torch.tensor(
+        [[0, -1, 0], [-1, 4, -1], [0, -1, 0]],
+        dtype=torch.float32,
+        device=device,
+    ).unsqueeze(0).unsqueeze(0)
+    sobel_x = torch.tensor(
+        [[-1.0, 0.0, 1.0], [-2.0, 0.0, 2.0], [-1.0, 0.0, 1.0]],
+        dtype=torch.float32,
+        device=device,
+    ).unsqueeze(0).unsqueeze(0)
+    sobel_y = torch.tensor(
+        [[-1.0, -2.0, -1.0], [0.0, 0.0, 0.0], [1.0, 2.0, 1.0]],
+        dtype=torch.float32,
+        device=device,
+    ).unsqueeze(0).unsqueeze(0)
+
+    results: list[dict[str, float]] = []
+
+    for batch_idx in range(0, len(frames), batch_size):
+        batch_frames = frames[batch_idx: batch_idx + batch_size]
+        batch_tensors = []
+        for frame in batch_frames:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
+            gray_normalized = gray.astype(np.float32) / 255.0
+            batch_tensors.append(torch.from_numpy(gray_normalized).to(device))
+
+        batch_tensor = torch.stack(batch_tensors).unsqueeze(1)
+        laplacian = F.conv2d(batch_tensor, laplacian_kernel, padding=1)
+        gx = F.conv2d(batch_tensor, sobel_x, padding=1)
+        gy = F.conv2d(batch_tensor, sobel_y, padding=1)
+        magnitude = torch.sqrt(gx**2 + gy**2) * (255.0 / 1443.0)
+
+        sharpness = torch.var(laplacian, dim=(1, 2, 3)) * (255.0 ** 2)
+        variance = torch.var(batch_tensor, dim=(1, 2, 3)) * (255.0 ** 2)
+        edge_density = (magnitude > sobel_threshold).float().mean(dim=(1, 2, 3))
+        empty_ratio = (batch_tensor <= (empty_pixel_threshold / 255.0)).float().mean(dim=(1, 2, 3))
+
+        for i in range(batch_tensor.shape[0]):
+            results.append(
+                {
+                    "sharpness": float(sharpness[i].item()),
+                    "variance": float(variance[i].item()),
+                    "edge_density": float(edge_density[i].item()),
+                    "empty_ratio": float(empty_ratio[i].item()),
+                }
+            )
+
+    return results

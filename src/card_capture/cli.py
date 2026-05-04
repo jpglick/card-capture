@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 from typing import Optional, Sequence
 
-from .detectors import CardcaptorUltralyticsDetector, FakeCardDetector
+from .detectors import CardcaptorUltralyticsDetector, FakeCardDetector, probe_torch_device_status
 from .pipeline import ProcessingOptions, VideoProcessor
-from .sampler import SyntheticSampler, VideoSampler
+from .sampler import AdaptivePresenceSampler, SyntheticSampler
 from .storage import Storage
 from .config import load_config, save_config
 
@@ -51,12 +52,20 @@ def _run_process(args: argparse.Namespace) -> int:
         detector = FakeCardDetector()
         sampler = SyntheticSampler()
     else:  # docaligner
+        device_status = probe_torch_device_status(config.device)
+        if not _confirm_cpu_fallback(device_status):
+            print("Cancelled before processing because GPU acceleration is unavailable.")
+            return 1
         detector = CardcaptorUltralyticsDetector(
             confidence_threshold=config.corner_confidence,
             detection_width=config.detection_width,
             device=config.device,
         )
-        sampler = VideoSampler(reader_backend=config.reader_backend)
+        sampler = AdaptivePresenceSampler(
+            video_path=args.video_path,
+            reader_backend=config.reader_backend,
+            device=config.device,
+        )
 
     processor = VideoProcessor(storage=storage, sampler=sampler, detector=detector)
     result = processor.process(
@@ -73,6 +82,7 @@ def _run_process(args: argparse.Namespace) -> int:
             group_gap_ms=config.group_gap_ms,
             spatial_variance_threshold=config.spatial_variance_threshold,
             telemetry_scope=config.telemetry_scope,
+            triage_keep_percentile=config.triage_keep_percentile,
         ),
         debug_config=config.debug
     )
@@ -81,7 +91,49 @@ def _run_process(args: argparse.Namespace) -> int:
         f"{result.frame_count} frames ({result.accepted_frame_count} accepted), "
         f"{result.detection_count} detections, {result.saved_instance_count} saved"
     )
+    if isinstance(result.telemetry, dict) and result.telemetry:
+        telemetry = result.telemetry
+        t_high = telemetry.get("tracker_t_high", 0.0)
+        try:
+            t_high_display = f"{float(t_high):.3f}"
+        except (TypeError, ValueError):
+            t_high_display = "n/a"
+        print(
+            "Telemetry: "
+            f"windows={telemetry.get('last_presence_window_count', 0)}, "
+            f"selected_frames={telemetry.get('last_selected_frame_count', 0)}, "
+            f"tracks={telemetry.get('tracks_finalized', 0)}, "
+            f"duplicates={telemetry.get('duplicate_tracks', 0)}, "
+            f"t_high={t_high_display}, "
+            f"status={telemetry.get('status', 'unknown')}"
+        )
+        telemetry_path = telemetry.get("telemetry_path")
+        if telemetry_path:
+            print(f"Telemetry written to {telemetry_path}")
     return 0
+
+
+def _confirm_cpu_fallback(device_status) -> bool:
+    if device_status.resolved != "cpu":
+        return True
+    if device_status.requested not in {"auto", "mps"}:
+        return True
+    if not device_status.mps_built:
+        return True
+
+    message = (
+        "PyTorch was built with MPS support, but MPS is unavailable in this runtime.\n"
+        f"Requested device: {device_status.requested}\n"
+        f"Resolved device: {device_status.resolved}\n"
+        f"Reason: {device_status.reason}\n"
+        "Continue on CPU? [y/N]: "
+    )
+    if not sys.stdin.isatty():
+        raise RuntimeError(
+            "MPS is unavailable and this process is non-interactive, so CPU fallback was not auto-approved."
+        )
+    answer = input(message).strip().lower()
+    return answer in {"y", "yes"}
 
 
 def _run_review(args: argparse.Namespace) -> int:

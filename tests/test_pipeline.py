@@ -9,8 +9,12 @@ from card_capture.models import CardDetection, CornerDetection, DetectionPacket,
 from card_capture.pipeline import (
     ProcessingOptions,
     VideoProcessor,
+    _PreparedTrack,
     _SENTINEL,
+    _appearance_vector,
     _drain_detection_queue,
+    _resolve_session_tracks,
+    _side_textiness_score,
     _put_with_retry,
     _select_canonical_entries,
 )
@@ -109,7 +113,16 @@ def test_pipeline_persists_v21_rows_and_result_counts(tmp_path: Path):
         storage=storage,
         sampler=FakeSampler(frame_count=3),
         detector=FakeBatchDetector(confidence=0.95),
-    ).process(video_path, ProcessingOptions(output_dir=tmp_path / "output", queue_size=4, background_frames=0))
+    ).process(
+        video_path,
+        ProcessingOptions(
+            output_dir=tmp_path / "output",
+            queue_size=4,
+            background_frames=0,
+            min_track_length=3,
+            triage_keep_percentile=1.0,
+        ),
+    )
 
     assert result.frame_count == 3
     assert result.accepted_frame_count == 3
@@ -310,6 +323,35 @@ def test_select_canonical_entries_prefers_same_appearance_cluster():
 
     assert len(selected) == 3
     assert selected_ids == {1, 2, 3}
+
+
+def test_resolve_session_tracks_merges_visually_identical_clusters():
+    deduplicator = VisualDeduplicator()
+    image = np.full((120, 80, 3), 180, dtype=np.uint8)
+    image[20:100, 20:60] = 30
+    prepared = []
+    for idx, frame_index in enumerate((100, 120), start=1):
+        prepared.append(
+            _PreparedTrack(
+                track=type("Track", (), {"instance_id": f"t{idx}", "candidates": []})(),
+                session_id=1,
+                first_frame_index=frame_index,
+                angle="Front",
+                frame_entries=[],
+                canonical_entries=[],
+                candidate_hashes=[deduplicator.compute_phash(image)],
+                primary_hash=deduplicator.compute_phash(image),
+                side_score=_side_textiness_score(image),
+                appearance_vector=_appearance_vector(image),
+                canonical_detection_ids=set(),
+            )
+        )
+
+    _resolve_session_tracks(prepared, deduplicator)
+
+    assert prepared[0].duplicate_track_index is None
+    assert prepared[1].duplicate_track_index == 0
+    assert prepared[0].angle == prepared[1].angle
 
 
 def test_pyproject_declares_pipeline_v21_runtime_dependencies():

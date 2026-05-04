@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import multiprocessing as mp
 import time
 import traceback
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from queue import Empty, Full
 from typing import List, Optional, Any
@@ -14,10 +15,11 @@ import cv2
 import numpy as np
 
 from .cropper import CardCropper, PrecisionNormalizer
+from .gpu_refinement import KorniaNormalizer
 from .detectors import CardDetector
 from .deduplicator import VisualDeduplicator
 from .fuser import calculate_sharpness, find_glare_centroid
-from .ingestion import FrameTriageFilter, RollingWindowTriage
+from .ingestion import FrameTriageFilter
 from .models import (
     CornerDetection,
     DetectionPacket,
@@ -33,11 +35,15 @@ from .storage import Storage
 
 _SENTINEL = "__card_capture_queue_sentinel__"
 _QUEUE_POLL_INTERVAL_SECONDS = 0.1
-_QUEUE_RETRY_MAX_WAIT_SECONDS = 5.0
+_QUEUE_RETRY_MAX_WAIT_SECONDS = 60.0
 _DRAIN_IDLE_TIMEOUT_SECONDS = 300.0
 _CANONICAL_TARGET_FRAMES = 3
 _CANONICAL_MAX_FRAMES = 4
 _SAME_APPEARANCE_HAMMING_MAX = 8
+_SESSION_DUPLICATE_HAMMING_MAX = 14
+_SESSION_TEXTINESS_MARGIN = 0.06
+_SESSION_APPEARANCE_SIMILARITY_MIN = 0.96
+_SESSION_MERGE_SIMILARITY_MIN = 0.93
 
 
 class PipelineTimer:
@@ -49,16 +55,32 @@ class PipelineTimer:
         self.timings[stage] = time.monotonic() - self.start_time
 
 
+@dataclass
+class _PreparedTrack:
+    track: Any
+    session_id: int
+    first_frame_index: int
+    angle: str
+    frame_entries: list[dict]
+    canonical_entries: list[dict]
+    candidate_hashes: list[str]
+    primary_hash: str
+    side_score: float
+    appearance_vector: np.ndarray
+    canonical_detection_ids: set[int]
+    duplicate_track_index: Optional[int] = None
+
+
 @dataclass(frozen=True)
 class _FrameEnvelope:
     frame_packet: FramePacket
-    source_frame_path: str
 
 
 @dataclass(frozen=True)
 class _DetectionEnvelope:
     detection_packet: DetectionPacket
     source_frame_path: str
+    image_jpeg: bytes
     triage_metrics: dict[str, float]
 
 
@@ -66,6 +88,8 @@ class _DetectionEnvelope:
 class _ProducerStats:
     frame_count: int
     accepted_frame_count: int
+    accepted_frame_presence: list[tuple[int, int, bool]] = field(default_factory=list)
+    sampler_telemetry: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -83,6 +107,11 @@ class ProcessingOptions:
     telemetry_scope: str = "canonical"
     background_frames: int = 30
     background_threshold: float = 15.0
+    null_patience_frames: int = 15
+    min_track_length: int = 12
+    use_kornia: bool = True
+    kornia_device: str = "auto"
+    triage_keep_percentile: float = 0.05
 
 
 
@@ -103,7 +132,7 @@ class NullStateDetector:
                 (self.background_model * self.frame_count + gray) / (self.frame_count + 1)
             )
             self.frame_count += 1
-            return True
+            return False # Return False during warmup so we don't accidentally trigger resets
         
         diff = cv2.absdiff(gray, self.background_model.astype(np.uint8))
         return float(np.mean(diff)) < self.threshold
@@ -127,18 +156,17 @@ class VideoProcessor:
         self.sampler = sampler
         self.detector = detector
         self.cropper = cropper or CardCropper()
+        self.normalizer = PrecisionNormalizer()
+        self.kornia_normalizer: Optional[KorniaNormalizer] = None
         self.scorer = scorer or QualityScorer()
         self.selector = selector
         self.null_detector = None
         self.session_manager = SessionManager()
-        self.tracker = HysteresisTracker(
-            max_dist=150.0,
-            min_track_length=3,
-            max_gap_frames=10,
-        )
+        self.tracker = HysteresisTracker(max_dist=150.0, min_track_length=12, max_gap_frames=15)
 
     def flush_tracker(self):
         self.tracker.finalize()
+        self.tracker.reset_active()
 
     def process(self, video_path: Path, options: ProcessingOptions, debug_config: Any = None) -> ProcessingResult:
         video_path = Path(video_path).resolve()
@@ -146,13 +174,21 @@ class VideoProcessor:
             raise FileNotFoundError(f"Video does not exist: {video_path}")
             
         self.null_detector = NullStateDetector(frames=options.background_frames, threshold=options.background_threshold)
+        if options.use_kornia:
+            try:
+                self.kornia_normalizer = KorniaNormalizer(
+                    width=self.normalizer.width,
+                    height=self.normalizer.height,
+                    device=options.kornia_device,
+                )
+            except Exception:
+                self.kornia_normalizer = None
 
 
         output_dir = options.output_dir.resolve()
         output_dir.mkdir(parents=True, exist_ok=True)
         frame_dir = output_dir / "frames"
         crops_dir = output_dir / "crops"
-        frame_dir.mkdir(parents=True, exist_ok=True)
         crops_dir.mkdir(parents=True, exist_ok=True)
 
         video_id = self.storage.add_video(
@@ -172,50 +208,86 @@ class VideoProcessor:
         )
 
         candidates = _build_candidates(detection_rows)
-        tracker = HysteresisTracker(
-            max_dist=options.spatial_variance_threshold,
-            min_track_length=3,
-            max_gap_frames=10,
+        candidate_confidences = [candidate.score.total for candidate in candidates]
+        if candidate_confidences:
+            tracker_t_high = float(
+                np.clip(np.percentile(candidate_confidences, 65), 0.30, 0.60)
+            )
+        else:
+            tracker_t_high = 0.55
+        tracker_t_low = max(0.15, tracker_t_high - 0.20)
+        adaptive_min_track_length = max(
+            3,
+            min(options.min_track_length, max(3, len(detection_rows) // 3)),
         )
+        self.tracker = HysteresisTracker(
+            t_high=tracker_t_high,
+            t_low=tracker_t_low,
+            max_dist=options.spatial_variance_threshold,
+            min_track_length=adaptive_min_track_length,
+            max_gap_frames=options.null_patience_frames * 2, # Allow for slightly larger gaps in sparse sampling
+        )
+        by_frame: dict[int, list[ScoredCandidate]] = {}
         for candidate in candidates:
-            raw_image = cv2.imread(str(detection_rows[candidate.detection_id].source_frame_path))
-            is_empty = self.null_detector.is_workspace_empty(raw_image) if raw_image is not None else True
-            
-            if is_empty:
-                if self.session_manager.active_session_id is not None:
-                    # Active -> Empty transition
-                    self.flush_tracker()
-                    self.session_manager.active_session_id = None
-                continue
-            
-            if self.session_manager.active_session_id is None:
-                # Empty -> Active transition
-                self.session_manager.active_session_id = str(candidate.timestamp_ms)
-                
-            self.tracker.process(candidate)
-        
-        # Finalize after the loop
-        if self.session_manager.active_session_id is not None:
-            self.flush_tracker()
+            key = -1 if candidate.frame_index is None else int(candidate.frame_index)
+            by_frame.setdefault(key, []).append(candidate)
 
+        empty_streak = 0
+        current_session_id = 0
+        frame_to_session: dict[int, int] = {}
+        for frame_index, timestamp_ms, is_empty in stats.accepted_frame_presence:
+            frame_candidates = by_frame.get(frame_index, [])
+            if frame_candidates:
+                is_empty = False
+            if is_empty:
+                empty_streak += 1
+                if empty_streak >= options.null_patience_frames:
+                    self.session_manager.active_session_id = None
+                    self.tracker.reset_active()
+                continue
+
+            empty_streak = 0
+            if self.session_manager.active_session_id is None:
+                self.session_manager.active_session_id = str(timestamp_ms)
+                current_session_id += 1
+            frame_to_session[frame_index] = current_session_id
+            self.tracker.tick()
+            for candidate in frame_candidates:
+                self.tracker.process(candidate)
+
+        raw_track_lengths = [len(track.candidates) for track in self.tracker.active_tracks]
         tracks = self.tracker.finalize()
 
         normalizer = PrecisionNormalizer()
         deduplicator = VisualDeduplicator()
+        prepared_tracks: list[_PreparedTrack] = []
         saved_count = 0
         for track in tracks:
-            timer = PipelineTimer()
-            instance_id = self.storage.add_card_instance(
-                video_id=video_id,
-                track_id=track.instance_id,
-                angle=track.angle,
-            )
-
             scored_track = sorted(track.candidates, key=lambda c: c.score.total, reverse=True)
             frame_entries = []
+            normalized_by_detection: dict[int, np.ndarray] = {}
+            if self.kornia_normalizer is not None:
+                batch_items: list[tuple[np.ndarray, list[tuple[float, float]]]] = []
+                batch_ids: list[int] = []
+                for candidate in scored_track:
+                    if not candidate.corners:
+                        continue
+                    row = detection_rows[candidate.detection_id]
+                    raw_image = _decode_detection_image(row)
+                    if raw_image is None:
+                        continue
+                    batch_items.append((raw_image, candidate.corners))
+                    batch_ids.append(candidate.detection_id)
+                if batch_items:
+                    try:
+                        warped = self.kornia_normalizer.warp_canonical_batch(batch_items)
+                        for detection_id, image in zip(batch_ids, warped):
+                            normalized_by_detection[detection_id] = image
+                    except Exception:
+                        normalized_by_detection = {}
             for candidate in scored_track:
                 row = detection_rows[candidate.detection_id]
-                raw_image = cv2.imread(row.source_frame_path)
+                raw_image = _decode_detection_image(row)
                 if raw_image is None:
                     continue
 
@@ -247,7 +319,9 @@ class VideoProcessor:
                     out_path = debug_dir / f"frame_{candidate.frame_index}_track_{track.instance_id[:8]}.jpg"
                     cv2.imwrite(str(out_path), debug_img)
 
-                normalized = normalizer.normalize(raw_image, candidate.corners)
+                normalized = normalized_by_detection.get(candidate.detection_id)
+                if normalized is None:
+                    normalized = normalizer.normalize(raw_image, candidate.corners)
                 glare_centroid = find_glare_centroid(normalized)
                 glare_x, glare_y = glare_centroid if glare_centroid else (None, None)
                 frame_entries.append(
@@ -271,19 +345,78 @@ class VideoProcessor:
             canonical_detection_ids = {
                 entry["candidate"].detection_id for entry in canonical_entries
             }
-
-            # Stage 5: compare strongest canonical image hash against prior canonical instances.
             best_canonical = max(canonical_entries, key=lambda e: e["candidate"].score.total)
             phash = best_canonical["visual_hash"]
-            rotated = cv2.rotate(best_canonical["normalized"], cv2.ROTATE_180)
-            phash_rot180 = deduplicator.compute_phash(rotated)
-            duplicate_of = self.storage.find_canonical_for_hashes(
-                [phash, phash_rot180], threshold=6
+            candidate_hashes: list[str] = []
+            for entry in canonical_entries:
+                h = str(entry["visual_hash"])
+                candidate_hashes.append(h)
+                rotated = cv2.rotate(entry["normalized"], cv2.ROTATE_180)
+                candidate_hashes.append(deduplicator.compute_phash(rotated))
+            first_frame_index = (
+                -1 if track.candidates[0].frame_index is None else int(track.candidates[0].frame_index)
             )
-            self.storage.update_instance_deduplication(instance_id, phash, duplicate_of)
+            prepared_tracks.append(
+                _PreparedTrack(
+                    track=track,
+                    session_id=frame_to_session.get(first_frame_index, 0),
+                    first_frame_index=first_frame_index,
+                    angle=track.angle,
+                    frame_entries=frame_entries,
+                    canonical_entries=canonical_entries,
+                    candidate_hashes=candidate_hashes,
+                    primary_hash=str(phash),
+                    side_score=_side_textiness_score(best_canonical["normalized"]),
+                    appearance_vector=_appearance_vector(best_canonical["normalized"]),
+                    canonical_detection_ids=canonical_detection_ids,
+                )
+            )
+
+        _resolve_session_tracks(prepared_tracks, deduplicator)
+        duplicate_track_count = sum(
+            1 for prepared in prepared_tracks if prepared.duplicate_track_index is not None
+        )
+        track_lengths = [len(track.candidates) for track in tracks]
+        sampler_telemetry = dict(stats.sampler_telemetry)
+        if candidate_confidences:
+            sampler_telemetry["candidate_confidence_min"] = float(min(candidate_confidences))
+            sampler_telemetry["candidate_confidence_p50"] = float(
+                np.percentile(candidate_confidences, 50)
+            )
+            sampler_telemetry["candidate_confidence_p90"] = float(
+                np.percentile(candidate_confidences, 90)
+            )
+        sampler_telemetry["tracker_t_high"] = tracker_t_high
+        sampler_telemetry["tracker_t_low"] = tracker_t_low
+        sampler_telemetry["adaptive_min_track_length"] = adaptive_min_track_length
+        sampler_telemetry["detections"] = len(detection_rows)
+        sampler_telemetry["raw_track_lengths"] = raw_track_lengths
+        sampler_telemetry["tracks_finalized"] = len(tracks)
+        sampler_telemetry["track_lengths"] = track_lengths
+        sampler_telemetry["duplicate_tracks"] = duplicate_track_count
+
+        track_instance_ids: dict[int, int] = {}
+        for track_index, prepared in enumerate(prepared_tracks):
+            timer = PipelineTimer()
+            instance_id = self.storage.add_card_instance(
+                video_id=video_id,
+                track_id=prepared.track.instance_id,
+                angle=prepared.angle,
+            )
+            track_instance_ids[track_index] = instance_id
+
+            duplicate_of = None
+            if prepared.duplicate_track_index is not None:
+                duplicate_of = track_instance_ids.get(prepared.duplicate_track_index)
+            if duplicate_of is None:
+                duplicate_of = self.storage.find_canonical_for_hashes(
+                    prepared.candidate_hashes,
+                    threshold=6,
+                )
+            self.storage.update_instance_deduplication(instance_id, prepared.primary_hash, duplicate_of)
 
             rectified_paths: dict[int, str] = {}
-            for canonical_order, entry in enumerate(canonical_entries):
+            for canonical_order, entry in enumerate(prepared.canonical_entries):
                 candidate = entry["candidate"]
                 rectified_path = (
                     crops_dir / f"instance_{instance_id}_view_{canonical_order}_rectified.jpg"
@@ -292,13 +425,14 @@ class VideoProcessor:
                 rectified_paths[candidate.detection_id] = str(rectified_path)
 
             timer.record("t_refine")
-            t_refine_per_frame = timer.timings["t_refine"] / len(track.candidates)
+            t_refine_per_frame = timer.timings["t_refine"] / max(1, len(prepared.track.candidates))
 
             view_ids_by_detection: dict[int, int] = {}
-            for entry in frame_entries:
+            persisted_frames: dict[tuple[int, int], str] = {}
+            for entry in prepared.frame_entries:
                 candidate = entry["candidate"]
                 row = entry["row"]
-                is_canonical = candidate.detection_id in canonical_detection_ids
+                is_canonical = candidate.detection_id in prepared.canonical_detection_ids
                 view_id = self.storage.add_card_view(
                     card_instance_id=instance_id,
                     frame_index=row.detection_packet.frame_index,
@@ -339,26 +473,47 @@ class VideoProcessor:
                     )
                 self.storage.add_evidence_frame(
                     card_view_id=view_id,
-                    source_frame_path=row.source_frame_path,
+                    source_frame_path=_persist_source_frame(
+                        frame_dir=frame_dir,
+                        video_id=video_id,
+                        row=row,
+                        persisted_frames=persisted_frames,
+                    ),
                     frame_width=row.detection_packet.width,
                     frame_height=row.detection_packet.height,
                     metrics=dict(row.triage_metrics),
                 )
 
-            best_detection_id = best_canonical["candidate"].detection_id
+            best_detection_id = prepared.canonical_entries[0]["candidate"].detection_id
             best_view_id = view_ids_by_detection.get(best_detection_id)
             if best_view_id is not None:
                 canonical_image_path = rectified_paths.get(best_detection_id)
                 if canonical_image_path is None:
                     continue
-                self.storage.add_saved_card(
-                    detection_id=best_view_id,
-                    image_path=canonical_image_path,
-                    final_score=float(best_canonical["candidate"].score.total),
-                )
-                saved_count += 1
+                if duplicate_of is None:
+                    self.storage.add_saved_card(
+                        detection_id=best_view_id,
+                        image_path=canonical_image_path,
+                        final_score=float(prepared.canonical_entries[0]["candidate"].score.total),
+                    )
+                    saved_count += 1
 
-        self.storage.update_video_status(video_id, "complete" if saved_count > 0 else "no_detections")
+        if saved_count > 0:
+            status = "complete"
+        elif detection_rows and tracks:
+            status = "no_saves"
+        elif detection_rows:
+            status = "no_tracks"
+        else:
+            status = "no_detections"
+        self.storage.update_video_status(video_id, status)
+
+        telemetry_path = output_dir / "run_telemetry.json"
+        sampler_telemetry["status"] = status
+        sampler_telemetry["saved_instances"] = saved_count
+        sampler_telemetry["accepted_frames"] = stats.accepted_frame_count
+        sampler_telemetry["frame_count"] = stats.frame_count
+        telemetry_path.write_text(json.dumps(sampler_telemetry, indent=2, sort_keys=True))
         return ProcessingResult(
             video_id=video_id,
             frame_count=stats.frame_count,
@@ -366,7 +521,190 @@ class VideoProcessor:
             detection_count=len(detection_rows),
             saved_instance_count=saved_count,
             output_dir=output_dir,
+            telemetry={**sampler_telemetry, "telemetry_path": str(telemetry_path)},
         )
+
+
+def _side_textiness_score(image: np.ndarray) -> float:
+    height, width = image.shape[:2]
+    margin_h = int(height * 0.15)
+    margin_w = int(width * 0.15)
+    inner = image[margin_h : height - margin_h, margin_w : width - margin_w]
+    gray = cv2.cvtColor(inner, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 80, 160)
+    edge_ratio = float(edges.mean() / 255.0)
+    thresholded = cv2.adaptiveThreshold(
+        gray,
+        255,
+        cv2.ADAPTIVE_THRESH_MEAN_C,
+        cv2.THRESH_BINARY_INV,
+        31,
+        7,
+    )
+    ink_ratio = float(thresholded.mean() / 255.0)
+    return edge_ratio + ink_ratio
+
+
+def _appearance_vector(image: np.ndarray) -> np.ndarray:
+    height, width = image.shape[:2]
+    margin_h = int(height * 0.15)
+    margin_w = int(width * 0.15)
+    inner = image[margin_h : height - margin_h, margin_w : width - margin_w]
+    gray = cv2.cvtColor(inner, cv2.COLOR_BGR2GRAY)
+    small = cv2.resize(gray, (16, 16), interpolation=cv2.INTER_AREA).astype(np.float32)
+    small -= small.mean()
+    small_std = float(small.std())
+    if small_std > 1e-6:
+        small /= small_std
+    hsv = cv2.cvtColor(inner, cv2.COLOR_BGR2HSV)
+    hist = cv2.calcHist([hsv], [0, 1], None, [8, 8], [0, 180, 0, 256]).astype(np.float32)
+    hist = hist.flatten()
+    hist_sum = float(hist.sum())
+    if hist_sum > 1e-6:
+        hist /= hist_sum
+    vector = np.concatenate([small.flatten(), hist])
+    norm = float(np.linalg.norm(vector))
+    if norm > 1e-6:
+        vector /= norm
+    return vector
+
+
+def _appearance_similarity(vec_a: np.ndarray, vec_b: np.ndarray) -> float:
+    return float(np.dot(vec_a, vec_b))
+
+
+def _persist_source_frame(
+    frame_dir: Path,
+    video_id: int,
+    row: _DetectionEnvelope,
+    persisted_frames: dict[tuple[int, int], str],
+) -> str:
+    key = (int(row.detection_packet.frame_index), int(row.detection_packet.timestamp_ms))
+    existing = persisted_frames.get(key)
+    if existing is not None:
+        return existing
+    frame_dir.mkdir(parents=True, exist_ok=True)
+    path = (
+        frame_dir
+        / f"video_{video_id}_frame_{row.detection_packet.frame_index}_{row.detection_packet.timestamp_ms}.jpg"
+    ).resolve()
+    path.write_bytes(row.image_jpeg)
+    persisted = str(path)
+    persisted_frames[key] = persisted
+    return persisted
+
+
+def _decode_detection_image(row: _DetectionEnvelope) -> Optional[np.ndarray]:
+    array = np.frombuffer(row.image_jpeg, dtype=np.uint8)
+    return cv2.imdecode(array, cv2.IMREAD_COLOR)
+
+
+def _min_hash_distance(
+    hashes_a: list[str],
+    hashes_b: list[str],
+    deduplicator: VisualDeduplicator,
+) -> int:
+    return min(
+        deduplicator.hamming_distance(hash_a, hash_b)
+        for hash_a in hashes_a
+        for hash_b in hashes_b
+    )
+
+
+def _resolve_session_tracks(
+    prepared_tracks: list[_PreparedTrack],
+    deduplicator: VisualDeduplicator,
+) -> None:
+    by_session: dict[int, list[tuple[int, _PreparedTrack]]] = {}
+    for track_index, prepared in enumerate(prepared_tracks):
+        by_session.setdefault(prepared.session_id, []).append((track_index, prepared))
+
+    for session_tracks in by_session.values():
+        session_tracks.sort(key=lambda item: item[1].first_frame_index)
+        clusters: list[dict[str, Any]] = []
+        for track_index, prepared in session_tracks:
+            assigned_cluster = None
+            best_hash = None
+            for cluster_index, cluster in enumerate(clusters):
+                hash_distance = _min_hash_distance(
+                    prepared.candidate_hashes,
+                    cluster["hashes"],
+                    deduplicator,
+                )
+                text_distance = abs(prepared.side_score - cluster["side_score"])
+                appearance_similarity = _appearance_similarity(
+                    prepared.appearance_vector,
+                    cluster["appearance_vector"],
+                )
+                if (
+                    hash_distance <= _SESSION_DUPLICATE_HAMMING_MAX
+                    or appearance_similarity >= _SESSION_APPEARANCE_SIMILARITY_MIN
+                ) and (
+                    text_distance <= _SESSION_TEXTINESS_MARGIN
+                    or appearance_similarity >= _SESSION_APPEARANCE_SIMILARITY_MIN
+                    or len(clusters) == 1
+                ):
+                    if best_hash is None or hash_distance < best_hash:
+                        best_hash = hash_distance
+                        assigned_cluster = cluster_index
+
+            if assigned_cluster is None and len(clusters) >= 2:
+                side_distances = [
+                    abs(prepared.side_score - cluster["side_score"]) for cluster in clusters
+                ]
+                best_side_cluster = int(np.argmin(side_distances))
+                if side_distances[best_side_cluster] <= _SESSION_TEXTINESS_MARGIN:
+                    assigned_cluster = best_side_cluster
+
+            if assigned_cluster is None and len(clusters) < 2:
+                clusters.append(
+                    {
+                        "representative": track_index,
+                        "hashes": list(prepared.candidate_hashes),
+                        "side_score": prepared.side_score,
+                        "appearance_vector": prepared.appearance_vector.copy(),
+                    }
+                )
+                continue
+
+            if assigned_cluster is None:
+                side_distances = [
+                    abs(prepared.side_score - cluster["side_score"]) for cluster in clusters
+                ]
+                assigned_cluster = int(np.argmin(side_distances))
+
+            representative_index = int(clusters[assigned_cluster]["representative"])
+            prepared.duplicate_track_index = representative_index
+
+        if len(clusters) == 2:
+            similarity = _appearance_similarity(
+                clusters[0]["appearance_vector"],
+                clusters[1]["appearance_vector"],
+            )
+            if similarity >= _SESSION_MERGE_SIMILARITY_MIN:
+                first_rep = int(clusters[0]["representative"])
+                second_rep = int(clusters[1]["representative"])
+                prepared_tracks[second_rep].duplicate_track_index = first_rep
+                for sibling_index, sibling in session_tracks:
+                    if sibling.duplicate_track_index == second_rep:
+                        sibling.duplicate_track_index = first_rep
+                session_tracks = [
+                    (track_index, prepared)
+                    for track_index, prepared in session_tracks
+                    if track_index != second_rep
+                ]
+                clusters = [clusters[0]]
+
+        representative_angles: dict[int, str] = {}
+        for cluster_order, cluster in enumerate(clusters):
+            representative_index = int(cluster["representative"])
+            angle = "Back" if cluster["side_score"] >= 0.34 else "Front"
+            representative_angles[representative_index] = angle
+            prepared_tracks[representative_index].angle = angle
+
+        for track_index, prepared in session_tracks:
+            if prepared.duplicate_track_index is not None:
+                prepared.angle = representative_angles.get(prepared.duplicate_track_index, prepared.angle)
 
 
 def _build_candidates(rows: list[_DetectionEnvelope]) -> list[ScoredCandidate]:
@@ -482,11 +820,13 @@ def _run_pipeline_workers(
         args=(
             str(video_path),
             video_id,
-            str(frame_dir),
             sampler,
             options.blur_threshold,
             options.variance_threshold,
             options.empty_pixel_threshold,
+            options.background_frames,
+            options.background_threshold,
+            options.triage_keep_percentile,
             frame_queue,
             stats_queue,
             error_queue,
@@ -641,23 +981,26 @@ def _put_or_fail(q, item) -> None:
 def _producer_main(
     video_path: str,
     video_id: int,
-    frame_dir: str,
     sampler,
     blur_threshold: float,
     variance_threshold: float,
     empty_pixel_threshold: float,
+    background_frames: int,
+    background_threshold: float,
+    triage_keep_percentile: float,
     frame_queue,
     stats_queue,
     error_queue,
 ) -> None:
     frame_count = 0
     accepted_frame_count = 0
+    accepted_frame_presence: list[tuple[int, int, bool]] = []
     triage = FrameTriageFilter(
         variance_threshold=variance_threshold,
         empty_ratio_threshold=empty_pixel_threshold,
         blur_threshold=blur_threshold,
     )
-    adaptive_triage = RollingWindowTriage(window_size=30, keep_percentile=0.3)
+    null_detector = NullStateDetector(frames=background_frames, threshold=background_threshold)
     try:
         for frame in sampler.sample(Path(video_path), 0.0):
             timer = PipelineTimer()
@@ -668,16 +1011,11 @@ def _producer_main(
             if not accepted:
                 continue
 
-            if not adaptive_triage.evaluate_score(frame.frame_index, metrics["blur"]):
-                continue
-
             accepted_frame_count += 1
-            source_frame_path = Path(frame_dir) / f"video_{video_id}_frame_{frame.frame_index}.jpg"
-            cv2.imwrite(str(source_frame_path), frame.image)
-            timer.record("t_io")
-
+            is_empty = null_detector.is_workspace_empty(frame.image)
+            accepted_frame_presence.append((frame.frame_index, frame.timestamp_ms, is_empty))
             t_ingest = timer.timings.get("t_ingest", 0.0)
-            t_io = timer.timings.get("t_io", 0.0) - t_ingest
+            t_io = 0.0
 
             _put_or_fail(
                 frame_queue,
@@ -688,13 +1026,12 @@ def _producer_main(
                         image=frame.image,
                         width=frame.width,
                         height=frame.height,
-                        triage_metrics=metrics,
+                        triage_metrics={**metrics, "workspace_empty": 1.0 if is_empty else 0.0},
                         telemetry=PerformanceTelemetry(
                             t_ingest=t_ingest,
                             t_io=t_io,
                         ),
                     ),
-                    source_frame_path=str(source_frame_path),
                 ),
             )
     except Exception as exc:
@@ -705,9 +1042,25 @@ def _producer_main(
             max_wait_s=_QUEUE_RETRY_MAX_WAIT_SECONDS,
         )
     finally:
+        sampler_telemetry: dict[str, Any] = {"sampler_type": type(sampler).__name__}
+        for attr in (
+            "last_scan_frame_count",
+            "last_presence_window_count",
+            "last_selected_frame_count",
+            "last_score_threshold",
+            "last_fallback_used",
+        ):
+            value = getattr(sampler, attr, None)
+            if value is not None:
+                sampler_telemetry[attr] = value
         _put_with_retry(
             stats_queue,
-            _ProducerStats(frame_count=frame_count, accepted_frame_count=accepted_frame_count),
+            _ProducerStats(
+                frame_count=frame_count,
+                accepted_frame_count=accepted_frame_count,
+                accepted_frame_presence=accepted_frame_presence,
+                sampler_telemetry=sampler_telemetry,
+            ),
             timeout=_QUEUE_POLL_INTERVAL_SECONDS,
             max_wait_s=_QUEUE_RETRY_MAX_WAIT_SECONDS,
         )
@@ -796,6 +1149,9 @@ def _consume_batch(
             source = source_by_frame.get((detection_packet.frame_index, detection_packet.timestamp_ms))
             if source is None:
                 continue
+            encoded, image_jpeg = cv2.imencode(".jpg", source.frame_packet.image)
+            if not encoded:
+                continue
 
             prod_telemetry = source.frame_packet.telemetry or PerformanceTelemetry()
             telemetry = PerformanceTelemetry(
@@ -815,7 +1171,10 @@ def _consume_batch(
                         corner_detection=detection_packet.corner_detection,
                         telemetry=telemetry,
                     ),
-                    source_frame_path=source.source_frame_path,
+                    source_frame_path=(
+                        f"video_frame_{source.frame_packet.frame_index}_{source.frame_packet.timestamp_ms}.jpg"
+                    ),
+                    image_jpeg=image_jpeg.tobytes(),
                     triage_metrics=source.frame_packet.triage_metrics,
                 ),
             )
@@ -844,6 +1203,9 @@ def _consume_batch(
         for detection in detections:
             if detection.confidence < corner_confidence_threshold:
                 continue
+            encoded, image_jpeg = cv2.imencode(".jpg", row.frame_packet.image)
+            if not encoded:
+                continue
             _put_or_fail(
                 detection_queue,
                 _DetectionEnvelope(
@@ -859,7 +1221,10 @@ def _consume_batch(
                         ),
                         telemetry=telemetry,
                     ),
-                    source_frame_path=row.source_frame_path,
+                    source_frame_path=(
+                        f"video_frame_{row.frame_packet.frame_index}_{row.frame_packet.timestamp_ms}.jpg"
+                    ),
+                    image_jpeg=image_jpeg.tobytes(),
                     triage_metrics=row.frame_packet.triage_metrics,
                 ),
             )

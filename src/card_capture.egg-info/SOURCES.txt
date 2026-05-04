@@ -3,8 +3,11 @@ pyproject.toml
 setup.cfg
 src/card_capture/__init__.py
 src/card_capture/cli.py
+src/card_capture/config.py
 src/card_capture/cropper.py
+src/card_capture/deduplicator.py
 src/card_capture/detectors.py
+src/card_capture/fuser.py
 src/card_capture/gpu_utils.py
 src/card_capture/ingestion.py
 src/card_capture/models.py
@@ -32,5 +35,6 @@ tests/test_pipeline.py
 tests/test_review.py
 tests/test_sampler.py
 tests/test_scoring_selector.py
+tests/test_session_lifecycle.py
 tests/test_storage.py
 tests/test_storage_migration.py

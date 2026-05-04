@@ -13,7 +13,8 @@ from card_capture.gpu_utils import (
     is_histogram_outlier,
     compute_edge_density_gpu,
     estimate_batch_size,
-    score_sharpness_batched
+    score_sharpness_batched,
+    compute_presence_metrics_batched,
 )
 
 
@@ -216,6 +217,20 @@ def test_edge_density_threshold_varies_detection():
     
     assert is_high_loose  # Loose should detect
     assert not is_high_strict  # Strict should not
+
+
+def test_presence_metrics_batched_returns_per_frame_metrics():
+    frames = [
+        np.full((64, 64, 3), 16, dtype=np.uint8),
+        np.zeros((64, 64, 3), dtype=np.uint8),
+        np.full((64, 64, 3), 220, dtype=np.uint8),
+    ]
+    metrics = compute_presence_metrics_batched(frames, device="cpu", batch_size=2)
+
+    assert len(metrics) == 3
+    assert all(set(item.keys()) == {"sharpness", "variance", "edge_density", "empty_ratio"} for item in metrics)
+    assert metrics[1]["empty_ratio"] >= metrics[0]["empty_ratio"]
+    assert metrics[2]["variance"] >= metrics[1]["variance"]
 
 
 def test_edge_density_rgb_frame():

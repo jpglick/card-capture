@@ -40,7 +40,10 @@ def create_app(db_path: Path):
 
     @app.get("/", response_class=HTMLResponse)
     def index(request: Request, state: str = "pending"):
-        cards = storage.list_saved_cards(review_state=None if state == "all" else state)
+        cards = storage.list_saved_cards(
+            review_state=None if state == "all" else state,
+            include_duplicates=False,
+        )
         cards.sort(key=lambda card: (card["timestamp_ms"], card["id"]))
         
         with storage._connect() as conn:
@@ -89,7 +92,7 @@ def create_app(db_path: Path):
 
     @app.get("/images/{saved_card_id}")
     def image(saved_card_id: int):
-        for card in storage.list_saved_cards(review_state=None):
+        for card in storage.list_saved_cards(review_state=None, include_duplicates=True):
             if card["id"] == saved_card_id:
                 resolved = _resolve_existing_path(card["image_path"])
                 if resolved is not None:

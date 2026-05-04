@@ -60,6 +60,7 @@ def test_processing_result_has_v21_counts():
     assert result.accepted_frame_count == 24
     assert result.detection_count == 17
     assert result.saved_instance_count == 6
+    assert result.telemetry == {}
 
 
 def test_packets_can_carry_telemetry():

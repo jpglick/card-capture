@@ -12,6 +12,7 @@ from card_capture.sampler import (
     StableWindow,
     ContrastBasedSampler,
     PresenceWindow,
+    AdaptivePresenceSampler,
     VideoSampler,
 )
 
@@ -504,3 +505,70 @@ class TestContrastBasedSampler:
         )
         assert "variance" in triggered, "Variance should trigger"
         assert "motion" in triggered, "Motion should trigger"
+
+
+class TestAdaptivePresenceSampler:
+    def test_finds_presence_windows_from_video_distribution(self, tmp_path):
+        frames = (
+            gray_frames(8, value=128)
+            + colored_frames(12)
+            + gray_frames(12, value=128)
+            + colored_frames(12)
+            + gray_frames(8, value=128)
+        )
+        path = make_video(tmp_path, frames, fps=30.0)
+        sampler = AdaptivePresenceSampler(
+            video_path=str(path),
+            reader_backend="auto",
+            scan_fps=10.0,
+            scan_width=160,
+            device="cpu",
+        )
+
+        windows = sampler._find_presence_windows()
+        assert len(windows) >= 2
+        assert all(window.end_frame >= window.start_frame for window in windows)
+
+    def test_sample_returns_selected_frames_in_time_order(self, tmp_path):
+        frames = (
+            gray_frames(8, value=128)
+            + colored_frames(12)
+            + gray_frames(12, value=128)
+            + colored_frames(12)
+            + gray_frames(8, value=128)
+        )
+        path = make_video(tmp_path, frames, fps=30.0)
+        sampler = AdaptivePresenceSampler(
+            video_path=str(path),
+            reader_backend="auto",
+            scan_fps=10.0,
+            scan_width=160,
+            device="cpu",
+        )
+
+        results = list(sampler.sample())
+        assert len(results) > 0
+        assert [frame.frame_index for frame in results] == sorted(
+            frame.frame_index for frame in results
+        )
+
+    def test_sample_prefers_local_contiguous_frames_in_large_window(self, tmp_path):
+        frames = gray_frames(120, value=128)
+        frames[30:90] = colored_frames(60)
+        path = make_video(tmp_path, frames, fps=30.0)
+        sampler = AdaptivePresenceSampler(
+            video_path=str(path),
+            reader_backend="auto",
+            scan_fps=10.0,
+            scan_width=160,
+            device="cpu",
+        )
+
+        results = list(sampler.sample())
+        frame_indices = [frame.frame_index for frame in results]
+        assert len(frame_indices) > 0
+        # Window is from 30 to 90 (exclusive of 90 in slice, so 30-89)
+        # Scan at 10fps, video at 30fps -> step 3. 
+        # Frames: 30, 33, ..., 87.
+        assert min(frame_indices) >= 30
+        assert max(frame_indices) <= 90

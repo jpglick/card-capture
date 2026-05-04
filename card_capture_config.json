@@ -1,0 +1,19 @@
+{
+    "detector": "docaligner",
+    "reader_backend": "auto",
+    "queue_size": 256,
+    "inference_batch_size": 16,
+    "corner_confidence": 0.5,
+    "blur_threshold": 30.0,
+    "variance_threshold": 20.0,
+    "empty_pixel_threshold": 0.98,
+    "detection_width": 640,
+    "device": "auto",
+    "group_gap_ms": 300,
+    "spatial_variance_threshold": 150.0,
+    "telemetry_scope": "canonical",
+    "triage_keep_percentile": 0.05,
+    "debug": {
+        "export_frames": false
+    }
+}

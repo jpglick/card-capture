@@ -488,26 +488,35 @@ class Storage:
             )
             return int(cursor.lastrowid)
 
-    def list_saved_cards(self, review_state: Optional[str] = None) -> List[Dict[str, Any]]:
+    def list_saved_cards(
+        self, review_state: Optional[str] = None, include_duplicates: bool = False
+    ) -> List[Dict[str, Any]]:
         sql = """
             SELECT
-                id,
-                detection_id,
-                image_path,
-                final_score,
-                review_state,
-                source_path,
-                timestamp_ms,
-                score_components_json
-            FROM saved_cards
+                sc.id,
+                sc.detection_id,
+                sc.image_path,
+                sc.final_score,
+                sc.review_state,
+                sc.source_path,
+                sc.timestamp_ms,
+                sc.score_components_json
+            FROM saved_cards sc
+            JOIN card_views cv ON cv.id = sc.detection_id
+            JOIN card_instances ci ON ci.id = cv.card_instance_id
         """
-        params: tuple[Any, ...] = ()
+        params: list[Any] = []
+        conditions: list[str] = []
+        if not include_duplicates:
+            conditions.append("ci.is_duplicate_of IS NULL")
         if review_state is not None:
-            sql += " WHERE review_state = ?"
-            params = (review_state,)
-        sql += " ORDER BY final_score DESC, id ASC"
+            conditions.append("sc.review_state = ?")
+            params.append(review_state)
+        if conditions:
+            sql += " WHERE " + " AND ".join(conditions)
+        sql += " ORDER BY sc.final_score DESC, sc.id ASC"
         with self._connect() as conn:
-            rows = conn.execute(sql, params).fetchall()
+            rows = conn.execute(sql, tuple(params)).fetchall()
         return [
             {
                 "id": int(row["id"]),

@@ -170,3 +170,28 @@ def test_storage_find_canonical_for_hashes_uses_best_orientation(tmp_path: Path)
         ["ffffffffffffffff", "00000000000000f8"], threshold=6
     )
     assert found == instance_id
+
+
+def test_list_saved_cards_excludes_duplicates_by_default(tmp_path: Path):
+    storage = Storage(tmp_path / "cards.sqlite")
+    storage.initialize()
+    video_id = storage.add_video("/videos/input.mov", "hash", 1000, 1920, 1080)
+    c = CornerDetection(
+        corners=((0.0, 0.0), (10.0, 0.0), (10.0, 20.0), (0.0, 20.0)),
+        confidence=0.9,
+    )
+
+    inst_1 = storage.add_card_instance(video_id=video_id, track_id="a")
+    view_1 = storage.add_card_view(inst_1, 1, 100, c, rectified_path="a.jpg", is_canonical=True)
+    storage.update_instance_deduplication(inst_1, "0000000000000001")
+    storage.add_saved_card(view_1, "a.jpg", 0.9)
+
+    inst_2 = storage.add_card_instance(video_id=video_id, track_id="b")
+    view_2 = storage.add_card_view(inst_2, 2, 200, c, rectified_path="b.jpg", is_canonical=True)
+    storage.update_instance_deduplication(inst_2, "0000000000000002", duplicate_of_id=inst_1)
+    storage.add_saved_card(view_2, "b.jpg", 0.8)
+
+    visible = storage.list_saved_cards()
+    all_rows = storage.list_saved_cards(include_duplicates=True)
+    assert len(visible) == 1
+    assert len(all_rows) == 2

@@ -30,6 +30,8 @@ pip install -e ".[review]"
 
 `--reader-backend auto` now prefers `decord` when it is importable and falls back to `pyav` otherwise.
 
+On Apple Silicon, if PyTorch reports that MPS is unavailable at runtime, the CLI now stops and asks whether to continue on CPU. That keeps GPU fallback explicit instead of silently degrading performance.
+
 `decord` is installed separately from `.[pipeline_v21]` because PyPI does not publish wheels for Apple Silicon macOS, and its macOS PyPI wheels are limited to older Intel CPython builds.
 
 Install `decord` with one of these paths:

@@ -1,1 +1,6 @@
 .worktrees/
+.venv/
+build/
+card_capture_output/
+*.txt
+*.sqlite

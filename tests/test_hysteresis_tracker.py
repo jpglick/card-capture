@@ -113,7 +113,7 @@ def test_hysteresis_tracker_ignores_medium_score_with_no_nearby_track():
     assert len(tracker.active_tracks) == 0
 
 
-def test_hysteresis_tracker_bridges_gap_as_flip_event():
+def test_hysteresis_tracker_bridges_gap_without_forcing_flip():
     tracker = HysteresisTracker(t_high=0.55, t_low=0.20, max_dist=150.0, max_gap_frames=10)
     c1 = ScoredCandidate(
         detection_id=1,
@@ -135,6 +135,57 @@ def test_hysteresis_tracker_bridges_gap_as_flip_event():
     tracker.process(c1)
     tracker.process(c2)
 
-    assert len(tracker.active_tracks) == 2
+    assert len(tracker.active_tracks) == 1
+    assert tracker.active_tracks[0].active is True
+    assert tracker.active_tracks[0].angle == "Front"
+    assert len(tracker.active_tracks[0].candidates) == 2
+
+
+def test_hysteresis_tracker_coasts_then_expires_after_misses():
+    tracker = HysteresisTracker(t_high=0.55, t_low=0.20, max_dist=150.0, max_gap_frames=3)
+    candidate = ScoredCandidate(
+        detection_id=1,
+        timestamp_ms=100,
+        image_path="test1.jpg",
+        score=QualityScore(0.8, {}),
+        corners=[(0, 0), (10, 0), (10, 10), (0, 10)],
+        frame_index=100,
+    )
+
+    tracker.process(candidate)
+    tracker.tick()
+    tracker.tick()
+    assert tracker.active_tracks[0].active is True
+    assert tracker.active_tracks[0].missed_frames == 2
+
+    tracker.tick()
+    tracker.tick()
     assert tracker.active_tracks[0].active is False
-    assert tracker.active_tracks[1].angle == "Back"
+
+
+def test_hysteresis_tracker_finalizes_inactive_tracks():
+    tracker = HysteresisTracker(t_high=0.55, t_low=0.20, max_dist=150.0, max_gap_frames=3, min_track_length=2)
+    c1 = ScoredCandidate(
+        detection_id=1,
+        timestamp_ms=100,
+        image_path="test1.jpg",
+        score=QualityScore(0.8, {}),
+        corners=[(0, 0), (10, 0), (10, 10), (0, 10)],
+        frame_index=100,
+    )
+    c2 = ScoredCandidate(
+        detection_id=2,
+        timestamp_ms=140,
+        image_path="test2.jpg",
+        score=QualityScore(0.7, {}),
+        corners=[(1, 1), (11, 1), (11, 11), (1, 11)],
+        frame_index=101,
+    )
+
+    tracker.process(c1)
+    tracker.process(c2)
+    tracker.reset_active()
+
+    tracks = tracker.finalize()
+    assert len(tracks) == 1
+    assert len(tracks[0].candidates) == 2

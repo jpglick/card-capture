@@ -51,6 +51,7 @@ class ProcessingResult:
     detection_count: int
     saved_instance_count: int
     output_dir: Path
+    telemetry: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

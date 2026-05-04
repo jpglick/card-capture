@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator, List, Optional, Tuple
+from typing import Iterator, List, Optional, Tuple, Union
 
 import cv2
 import numpy as np
@@ -17,6 +18,7 @@ from .gpu_utils import (
     compute_motion_gpu,
     is_histogram_outlier,
     compute_edge_density_gpu,
+    compute_presence_metrics_batched,
 )
 
 @dataclass
@@ -40,6 +42,16 @@ class PresenceWindow:
     end_frame: int
     frame_candidates: list[tuple[int, float]] = field(default_factory=list)
     detection_methods: list[str] = field(default_factory=list)
+
+
+@dataclass
+class _AdaptiveScanFrame:
+    frame_index: int
+    timestamp_ms: int
+    image: np.ndarray
+    metrics: dict[str, float]
+    motion: float = 0.0
+    presence_score: float = 0.0
 
 class VideoSampler:
     def __init__(self, reader_backend: str = "auto"):
@@ -256,3 +268,358 @@ class ContrastBasedSampler:
                     if not ok: continue
                     yield FrameSample(frame_index=frame_index, timestamp_ms=timestamp_ms, image=frame, width=frame.shape[1], height=frame.shape[0])
         finally: capture.release()
+
+
+class AdaptivePresenceSampler:
+    """Two-pass sampler that adapts per video instead of using fixed triage knobs."""
+
+    def __init__(
+        self,
+        video_path: Optional[Union[Path, str]] = None,
+        reader_backend: str = "auto",
+        scan_fps: float = 8.0,
+        scan_width: int = 192,
+        device: str = "auto",
+        min_presence_frames: int = 2,
+        window_merge_gap: int = 3,
+        min_candidates_per_window: int = 3,
+        max_candidates_per_window: int = 48,
+        empty_pixel_threshold: float = 8.0,
+        sobel_threshold: float = 50.0,
+    ):
+        self.video_path = str(video_path) if video_path is not None else None
+        self.reader_backend = _resolve_reader_backend(reader_backend)
+        self.scan_fps = scan_fps
+        self.scan_width = scan_width
+        self.device = device
+        self.min_presence_frames = max(1, min_presence_frames)
+        self.window_merge_gap = max(0, window_merge_gap)
+        self.min_candidates_per_window = max(1, min_candidates_per_window)
+        self.max_candidates_per_window = max(
+            self.min_candidates_per_window, max_candidates_per_window
+        )
+        self.empty_pixel_threshold = empty_pixel_threshold
+        self.sobel_threshold = sobel_threshold
+        self._scan_frames: list[_AdaptiveScanFrame] = []
+        self.last_scan_frame_count = 0
+        self.last_presence_window_count = 0
+        self.last_selected_frame_count = 0
+        self.last_score_threshold: float = 0.0
+        self.last_fallback_used = False
+
+    @staticmethod
+    def _robust_zscores(values: list[float]) -> list[float]:
+        if not values:
+            return []
+        arr = np.asarray(values, dtype=np.float32)
+        median = float(np.median(arr))
+        mad = float(np.median(np.abs(arr - median)))
+        # Use a more conservative floor to prevent noise-driven explosions
+        # 0.02 * (abs(median) + 1.0) provides a dynamic floor relative to the signal level
+        scale = max(0.02 * (abs(median) + 1.0), mad * 1.4826)
+        z_scores = [float((value - median) / scale) for value in arr]
+        # Clip to prevent extreme outliers from drowing out other metrics
+        return list(np.clip(z_scores, -10.0, 10.0))
+
+    @staticmethod
+    def _otsu_threshold(values: list[float]) -> float:
+        if not values:
+            return float("inf")
+        arr = np.asarray(values, dtype=np.float32)
+        if float(arr.max() - arr.min()) <= 1e-3:
+            return float(arr.min() - 1e-3) # Everything is active if no variation
+        
+        # Clip for histogram binning to avoid issues with extreme tails
+        p1, p99 = np.percentile(arr, [1, 99])
+        clipped = np.clip(arr, p1, p99)
+        
+        bins = max(8, min(64, int(math.sqrt(len(arr))) * 4))
+        hist, bin_edges = np.histogram(clipped, bins=bins)
+        total = hist.sum()
+        if total <= 0:
+            return float(np.median(arr))
+
+        prob = hist.astype(np.float64) / float(total)
+        cumulative_prob = np.cumsum(prob)
+        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
+        cumulative_mean = np.cumsum(prob * bin_centers)
+        global_mean = cumulative_mean[-1]
+        denominator = cumulative_prob * (1.0 - cumulative_prob)
+        denominator[denominator == 0.0] = np.nan
+        between_class = (global_mean * cumulative_prob - cumulative_mean) ** 2 / denominator
+        
+        if np.all(np.isnan(between_class)):
+            return float(np.median(arr))
+        
+        best_index = int(np.nanargmax(between_class))
+        return float(bin_edges[min(best_index + 1, len(bin_edges) - 1)])
+
+    def _resize_for_scan(self, frame: np.ndarray) -> np.ndarray:
+        height, width = frame.shape[:2]
+        if width <= self.scan_width:
+            return frame
+        scaled_height = max(1, int(round(height * self.scan_width / width)))
+        return cv2.resize(frame, (self.scan_width, scaled_height))
+
+    def _score_records(self, records: list[_AdaptiveScanFrame]) -> list[float]:
+        sharpness = [record.metrics["sharpness"] for record in records]
+        edge_density = [record.metrics["edge_density"] for record in records]
+        variance = [record.metrics["variance"] for record in records]
+        empty_ratio = [record.metrics["empty_ratio"] for record in records]
+        motion = [record.motion for record in records]
+
+        z_sharpness = self._robust_zscores(sharpness)
+        z_edge = self._robust_zscores(edge_density)
+        z_variance = self._robust_zscores(variance)
+        z_empty = self._robust_zscores(empty_ratio)
+        z_motion = self._robust_zscores(motion)
+
+        scores: list[float] = []
+        for idx in range(len(records)):
+            # Heavily penalize empty frames, reward sharpness and texture
+            score = (
+                0.40 * z_sharpness[idx]
+                + 0.25 * z_edge[idx]
+                + 0.15 * z_variance[idx]
+                + 0.20 * z_motion[idx]
+                - 0.50 * z_empty[idx]
+            )
+            scores.append(float(score))
+        return scores
+
+    def _scan_video(self, video_path: Path) -> list[_AdaptiveScanFrame]:
+        sampler = VideoSampler(reader_backend=self.reader_backend)
+        device = self.device
+        effective_batch_size = 32
+        try:
+            import torch
+
+            resolved_device = torch.device(device) if device != "auto" else torch.device("cpu")
+            if device == "auto":
+                try:
+                    from .gpu_utils import get_device
+
+                    resolved_device = get_device()
+                except Exception:
+                    resolved_device = torch.device("cpu")
+            if resolved_device.type == "cpu":
+                effective_batch_size = 8
+            else:
+                effective_batch_size = 32
+            device = resolved_device
+        except Exception:
+            effective_batch_size = 8
+
+        raw_samples = sampler.sample(video_path, self.scan_fps)
+        records: list[_AdaptiveScanFrame] = []
+        previous_gray: Optional[np.ndarray] = None
+        batch_samples: list[FrameSample] = []
+        batch_images: list[np.ndarray] = []
+
+        def flush_batch() -> None:
+            nonlocal previous_gray
+            if not batch_images:
+                return
+            batch_metrics = compute_presence_metrics_batched(
+                batch_images,
+                device=device,
+                batch_size=len(batch_images),
+                sobel_threshold=self.sobel_threshold,
+                empty_pixel_threshold=self.empty_pixel_threshold,
+            )
+            for sample, scan_image, metrics in zip(batch_samples, batch_images, batch_metrics):
+                gray = cv2.cvtColor(scan_image, cv2.COLOR_BGR2GRAY) if scan_image.ndim == 3 else scan_image
+                if previous_gray is None:
+                    motion = 0.0
+                else:
+                    motion = float(np.abs(gray.astype(np.float32) - previous_gray.astype(np.float32)).mean())
+                previous_gray = gray
+                records.append(
+                    _AdaptiveScanFrame(
+                        frame_index=sample.frame_index,
+                        timestamp_ms=sample.timestamp_ms,
+                        image=scan_image,
+                        metrics=metrics,
+                        motion=motion,
+                    )
+                )
+            batch_samples.clear()
+            batch_images.clear()
+
+        for sample in raw_samples:
+            batch_samples.append(sample)
+            batch_images.append(self._resize_for_scan(sample.image))
+            if len(batch_images) >= effective_batch_size:
+                flush_batch()
+        flush_batch()
+        return records
+
+    def _build_windows(self, records: list[_AdaptiveScanFrame]) -> list[PresenceWindow]:
+        if not records:
+            return []
+
+        scores = self._score_records(records)
+        for record, score in zip(records, scores):
+            record.presence_score = score
+
+        threshold = self._otsu_threshold(scores)
+        active_flags = [score >= threshold for score in scores]
+        windows: list[PresenceWindow] = []
+
+        start_idx: Optional[int] = None
+        last_active_idx: Optional[int] = None
+        for idx, is_active in enumerate(active_flags):
+            if is_active:
+                if start_idx is None:
+                    start_idx = idx
+                last_active_idx = idx
+                continue
+            if start_idx is not None and last_active_idx is not None:
+                if idx - last_active_idx <= self.window_merge_gap:
+                    continue
+                window_records = records[start_idx : last_active_idx + 1]
+                if len(window_records) >= self.min_presence_frames:
+                    windows.append(
+                        PresenceWindow(
+                            start_frame=window_records[0].frame_index,
+                            end_frame=window_records[-1].frame_index,
+                            detection_methods=["adaptive_presence"],
+                        )
+                    )
+                start_idx = None
+                last_active_idx = None
+
+        if start_idx is not None and last_active_idx is not None:
+            window_records = records[start_idx : last_active_idx + 1]
+            if len(window_records) >= self.min_presence_frames:
+                windows.append(
+                    PresenceWindow(
+                        start_frame=window_records[0].frame_index,
+                        end_frame=window_records[-1].frame_index,
+                        detection_methods=["adaptive_presence"],
+                    )
+                )
+
+        if windows:
+            self.last_presence_window_count = len(windows)
+            self.last_score_threshold = threshold
+            self.last_fallback_used = False
+            return windows
+
+        best_idx = int(np.argmax(scores))
+        half_span = max(0, self.min_presence_frames // 2)
+        start = max(0, best_idx - half_span)
+        end = min(len(records) - 1, start + max(self.min_presence_frames, 1) - 1)
+        if end - start + 1 < self.min_presence_frames:
+            start = max(0, end - self.min_presence_frames + 1)
+        window_records = records[start : end + 1]
+        if window_records:
+            self.last_presence_window_count = 1
+            self.last_score_threshold = threshold
+            self.last_fallback_used = True
+            return [
+                PresenceWindow(
+                    start_frame=window_records[0].frame_index,
+                    end_frame=window_records[-1].frame_index,
+                    detection_methods=["adaptive_fallback"],
+                )
+            ]
+        return []
+
+    def _candidate_records_for_window(self, window: PresenceWindow) -> list[_AdaptiveScanFrame]:
+        return [
+            record
+            for record in self._scan_frames
+            if window.start_frame <= record.frame_index <= window.end_frame
+        ]
+
+    def _score_sharpness_in_window(self, window: PresenceWindow) -> PresenceWindow:
+        records = self._candidate_records_for_window(window)
+        if not records:
+            return window
+
+        window_len = len(records)
+        # Increase target density to support tracker continuity.
+        # Aim for ~4-6 FPS in active windows (assuming 8fps scan)
+        target = min(
+            self.max_candidates_per_window,
+            max(self.min_candidates_per_window, int(round(window_len * 0.75))),
+        )
+        if window_len <= target:
+            window.frame_candidates = [
+                (record.frame_index, record.presence_score)
+                for record in sorted(records, key=lambda record: record.frame_index)
+            ]
+            return window
+
+        # If window is very large, pick frames with highest presence scores
+        # spread across the window to ensure temporal coverage.
+        scored_records = sorted(records, key=lambda record: record.presence_score, reverse=True)
+        top_indices = {r.frame_index for r in scored_records[:target]}
+        
+        # Ensure we always include start and end of presence for boundary detection
+        top_indices.add(records[0].frame_index)
+        top_indices.add(records[-1].frame_index)
+
+        selected = sorted(
+            (record for record in records if record.frame_index in top_indices),
+            key=lambda record: record.frame_index,
+        )
+        window.frame_candidates = [
+            (record.frame_index, record.presence_score) for record in selected
+        ]
+        return window
+
+    def _decode_selected_frames(self, video_path: Path, frame_indices: list[int]) -> list[FrameSample]:
+        if not frame_indices:
+            return []
+
+        capture = cv2.VideoCapture(str(video_path))
+        if not capture.isOpened():
+            raise ValueError(f"Could not decode video: {video_path}")
+
+        samples: list[FrameSample] = []
+        try:
+            for frame_idx in frame_indices:
+                capture.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+                ok, frame = capture.read()
+                if not ok:
+                    continue
+                height, width = frame.shape[:2]
+                timestamp_ms = int(capture.get(cv2.CAP_PROP_POS_MSEC))
+                samples.append(
+                    FrameSample(
+                        frame_index=frame_idx,
+                        timestamp_ms=timestamp_ms,
+                        image=frame,
+                        width=width,
+                        height=height,
+                    )
+                )
+        finally:
+            capture.release()
+        return samples
+
+    def _resolve_video_path(self, video_path: Optional[Path]) -> Path:
+        resolved = video_path or self.video_path
+        if resolved is None:
+            raise ValueError("video_path must be provided")
+        return Path(resolved)
+
+    def _find_presence_windows(self) -> list[PresenceWindow]:
+        video_path = self._resolve_video_path(None)
+        self._scan_frames = self._scan_video(video_path)
+        return self._build_windows(self._scan_frames)
+
+    def sample(self, video_path: Path = None, sample_fps: float = None) -> Iterator[FrameSample]:
+        resolved_video_path = self._resolve_video_path(video_path)
+        self._scan_frames = self._scan_video(resolved_video_path)
+        windows = self._build_windows(self._scan_frames)
+        scored_windows = [self._score_sharpness_in_window(window) for window in windows]
+        selected_frame_indices: list[int] = []
+        for window in scored_windows:
+            selected_frame_indices.extend(frame_index for frame_index, _ in window.frame_candidates)
+        deduped_frame_indices = sorted(set(selected_frame_indices))
+        self.last_scan_frame_count = len(self._scan_frames)
+        self.last_selected_frame_count = len(deduped_frame_indices)
+        yield from self._decode_selected_frames(resolved_video_path, deduped_frame_indices)

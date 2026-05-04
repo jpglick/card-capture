@@ -4,7 +4,11 @@ import numpy as np
 import pytest
 from unittest.mock import MagicMock, patch
 
-from card_capture.detectors import CardcaptorUltralyticsDetector, FakeCornerDetector
+from card_capture.detectors import (
+    CardcaptorUltralyticsDetector,
+    FakeCornerDetector,
+    probe_torch_device_status,
+)
 from card_capture.models import DetectionPacket, FramePacket, FrameSample
 
 
@@ -34,7 +38,7 @@ def test_detector_downscales_wide_frame_before_inference():
     with patch.object(detector, "_load_model", return_value=model_mock):
         detector.detect(frame)
 
-    passed_image = model_mock.call_args[0][0]
+    passed_image = model_mock.call_args[0][0][0]
     assert passed_image.shape[1] == 640   # width
     assert passed_image.shape[0] == 480   # height: 960 * 640/1280 = 480
 
@@ -48,7 +52,7 @@ def test_detector_skips_resize_for_frame_already_small():
     with patch.object(detector, "_load_model", return_value=model_mock):
         detector.detect(frame)
 
-    passed_image = model_mock.call_args[0][0]
+    passed_image = model_mock.call_args[0][0][0]
     assert passed_image.shape[1] == 320
     assert passed_image.shape[0] == 480
 
@@ -123,10 +127,45 @@ def test_detector_skips_resize_when_frame_exactly_matches_detection_width():
     with patch.object(detector, "_load_model", return_value=model_mock):
         detector.detect(frame)
 
-    passed_image = model_mock.call_args[0][0]
+    passed_image = model_mock.call_args[0][0][0]
     assert passed_image.shape[1] == 640
     assert passed_image.shape[0] == 480
     assert passed_image is frame.image
+
+
+def test_detector_detect_batch_returns_detection_packets():
+    detector = CardcaptorUltralyticsDetector(detection_width=640)
+    frames = [
+        FramePacket(
+            frame_index=7,
+            timestamp_ms=70,
+            image=np.zeros((960, 1280, 3), dtype=np.uint8),
+            width=1280,
+            height=960,
+            triage_metrics={},
+        )
+    ]
+
+    obb_mock = MagicMock()
+    obb_mock.conf.cpu.return_value.numpy.return_value = np.array([0.9])
+    obb_mock.cls.cpu.return_value.numpy.return_value = np.array([0])
+    obb_mock.xyxyxyxy.cpu.return_value.numpy.return_value = np.array(
+        [[[100.0, 100.0], [500.0, 100.0], [500.0, 300.0], [100.0, 300.0]]],
+        dtype=np.float32,
+    )
+    result_mock = MagicMock()
+    result_mock.obb = obb_mock
+    model_mock = MagicMock()
+    model_mock.return_value = [result_mock]
+
+    with patch.object(detector, "_load_model", return_value=model_mock):
+        detections = detector.detect_batch(frames, confidence_threshold=0.5)
+
+    assert len(detections) == 1
+    detection = detections[0]
+    assert detection.frame_index == 7
+    assert detection.timestamp_ms == 70
+    assert detection.corner_detection.corners[0] == (200.0, 200.0)
 
 
 def test_detector_raises_on_nonpositive_detection_width():
@@ -186,3 +225,34 @@ def test_fake_corner_detector_returns_empty_list_below_threshold():
     detections = detector.detect_batch(frames, confidence_threshold=0.5)
 
     assert detections == []
+
+
+def test_probe_torch_device_status_reports_mps_unavailable_state():
+    class _MPS:
+        @staticmethod
+        def is_available():
+            return False
+
+        @staticmethod
+        def is_built():
+            return True
+
+    class _Backends:
+        mps = _MPS()
+
+    class _Torch:
+        backends = _Backends()
+        class cuda:
+            @staticmethod
+            def is_available():
+                return False
+
+    with patch("platform.system", return_value="Darwin"), patch(
+        "platform.machine", return_value="arm64"
+    ), patch.dict("sys.modules", {"torch": _Torch()}):
+        status = probe_torch_device_status("auto")
+
+    assert status.resolved == "cpu"
+    assert status.mps_built is True
+    assert status.mps_available is False
+    assert status.reason == "mps_unavailable"

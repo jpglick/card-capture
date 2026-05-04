@@ -5,7 +5,7 @@ from typing import Optional
 
 @dataclass
 class DebugConfig:
-    export_frames: bool = True
+    export_frames: bool = False
 
 @dataclass
 class PipelineConfig:
@@ -22,6 +22,7 @@ class PipelineConfig:
     group_gap_ms: int = 300
     spatial_variance_threshold: float = 150.0
     telemetry_scope: str = "canonical"
+    triage_keep_percentile: float = 0.05
     debug: DebugConfig = field(default_factory=DebugConfig)
 
 def load_config(path: Path) -> PipelineConfig:

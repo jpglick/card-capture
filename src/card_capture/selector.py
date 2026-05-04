@@ -24,6 +24,7 @@ class TrackState:
     candidates: List[ScoredCandidate] = field(default_factory=list)
     last_centroid: Optional[Tuple[float, float]] = None
     last_frame_index: Optional[int] = None
+    missed_frames: int = 0
     active: bool = True
     angle: str = "Front"
 
@@ -48,7 +49,6 @@ class HysteresisTracker:
         if not candidate.corners:
             return
 
-        import statistics
         centroid = _calculate_centroid(candidate.corners)
         best_track = None
         min_dist = float('inf')
@@ -57,25 +57,13 @@ class HysteresisTracker:
             if not track.active or track.last_centroid is None:
                 continue
 
-            if (
-                candidate.frame_index is not None
-                and track.last_frame_index is not None
-                and candidate.frame_index - track.last_frame_index > self.max_gap_frames
-            ):
-                continue
-
             dist = _euclidean_distance(centroid, track.last_centroid)
             if dist < self.max_dist and dist < min_dist:
                 min_dist = dist
                 best_track = track
 
         if best_track and candidate.score.total > self.t_low:
-            gap_frames = 1
-            if candidate.frame_index is not None and best_track.last_frame_index is not None:
-                gap_frames = max(1, candidate.frame_index - best_track.last_frame_index)
-
-            gap_flip = 1 < gap_frames <= self.max_gap_frames
-            if gap_flip or self.detect_flip(best_track, candidate):
+            if best_track.missed_frames > 0 and self.detect_flip(best_track, candidate):
                 best_track.active = False
                 next_angle = "Back" if best_track.angle == "Front" else "Front"
                 self.active_tracks.append(
@@ -84,6 +72,7 @@ class HysteresisTracker:
                         candidates=[candidate],
                         last_centroid=centroid,
                         last_frame_index=candidate.frame_index,
+                        missed_frames=0,
                         angle=next_angle,
                     )
                 )
@@ -91,12 +80,14 @@ class HysteresisTracker:
                 best_track.candidates.append(candidate)
                 best_track.last_centroid = centroid
                 best_track.last_frame_index = candidate.frame_index
+                best_track.missed_frames = 0
         elif candidate.score.total > self.t_high:
             new_track = TrackState(
                 instance_id=str(uuid.uuid4()),
                 candidates=[candidate],
                 last_centroid=centroid,
                 last_frame_index=candidate.frame_index,
+                missed_frames=0,
                 active=True
             )
             self.active_tracks.append(new_track)
@@ -118,7 +109,22 @@ class HysteresisTracker:
         return is_dropping and area_drop > 0.30
 
     def finalize(self) -> List[TrackState]:
+        # Keep completed tracks even if they were deactivated by a null-state
+        # reset or gap expiry. Finalization should filter by evidence length,
+        # not by whether the track is still live at the moment the video ends.
         return [t for t in self.active_tracks if len(t.candidates) >= self.min_track_length]
+
+    def reset_active(self) -> None:
+        for track in self.active_tracks:
+            track.active = False
+
+    def tick(self) -> None:
+        for track in self.active_tracks:
+            if not track.active:
+                continue
+            track.missed_frames += 1
+            if track.missed_frames > self.max_gap_frames:
+                track.active = False
 
 
 @dataclass
