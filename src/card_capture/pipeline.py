@@ -247,6 +247,7 @@ class VideoProcessor:
         # We rely purely on the AdaptivePresenceSampler's temporal gaps to define sessions.
         # The sampler omits frames where the workspace is empty.
         # If the gap between two accepted frames is large, a physical swap occurred.
+        t_track_start = time.time()
         for frame_index, timestamp_ms, _ in stats.accepted_frame_presence:
             if last_frame_idx != -1 and (frame_index - last_frame_idx) > options.null_patience_frames:
                 self.tracker.finalize()
@@ -274,11 +275,14 @@ class VideoProcessor:
         raw_track_lengths = [len(track.candidates) for track in self.tracker.active_tracks]
         tracker_events = list(self.tracker.association_events)
         tracks = self.tracker.finalize()
+        t_track = time.time() - t_track_start
+        print(f"[Stage: Tracking] | {t_track:.2f}s | Tracks Finalized: {len(tracks)}")
 
         normalizer = PrecisionNormalizer()
         deduplicator = VisualDeduplicator()
         prepared_tracks: list[_PreparedTrack] = []
         saved_count = 0
+        t_refine_start = time.time()
         for track in tracks:
             # Sort by total score to find best candidates, but cap at top 8 to prevent massive CPU/GPU burn
             scored_track = sorted(track.candidates, key=lambda c: c.score.total, reverse=True)[:8]
@@ -398,6 +402,9 @@ class VideoProcessor:
                 )
             )
 
+        t_refine = time.time() - t_refine_start
+        print(f"[Stage: Refinement] | {t_refine:.2f}s | Sessions: {current_session_id}")
+
         _resolve_session_tracks(prepared_tracks, deduplicator)
         duplicate_track_count = sum(
             1 for prepared in prepared_tracks if prepared.duplicate_track_index is not None
@@ -424,6 +431,7 @@ class VideoProcessor:
         sampler_telemetry["tracker_event_actions"] = _count_event_values(tracker_events, "action")
         sampler_telemetry["tracker_split_reasons"] = _count_event_values(tracker_events, "split_reason")
 
+        t_storage_start = time.time()
         track_instance_ids: dict[int, int] = {}
         for track_index, prepared in enumerate(prepared_tracks):
             timer = PipelineTimer()
@@ -526,6 +534,16 @@ class VideoProcessor:
                         final_score=float(prepared.canonical_entries[0]["candidate"].score.total),
                     )
                     saved_count += 1
+
+        t_storage = time.time() - t_storage_start
+
+        print(f"\n--- Performance Summary ---")
+        print(f"ML Inference: {t_ml:.2f}s")
+        print(f"Tracking:     {t_track:.2f}s")
+        print(f"Refinement:   {t_refine:.2f}s")
+        print(f"Storage/Dedup: {t_storage:.2f}s")
+        print(f"Total:        {time.time() - t_start:.2f}s")
+        print(f"---------------------------\n")
 
         if saved_count > 0:
             status = "complete"
