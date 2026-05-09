@@ -203,6 +203,7 @@ class VideoProcessor:
             width=0,
             height=0,
         )
+        t_start = time.time()
         stats, detection_rows = _run_pipeline_workers(
             video_path=video_path,
             video_id=video_id,
@@ -211,6 +212,8 @@ class VideoProcessor:
             detector=self.detector,
             options=options,
         )
+        t_ml = time.time() - t_start
+        print(f"[Stage: ML Inference] | {t_ml:.2f}s | Detections: {len(detection_rows)}")
 
         candidates = _build_candidates(detection_rows)
         candidate_confidences = [candidate.score.total for candidate in candidates]

@@ -253,7 +253,18 @@ class CardcaptorUltralyticsDetector:
                 if not (0.1 * frame_area <= poly_area <= 0.8 * frame_area):
                     continue
 
-                # Check aspect ratio
+                # Check aspect ratio (short_side / long_side should be ~0.714)
+                width_top = np.linalg.norm(poly_arr[1] - poly_arr[0])
+                width_bottom = np.linalg.norm(poly_arr[2] - poly_arr[3])
+                height_right = np.linalg.norm(poly_arr[2] - poly_arr[1])
+                height_left = np.linalg.norm(poly_arr[3] - poly_arr[0])
+                w = max(width_top, width_bottom)
+                h = max(height_right, height_left)
+                ratio = min(w, h) / max(w, h) if max(w, h) > 0 else 0
+                if not (0.60 <= ratio <= 0.85):
+                    continue
+
+                detections.append(
                 width_top = np.linalg.norm(poly_arr[1] - poly_arr[0])
                 width_bottom = np.linalg.norm(poly_arr[2] - poly_arr[3])
                 height_right = np.linalg.norm(poly_arr[2] - poly_arr[1])
