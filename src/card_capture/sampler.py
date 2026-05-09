@@ -467,14 +467,21 @@ class AdaptivePresenceSampler:
             record.presence_score = score
 
         threshold = self._otsu_threshold(scores)
-        score_range = float(max(scores) - min(scores))
-        if score_range <= 1e-6:
-            active_flags = [True for _ in scores]
-        else:
-            # Otsu can legitimately return the low-class edge. Treat the
-            # threshold as a split between classes so low-score plateaus do
-            # not bridge separate card presentations.
-            active_flags = [score > threshold for score in scores]
+        
+        # Robust presence check:
+        # A frame is "active" if its presence score > threshold OR
+        # if it has very high edge density/sharpness (regardless of motion).
+        # This handles the "first card held still" case.
+        edge_vals = np.array([r.metrics["edge_density"] for r in records])
+        edge_median = float(np.median(edge_vals))
+        edge_mad = float(np.median(np.abs(edge_vals - edge_median)))
+        edge_threshold = edge_median + (2.5 * edge_mad * 1.4826) if edge_mad > 1e-6 else float('inf')
+        
+        active_flags = []
+        for idx, score in enumerate(scores):
+            is_otsu_active = score > threshold
+            is_feature_active = records[idx].metrics["edge_density"] > edge_threshold
+            active_flags.append(is_otsu_active or is_feature_active)
         windows: list[PresenceWindow] = []
 
         start_idx: Optional[int] = None

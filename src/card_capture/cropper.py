@@ -76,7 +76,7 @@ class PrecisionNormalizer:
         self.height = height
         self.safety_margin = safety_margin
 
-    def normalize(self, image: np.ndarray, corners: Sequence[Point]) -> np.ndarray:
+    def normalize(self, image: np.ndarray, corners: Sequence[Point], rotate_180: bool = True) -> np.ndarray:
         ordered = order_points_clockwise(corners)
         oriented = _orient_for_target_canvas(ordered, self.width, self.height)
         pts = np.array(oriented, dtype="float32")
@@ -86,6 +86,9 @@ class PrecisionNormalizer:
         )
         matrix = cv2.getPerspectiveTransform(pts, destination)
         warped = cv2.warpPerspective(image, matrix, (self.width, self.height), flags=cv2.INTER_LANCZOS4)
+        
+        if rotate_180:
+            warped = cv2.rotate(warped, cv2.ROTATE_180)
         
         crop_w = int(self.width * self.safety_margin)
         crop_h = int(self.height * self.safety_margin)

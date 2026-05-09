@@ -42,6 +42,7 @@
         </div>
         {% endif %}
         <dl>
+          <dt>Session</dt><dd>{{ card.session_id if card.session_id else "N/A" }}</dd>
           <dt>Instance</dt><dd>{{ card.instance_id if card.instance_id else "N/A" }}</dd>
           <dt>Score</dt><dd>{{ "%.3f"|format(card.final_score) }}</dd>
           <dt>State</dt><dd>{{ card.review_state }}</dd>
@@ -58,5 +59,20 @@
       <p>No cards match this filter.</p>
       {% endfor %}
     </main>
+    
+    {% if events %}
+    <section style="margin-top: 40px; padding: 20px; background: #eee; border-radius: 8px;">
+      <h2>Pipeline Events Timeline</h2>
+      <ul style="list-style: none; padding: 0;">
+        {% for event in events %}
+        <li style="margin-bottom: 8px; padding: 8px; background: white; border-left: 4px solid #245;">
+          <strong>{{ event.event_type }}</strong> at {{ event.timestamp_ms }} ms (Frame {{ event.frame_index }})
+          <br>
+          <small>{{ event.data|tojson }}</small>
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
   </body>
 </html>

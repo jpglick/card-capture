@@ -50,7 +50,7 @@ def create_app(db_path: Path):
             for card in cards:
                 # Join to find the instance_id linked to the card_view (detection_id)
                 row = conn.execute("""
-                    SELECT ci.id as instance_id, ci.fused_image_path, ci.angle
+                    SELECT ci.id as instance_id, ci.fused_image_path, ci.angle, ci.session_id
                     FROM card_views cv
                     JOIN card_instances ci ON cv.card_instance_id = ci.id
                     WHERE cv.id = ?
@@ -60,6 +60,7 @@ def create_app(db_path: Path):
                     card["instance_id"] = row["instance_id"]
                     card["fused_image_path"] = row["fused_image_path"]
                     card["angle"] = row["angle"]
+                    card["session_id"] = row["session_id"]
                     canonical_rows = conn.execute(
                         """
                         SELECT id, rectified_path
@@ -77,12 +78,30 @@ def create_app(db_path: Path):
                     card["instance_id"] = None
                     card["fused_image_path"] = None
                     card["angle"] = None
+                    card["session_id"] = None
                     card["canonical_views"] = []
+            
+            # Fetch pipeline events (resets, flips)
+            events = conn.execute("""
+                SELECT frame_index, timestamp_ms, event_type, data_json
+                FROM pipeline_events
+                ORDER BY timestamp_ms ASC
+            """).fetchall()
+            
+            # Map events to dicts
+            pipeline_events = []
+            for e in events:
+                pipeline_events.append({
+                    "frame_index": e["frame_index"],
+                    "timestamp_ms": e["timestamp_ms"],
+                    "event_type": e["event_type"],
+                    "data": json.loads(e["data_json"]) if e["data_json"] else {}
+                })
         
         return templates.TemplateResponse(
             request,
             "review.html",
-            {"cards": cards, "state": state},
+            {"cards": cards, "state": state, "events": pipeline_events},
         )
 
     @app.post("/cards/{saved_card_id}/decision")

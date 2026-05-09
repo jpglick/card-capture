@@ -257,6 +257,13 @@ class VideoProcessor:
                     reason="sampled_frame_gap",
                     gap_frames=frame_index - last_frame_idx,
                 )
+                self.storage.add_pipeline_event(
+                    video_id=video_id,
+                    frame_index=frame_index,
+                    timestamp_ms=timestamp_ms,
+                    event_type="session_reset",
+                    data={"reason": "sampled_frame_gap", "gap_frames": frame_index - last_frame_idx}
+                )
                 print(f"[Stage: Tracking] | Session: {current_session_id} | Action: Session Reset (Gap: {frame_index - last_frame_idx} frames)")
                 self.session_manager.active_session_id = None
                 self.tracker.reset_active()
@@ -306,7 +313,7 @@ class VideoProcessor:
                     batch_ids.append(candidate.detection_id)
                 if batch_items:
                     try:
-                        warped = self.kornia_normalizer.warp_canonical_batch(batch_items)
+                        warped = self.kornia_normalizer.warp_canonical_batch(batch_items, rotate_180=options.rotate_180)
                         for detection_id, image in zip(batch_ids, warped):
                             normalized_by_detection[detection_id] = image
                     except Exception as e:
@@ -351,7 +358,7 @@ class VideoProcessor:
 
                 normalized = normalized_by_detection.get(candidate.detection_id)
                 if normalized is None:
-                    normalized = normalizer.normalize(raw_image, candidate.corners)
+                    normalized = normalizer.normalize(raw_image, candidate.corners, rotate_180=options.rotate_180)
                 glare_centroid = find_glare_centroid(normalized)
                 glare_x, glare_y = glare_centroid if glare_centroid else (None, None)
                 frame_entries.append(
@@ -439,6 +446,7 @@ class VideoProcessor:
                 video_id=video_id,
                 track_id=prepared.track.instance_id,
                 angle=prepared.angle,
+                session_id=str(prepared.session_id),
             )
             track_instance_ids[track_index] = instance_id
 
@@ -558,6 +566,18 @@ class VideoProcessor:
         telemetry_path = output_dir / "run_telemetry.json"
         tracker_events_path = output_dir / "tracker_association_events.json"
         tracker_events_path.write_text(json.dumps(tracker_events, indent=2, sort_keys=True))
+        
+        # Persist events to DB for UI
+        for event in tracker_events:
+            if event["action"] in ("new_track", "reset"):
+                self.storage.add_pipeline_event(
+                    video_id=video_id,
+                    frame_index=event.get("frame_index", 0),
+                    timestamp_ms=event.get("timestamp_ms", 0),
+                    event_type=f"tracker_{event['action']}",
+                    data={"reason": event.get("split_reason"), "track_id": event.get("assigned_track_id")}
+                )
+
         sampler_telemetry["tracker_association_events_path"] = str(tracker_events_path)
         sampler_telemetry["status"] = status
         sampler_telemetry["saved_instances"] = saved_count

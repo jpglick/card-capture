@@ -35,6 +35,7 @@ class Storage:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     video_id INTEGER NOT NULL REFERENCES videos(id),
                     track_id TEXT NOT NULL,
+                    session_id TEXT,
                     visual_hash TEXT,
                     is_duplicate_of INTEGER REFERENCES card_instances(id),
                     angle TEXT,
@@ -118,9 +119,20 @@ class Storage:
                     centroid_y REAL NOT NULL,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
+
+                CREATE TABLE IF NOT EXISTS pipeline_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    video_id INTEGER NOT NULL REFERENCES videos(id),
+                    frame_index INTEGER NOT NULL,
+                    timestamp_ms INTEGER NOT NULL,
+                    event_type TEXT NOT NULL,
+                    data_json TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
                 """
             )
             self._ensure_column(conn, "card_instances", "angle", "TEXT")
+            self._ensure_column(conn, "card_instances", "session_id", "TEXT")
             self._ensure_column(conn, "card_instances", "fused_image_path", "TEXT")
             self._ensure_column(conn, "card_views", "glare_x", "REAL")
             self._ensure_column(conn, "card_views", "glare_y", "REAL")
@@ -187,19 +199,32 @@ class Storage:
                 (video_id, track_id, frame_index, polygon_area, aspect_ratio, centroid_x, centroid_y)
             )
 
+    def add_pipeline_event(
+        self, video_id: int, frame_index: int, timestamp_ms: int, event_type: str, data: Optional[Dict[str, Any]] = None
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO pipeline_events (video_id, frame_index, timestamp_ms, event_type, data_json)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (video_id, frame_index, timestamp_ms, event_type, json.dumps(data) if data else None),
+            )
+
     def add_card_instance(
         self,
         video_id: int,
         track_id: str,
         angle: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> int:
         with self._connect() as conn:
             cursor = conn.execute(
                 """
-                INSERT INTO card_instances (video_id, track_id, angle)
-                VALUES (?, ?, ?)
+                INSERT INTO card_instances (video_id, track_id, angle, session_id)
+                VALUES (?, ?, ?, ?)
                 """,
-                (video_id, track_id, angle),
+                (video_id, track_id, angle, session_id),
             )
             return int(cursor.lastrowid)
 

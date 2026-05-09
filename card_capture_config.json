@@ -10,12 +10,13 @@
     "detection_width": 640,
     "device": "auto",
     "group_gap_ms": 300,
-    "spatial_variance_threshold": 200.0,
-    "min_track_length": 6,
+    "spatial_variance_threshold": 300.0,
+    "min_track_length": 3,
     "telemetry_scope": "canonical",
     "triage_keep_percentile": 0.05,
-    "null_patience_frames": 30,
+    "null_patience_frames": 20,
     "background_threshold": 10.0,
+    "rotate_180": false,
     "debug": {
         "export_frames": false
     }
