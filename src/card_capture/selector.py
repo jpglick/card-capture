@@ -161,7 +161,9 @@ class HysteresisTracker:
         if max_area > 0:
             area_drop = (max_area - current_area) / max_area
             # A 30% drop from the local max indicates a potential flip
-            return area_drop > 0.30
+            if area_drop > 0.30:
+                print(f"[Stage: Tracking] | Action: Flip Detected (Max Area: {max_area:.1f}, Drop: {area_drop:.1%})")
+                return True
             
         return False
 

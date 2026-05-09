@@ -115,6 +115,7 @@ class ProcessingOptions:
 
 
 
+
 class NullStateDetector:
     def __init__(self, frames: int = 30, threshold: float = 15.0):
         self.frames = frames
@@ -141,6 +142,9 @@ class NullStateDetector:
 class SessionManager:
     def __init__(self):
         self.active_session_id: Optional[str] = None
+        
+    def start_session(self, timestamp: int):
+        self.active_session_id = str(timestamp)
 
 class VideoProcessor:
     def __init__(
@@ -241,12 +245,14 @@ class VideoProcessor:
         # If the gap between two accepted frames is large, a physical swap occurred.
         for frame_index, timestamp_ms, _ in stats.accepted_frame_presence:
             if last_frame_idx != -1 and (frame_index - last_frame_idx) > options.null_patience_frames:
+                self.tracker.finalize()
                 self.tracker.record_reset_event(
                     frame_index=frame_index,
                     timestamp_ms=timestamp_ms,
                     reason="sampled_frame_gap",
                     gap_frames=frame_index - last_frame_idx,
                 )
+                print(f"[Stage: Tracking] | Session: {current_session_id} | Action: Session Reset (Gap: {frame_index - last_frame_idx} frames)")
                 self.session_manager.active_session_id = None
                 self.tracker.reset_active()
             last_frame_idx = frame_index
@@ -676,6 +682,7 @@ def _resolve_session_tracks(
                     text_distance <= _SESSION_TEXTINESS_MARGIN
                     or appearance_similarity >= _SESSION_APPEARANCE_SIMILARITY_MIN
                 ):
+                    print(f"[Stage: Deduplication] | Match Found | Hash Dist: {hash_distance} | App Sim: {appearance_similarity:.3f} | Text Dist: {text_distance:.3f}")
                     if best_hash is None or hash_distance < best_hash:
                         best_hash = hash_distance
                         assigned_cluster = cluster_index
