@@ -59,6 +59,18 @@ Then run the app through that environment:
 .tools/bin/micromamba run -p "$PWD/.decord-env" card-capture process ~/path/to/video.mov --reader-backend decord
 ```
 
+## Local Execution & GPU Acceleration
+
+> [!IMPORTANT]
+> **GPU/MPS acceleration is NOT available within restricted CLI environments (like Gemini CLI).** 
+> 
+> High-resolution video processing and performance testing **MUST** be run manually in a local terminal to utilize Apple Silicon (MPS) or NVIDIA (CUDA) hardware. Running inside the AI agent environment will force a CPU fallback, resulting in significantly slower processing times (~10x slower).
+
+To run locally:
+```bash
+.venv/bin/python -m card_capture.cli process <video_path> --output-dir card_capture_output --db card_capture_output/cards.sqlite --config card_capture_config.json
+```
+
 ## Quick Start
 
 ### Process a Video

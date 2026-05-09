@@ -1,6 +1,33 @@
-.worktrees/
+# Virtual Environments
 .venv/
+env/
+venv/
+ENV/
+
+# Build and Distribution
 build/
+dist/
+*.egg-info/
+
+# Pipeline Output & Artifacts
 card_capture_output/
-*.txt
+card_capture_output_detection/
+v3_output/
+sample_run_*/
 *.sqlite
+*.sqlite3
+
+# Large Media Files
+*.MOV
+*.mov
+*.mp4
+*.mkv
+
+# IDE & OS
+.DS_Store
+.vscode/
+.idea/
+
+# Plan & Spec working files
+.worktrees/
+.pytest_cache/
