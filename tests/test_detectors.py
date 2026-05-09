@@ -67,9 +67,8 @@ def test_detector_rescales_polygon_to_original_frame_space():
     obb_mock = MagicMock()
     obb_mock.conf.cpu.return_value.numpy.return_value = np.array([0.9])
     obb_mock.cls.cpu.return_value.numpy.return_value = np.array([0])
-    # Points in 640x480 detection space: a 100x100 square
     obb_mock.xyxyxyxy.cpu.return_value.numpy.return_value = np.array(
-        [[[100.0, 100.0], [500.0, 100.0], [500.0, 300.0], [100.0, 300.0]]],
+        [[[100.0, 100.0], [300.0, 100.0], [300.0, 400.0], [100.0, 400.0]]],
         dtype=np.float32,
     )
     result_mock = MagicMock()
@@ -84,9 +83,9 @@ def test_detector_rescales_polygon_to_original_frame_space():
     poly = detections[0].polygon
     # scale_x = 1280/640 = 2.0, scale_y = 960/480 = 2.0
     assert poly[0] == (200.0, 200.0)
-    assert poly[1] == (1000.0, 200.0)
-    assert poly[2] == (1000.0, 600.0)
-    assert poly[3] == (200.0, 600.0)
+    assert poly[1] == (600.0, 200.0)
+    assert poly[2] == (600.0, 800.0)
+    assert poly[3] == (200.0, 800.0)
 
 
 def test_detector_rescales_polygon_with_asymmetric_scale_factors():
@@ -100,7 +99,7 @@ def test_detector_rescales_polygon_with_asymmetric_scale_factors():
     obb_mock.conf.cpu.return_value.numpy.return_value = np.array([0.9])
     obb_mock.cls.cpu.return_value.numpy.return_value = np.array([0])
     obb_mock.xyxyxyxy.cpu.return_value.numpy.return_value = np.array(
-        [[[100.0, 100.0], [500.0, 100.0], [500.0, 300.0], [100.0, 300.0]]],
+        [[[100.0, 100.0], [300.0, 100.0], [300.0, 400.0], [100.0, 400.0]]],
         dtype=np.float32,
     )
     result_mock = MagicMock()
@@ -150,7 +149,7 @@ def test_detector_detect_batch_returns_detection_packets():
     obb_mock.conf.cpu.return_value.numpy.return_value = np.array([0.9])
     obb_mock.cls.cpu.return_value.numpy.return_value = np.array([0])
     obb_mock.xyxyxyxy.cpu.return_value.numpy.return_value = np.array(
-        [[[100.0, 100.0], [500.0, 100.0], [500.0, 300.0], [100.0, 300.0]]],
+        [[[100.0, 100.0], [300.0, 100.0], [300.0, 400.0], [100.0, 400.0]]],
         dtype=np.float32,
     )
     result_mock = MagicMock()

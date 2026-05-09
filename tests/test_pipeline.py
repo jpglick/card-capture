@@ -360,8 +360,8 @@ def test_resolve_session_tracks_merges_visually_identical_clusters():
 
     assert prepared[0].duplicate_track_index is None
     assert prepared[1].duplicate_track_index == 0
-    assert prepared[0].angle == prepared[1].angle
-
+    assert prepared[0].angle == "Front"
+    assert prepared[1].angle == "Back"
 
 def test_pyproject_declares_pipeline_v21_runtime_dependencies():
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
