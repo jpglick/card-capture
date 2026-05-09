@@ -189,3 +189,54 @@ def test_hysteresis_tracker_finalizes_inactive_tracks():
     tracks = tracker.finalize()
     assert len(tracks) == 1
     assert len(tracks[0].candidates) == 2
+
+
+def test_hysteresis_tracker_records_assignment_events():
+    tracker = HysteresisTracker(t_high=0.55, t_low=0.20, max_dist=75.0)
+    c1 = ScoredCandidate(
+        detection_id=1,
+        timestamp_ms=100,
+        image_path="test1.jpg",
+        score=QualityScore(0.8, {}),
+        corners=[(0, 0), (10, 0), (10, 10), (0, 10)],
+        frame_index=100,
+    )
+    c2 = ScoredCandidate(
+        detection_id=2,
+        timestamp_ms=140,
+        image_path="test2.jpg",
+        score=QualityScore(0.5, {}),
+        corners=[(1, 1), (11, 1), (11, 11), (1, 11)],
+        frame_index=101,
+    )
+
+    tracker.process(c1)
+    tracker.process(c2)
+
+    assert len(tracker.association_events) == 2
+    assert tracker.association_events[0]["action"] == "new_track"
+    assert tracker.association_events[0]["split_reason"] == "no_active_track"
+    assert tracker.association_events[1]["action"] == "assigned_existing"
+    assert tracker.association_events[1]["nearest_track_distance"] is not None
+    assert tracker.association_events[1]["assigned_track_length"] == 2
+
+
+def test_hysteresis_tracker_records_rejection_and_reset_events():
+    tracker = HysteresisTracker(t_high=0.55, t_low=0.20, max_dist=75.0)
+    low_confidence = ScoredCandidate(
+        detection_id=1,
+        timestamp_ms=100,
+        image_path="test.jpg",
+        score=QualityScore(0.3, {}),
+        corners=[(0, 0), (10, 0), (10, 10), (0, 10)],
+        frame_index=100,
+    )
+
+    tracker.process(low_confidence)
+    tracker.record_reset_event(105, 150, "sampled_frame_gap", gap_frames=5)
+
+    assert tracker.association_events[0]["action"] == "rejected"
+    assert tracker.association_events[0]["split_reason"] == "below_high_threshold_no_active_track"
+    assert tracker.association_events[1]["action"] == "reset"
+    assert tracker.association_events[1]["split_reason"] == "sampled_frame_gap"
+    assert tracker.association_events[1]["gap_frames"] == 5

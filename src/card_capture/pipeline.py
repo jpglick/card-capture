@@ -40,10 +40,10 @@ _DRAIN_IDLE_TIMEOUT_SECONDS = 300.0
 _CANONICAL_TARGET_FRAMES = 3
 _CANONICAL_MAX_FRAMES = 4
 _SAME_APPEARANCE_HAMMING_MAX = 8
-_SESSION_DUPLICATE_HAMMING_MAX = 14
-_SESSION_TEXTINESS_MARGIN = 0.06
-_SESSION_APPEARANCE_SIMILARITY_MIN = 0.96
-_SESSION_MERGE_SIMILARITY_MIN = 0.93
+_SESSION_DUPLICATE_HAMMING_MAX = 6
+_SESSION_TEXTINESS_MARGIN = 0.03
+_SESSION_APPEARANCE_SIMILARITY_MIN = 0.995
+_SESSION_MERGE_SIMILARITY_MIN = 0.99
 
 
 class PipelineTimer:
@@ -103,12 +103,12 @@ class ProcessingOptions:
     variance_threshold: float = 20.0
     empty_pixel_threshold: float = 0.98
     group_gap_ms: int = 300
-    spatial_variance_threshold: float = 150.0
+    spatial_variance_threshold: float = 300.0
     telemetry_scope: str = "canonical"
     background_frames: int = 30
     background_threshold: float = 15.0
-    null_patience_frames: int = 15
-    min_track_length: int = 12
+    null_patience_frames: int = 20
+    min_track_length: int = 6
     use_kornia: bool = True
     kornia_device: str = "auto"
     triage_keep_percentile: float = 0.05
@@ -211,11 +211,11 @@ class VideoProcessor:
         candidate_confidences = [candidate.score.total for candidate in candidates]
         if candidate_confidences:
             tracker_t_high = float(
-                np.clip(np.percentile(candidate_confidences, 65), 0.30, 0.60)
+                np.clip(np.percentile(candidate_confidences, 65), 0.40, 0.75)
             )
         else:
-            tracker_t_high = 0.55
-        tracker_t_low = max(0.15, tracker_t_high - 0.20)
+            tracker_t_high = 0.60
+        tracker_t_low = max(0.20, tracker_t_high - 0.20)
         adaptive_min_track_length = max(
             3,
             min(options.min_track_length, max(3, len(detection_rows) // 3)),
@@ -232,21 +232,27 @@ class VideoProcessor:
             key = -1 if candidate.frame_index is None else int(candidate.frame_index)
             by_frame.setdefault(key, []).append(candidate)
 
-        empty_streak = 0
         current_session_id = 0
         frame_to_session: dict[int, int] = {}
-        for frame_index, timestamp_ms, is_empty in stats.accepted_frame_presence:
-            frame_candidates = by_frame.get(frame_index, [])
-            if frame_candidates:
-                is_empty = False
-            if is_empty:
-                empty_streak += 1
-                if empty_streak >= options.null_patience_frames:
-                    self.session_manager.active_session_id = None
-                    self.tracker.reset_active()
-                continue
+        last_frame_idx = -1
+        
+        # We rely purely on the AdaptivePresenceSampler's temporal gaps to define sessions.
+        # The sampler omits frames where the workspace is empty.
+        # If the gap between two accepted frames is large, a physical swap occurred.
+        for frame_index, timestamp_ms, _ in stats.accepted_frame_presence:
+            if last_frame_idx != -1 and (frame_index - last_frame_idx) > options.null_patience_frames:
+                self.tracker.record_reset_event(
+                    frame_index=frame_index,
+                    timestamp_ms=timestamp_ms,
+                    reason="sampled_frame_gap",
+                    gap_frames=frame_index - last_frame_idx,
+                )
+                self.session_manager.active_session_id = None
+                self.tracker.reset_active()
+            last_frame_idx = frame_index
 
-            empty_streak = 0
+            frame_candidates = by_frame.get(frame_index, [])
+
             if self.session_manager.active_session_id is None:
                 self.session_manager.active_session_id = str(timestamp_ms)
                 current_session_id += 1
@@ -256,6 +262,7 @@ class VideoProcessor:
                 self.tracker.process(candidate)
 
         raw_track_lengths = [len(track.candidates) for track in self.tracker.active_tracks]
+        tracker_events = list(self.tracker.association_events)
         tracks = self.tracker.finalize()
 
         normalizer = PrecisionNormalizer()
@@ -263,9 +270,13 @@ class VideoProcessor:
         prepared_tracks: list[_PreparedTrack] = []
         saved_count = 0
         for track in tracks:
-            scored_track = sorted(track.candidates, key=lambda c: c.score.total, reverse=True)
+            # Sort by total score to find best candidates, but cap at top 8 to prevent massive CPU/GPU burn
+            scored_track = sorted(track.candidates, key=lambda c: c.score.total, reverse=True)[:8]
+            
             frame_entries = []
             normalized_by_detection: dict[int, np.ndarray] = {}
+            raw_images_by_detection: dict[int, np.ndarray] = {}
+            
             if self.kornia_normalizer is not None:
                 batch_items: list[tuple[np.ndarray, list[tuple[float, float]]]] = []
                 batch_ids: list[int] = []
@@ -276,6 +287,7 @@ class VideoProcessor:
                     raw_image = _decode_detection_image(row)
                     if raw_image is None:
                         continue
+                    raw_images_by_detection[candidate.detection_id] = raw_image
                     batch_items.append((raw_image, candidate.corners))
                     batch_ids.append(candidate.detection_id)
                 if batch_items:
@@ -283,13 +295,17 @@ class VideoProcessor:
                         warped = self.kornia_normalizer.warp_canonical_batch(batch_items)
                         for detection_id, image in zip(batch_ids, warped):
                             normalized_by_detection[detection_id] = image
-                    except Exception:
+                    except Exception as e:
+                        print(f"Kornia warp failed: {e}")
                         normalized_by_detection = {}
+                        
             for candidate in scored_track:
                 row = detection_rows[candidate.detection_id]
-                raw_image = _decode_detection_image(row)
+                raw_image = raw_images_by_detection.get(candidate.detection_id)
                 if raw_image is None:
-                    continue
+                    raw_image = _decode_detection_image(row)
+                    if raw_image is None:
+                        continue
 
                 from .selector import _get_polygon_area, _aspect_ratio
                 if candidate.corners:
@@ -394,6 +410,9 @@ class VideoProcessor:
         sampler_telemetry["tracks_finalized"] = len(tracks)
         sampler_telemetry["track_lengths"] = track_lengths
         sampler_telemetry["duplicate_tracks"] = duplicate_track_count
+        sampler_telemetry["tracker_event_count"] = len(tracker_events)
+        sampler_telemetry["tracker_event_actions"] = _count_event_values(tracker_events, "action")
+        sampler_telemetry["tracker_split_reasons"] = _count_event_values(tracker_events, "split_reason")
 
         track_instance_ids: dict[int, int] = {}
         for track_index, prepared in enumerate(prepared_tracks):
@@ -509,6 +528,9 @@ class VideoProcessor:
         self.storage.update_video_status(video_id, status)
 
         telemetry_path = output_dir / "run_telemetry.json"
+        tracker_events_path = output_dir / "tracker_association_events.json"
+        tracker_events_path.write_text(json.dumps(tracker_events, indent=2, sort_keys=True))
+        sampler_telemetry["tracker_association_events_path"] = str(tracker_events_path)
         sampler_telemetry["status"] = status
         sampler_telemetry["saved_instances"] = saved_count
         sampler_telemetry["accepted_frames"] = stats.accepted_frame_count
@@ -523,6 +545,17 @@ class VideoProcessor:
             output_dir=output_dir,
             telemetry={**sampler_telemetry, "telemetry_path": str(telemetry_path)},
         )
+
+
+def _count_event_values(events: list[dict[str, Any]], key: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for event in events:
+        value = event.get(key)
+        if value is None:
+            continue
+        value_key = str(value)
+        counts[value_key] = counts.get(value_key, 0) + 1
+    return counts
 
 
 def _side_textiness_score(image: np.ndarray) -> float:
@@ -642,7 +675,6 @@ def _resolve_session_tracks(
                 ) and (
                     text_distance <= _SESSION_TEXTINESS_MARGIN
                     or appearance_similarity >= _SESSION_APPEARANCE_SIMILARITY_MIN
-                    or len(clusters) == 1
                 ):
                     if best_hash is None or hash_distance < best_hash:
                         best_hash = hash_distance
@@ -1012,8 +1044,7 @@ def _producer_main(
                 continue
 
             accepted_frame_count += 1
-            is_empty = null_detector.is_workspace_empty(frame.image)
-            accepted_frame_presence.append((frame.frame_index, frame.timestamp_ms, is_empty))
+            accepted_frame_presence.append((frame.frame_index, frame.timestamp_ms, False))
             t_ingest = timer.timings.get("t_ingest", 0.0)
             t_io = 0.0
 
@@ -1026,7 +1057,7 @@ def _producer_main(
                         image=frame.image,
                         width=frame.width,
                         height=frame.height,
-                        triage_metrics={**metrics, "workspace_empty": 1.0 if is_empty else 0.0},
+                        triage_metrics={**metrics, "workspace_empty": 0.0},
                         telemetry=PerformanceTelemetry(
                             t_ingest=t_ingest,
                             t_io=t_io,

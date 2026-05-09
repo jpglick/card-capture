@@ -21,8 +21,12 @@ class PipelineConfig:
     device: str = "auto"
     group_gap_ms: int = 300
     spatial_variance_threshold: float = 150.0
+    min_track_length: int = 12
     telemetry_scope: str = "canonical"
     triage_keep_percentile: float = 0.05
+    background_frames: int = 30
+    null_patience_frames: int = 20
+    background_threshold: float = 15.0
     debug: DebugConfig = field(default_factory=DebugConfig)
 
 def load_config(path: Path) -> PipelineConfig:

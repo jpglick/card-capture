@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import re
 
 import numpy as np
@@ -128,6 +129,8 @@ def test_pipeline_persists_v21_rows_and_result_counts(tmp_path: Path):
     assert result.accepted_frame_count == 3
     assert result.detection_count == 3
     assert result.saved_instance_count == 1
+    assert result.telemetry["tracker_event_count"] == 3
+    assert Path(result.telemetry["tracker_association_events_path"]).exists()
 
     assert _row_count(storage, "card_instances") == 1
     assert _row_count(storage, "card_views") == 3
@@ -144,6 +147,12 @@ def test_pipeline_persists_v21_rows_and_result_counts(tmp_path: Path):
     assert int(canonical_views["c"]) == 3
     assert len(evidence_rows) == 3
     assert all(Path(row["source_frame_path"]).exists() for row in evidence_rows)
+    tracker_events = json.loads(Path(result.telemetry["tracker_association_events_path"]).read_text())
+    assert [event["action"] for event in tracker_events] == [
+        "new_track",
+        "assigned_existing",
+        "assigned_existing",
+    ]
 
 
 def test_corner_confidence_threshold_filters_detections(tmp_path: Path):

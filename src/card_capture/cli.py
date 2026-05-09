@@ -81,8 +81,12 @@ def _run_process(args: argparse.Namespace) -> int:
             empty_pixel_threshold=config.empty_pixel_threshold,
             group_gap_ms=config.group_gap_ms,
             spatial_variance_threshold=config.spatial_variance_threshold,
+            min_track_length=config.min_track_length,
             telemetry_scope=config.telemetry_scope,
             triage_keep_percentile=config.triage_keep_percentile,
+            background_frames=config.background_frames,
+            background_threshold=config.background_threshold,
+            null_patience_frames=config.null_patience_frames,
         ),
         debug_config=config.debug
     )
@@ -104,12 +108,16 @@ def _run_process(args: argparse.Namespace) -> int:
             f"selected_frames={telemetry.get('last_selected_frame_count', 0)}, "
             f"tracks={telemetry.get('tracks_finalized', 0)}, "
             f"duplicates={telemetry.get('duplicate_tracks', 0)}, "
+            f"tracker_events={telemetry.get('tracker_event_count', 0)}, "
             f"t_high={t_high_display}, "
             f"status={telemetry.get('status', 'unknown')}"
         )
         telemetry_path = telemetry.get("telemetry_path")
         if telemetry_path:
             print(f"Telemetry written to {telemetry_path}")
+        tracker_events_path = telemetry.get("tracker_association_events_path")
+        if tracker_events_path:
+            print(f"Tracker events written to {tracker_events_path}")
     return 0
 
 

@@ -39,9 +39,9 @@ class KorniaNormalizer:
             if img is None:
                 continue
             
-            # Convert to RGB and then Tensor (C, H, W)
+            # Convert to RGB and then Tensor (B, C, H, W)
             img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            img_t = kornia.image_to_tensor(img_rgb, keepdim=True).float() / 255.0
+            img_t = kornia.image_to_tensor(img_rgb, keepdim=False).float() / 255.0
             
             # Destination corners (portrait)
             pts_dst = np.array([[0, 0], [self.width, 0], [self.width, self.height], [0, self.height]], dtype=np.float32)
@@ -57,7 +57,7 @@ class KorniaNormalizer:
         if not tensors:
             return []
             
-        batch_t = torch.cat(tensors).to(self.device)
+        batch_t = torch.cat(tensors, dim=0).to(self.device)
         batch_m = torch.stack(matrices).to(self.device)
         
         # Warp on GPU

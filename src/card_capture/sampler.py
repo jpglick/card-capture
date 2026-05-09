@@ -277,7 +277,7 @@ class AdaptivePresenceSampler:
         self,
         video_path: Optional[Union[Path, str]] = None,
         reader_backend: str = "auto",
-        scan_fps: float = 8.0,
+        scan_fps: float = 12.0,
         scan_width: int = 192,
         device: str = "auto",
         min_presence_frames: int = 2,
@@ -351,8 +351,9 @@ class AdaptivePresenceSampler:
         if np.all(np.isnan(between_class)):
             return float(np.median(arr))
         
+        # Soften threshold by picking the peak index directly rather than the edge after it
         best_index = int(np.nanargmax(between_class))
-        return float(bin_edges[min(best_index + 1, len(bin_edges) - 1)])
+        return float(bin_edges[best_index])
 
     def _resize_for_scan(self, frame: np.ndarray) -> np.ndarray:
         height, width = frame.shape[:2]
@@ -376,18 +377,20 @@ class AdaptivePresenceSampler:
 
         scores: list[float] = []
         for idx in range(len(records)):
-            # Heavily penalize empty frames, reward sharpness and texture
+            # Robust texture/motion-focused scoring
             score = (
-                0.40 * z_sharpness[idx]
-                + 0.25 * z_edge[idx]
-                + 0.15 * z_variance[idx]
-                + 0.20 * z_motion[idx]
-                - 0.50 * z_empty[idx]
+                0.30 * z_sharpness[idx]
+                + 0.35 * z_edge[idx]
+                + 0.10 * z_variance[idx]
+                + 0.25 * z_motion[idx]
+                - 0.60 * z_empty[idx]
             )
             scores.append(float(score))
         return scores
 
     def _scan_video(self, video_path: Path) -> list[_AdaptiveScanFrame]:
+        import time
+        start_time = time.time()
         sampler = VideoSampler(reader_backend=self.reader_backend)
         device = self.device
         effective_batch_size = 32
@@ -452,6 +455,7 @@ class AdaptivePresenceSampler:
             if len(batch_images) >= effective_batch_size:
                 flush_batch()
         flush_batch()
+        print(f"AdaptivePresenceSampler._scan_video took {time.time() - start_time:.2f} seconds.")
         return records
 
     def _build_windows(self, records: list[_AdaptiveScanFrame]) -> list[PresenceWindow]:
@@ -463,7 +467,14 @@ class AdaptivePresenceSampler:
             record.presence_score = score
 
         threshold = self._otsu_threshold(scores)
-        active_flags = [score >= threshold for score in scores]
+        score_range = float(max(scores) - min(scores))
+        if score_range <= 1e-6:
+            active_flags = [True for _ in scores]
+        else:
+            # Otsu can legitimately return the low-class edge. Treat the
+            # threshold as a split between classes so low-score plateaus do
+            # not bridge separate card presentations.
+            active_flags = [score > threshold for score in scores]
         windows: list[PresenceWindow] = []
 
         start_idx: Optional[int] = None
@@ -475,7 +486,8 @@ class AdaptivePresenceSampler:
                 last_active_idx = idx
                 continue
             if start_idx is not None and last_active_idx is not None:
-                if idx - last_active_idx <= self.window_merge_gap:
+                gap_frames = records[idx].frame_index - records[last_active_idx].frame_index
+                if gap_frames <= self.window_merge_gap:
                     continue
                 window_records = records[start_idx : last_active_idx + 1]
                 if len(window_records) >= self.min_presence_frames:
@@ -539,12 +551,10 @@ class AdaptivePresenceSampler:
             return window
 
         window_len = len(records)
-        # Increase target density to support tracker continuity.
-        # Aim for ~4-6 FPS in active windows (assuming 8fps scan)
-        target = min(
-            self.max_candidates_per_window,
-            max(self.min_candidates_per_window, int(round(window_len * 0.75))),
-        )
+        # We want to keep as many frames as possible to ensure tracking continuity.
+        # Only cap at max_candidates_per_window to prevent memory explosions on very long holds.
+        target = min(self.max_candidates_per_window, window_len)
+        
         if window_len <= target:
             window.frame_candidates = [
                 (record.frame_index, record.presence_score)
@@ -552,8 +562,7 @@ class AdaptivePresenceSampler:
             ]
             return window
 
-        # If window is very large, pick frames with highest presence scores
-        # spread across the window to ensure temporal coverage.
+        # If window exceeds max_candidates_per_window, pick frames with highest presence scores
         scored_records = sorted(records, key=lambda record: record.presence_score, reverse=True)
         top_indices = {r.frame_index for r in scored_records[:target]}
         
@@ -579,23 +588,29 @@ class AdaptivePresenceSampler:
             raise ValueError(f"Could not decode video: {video_path}")
 
         samples: list[FrameSample] = []
+        target_indices = set(frame_indices)
+        max_target = max(target_indices)
+        
+        frame_idx = 0
         try:
-            for frame_idx in frame_indices:
-                capture.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            while frame_idx <= max_target:
                 ok, frame = capture.read()
                 if not ok:
-                    continue
-                height, width = frame.shape[:2]
-                timestamp_ms = int(capture.get(cv2.CAP_PROP_POS_MSEC))
-                samples.append(
-                    FrameSample(
-                        frame_index=frame_idx,
-                        timestamp_ms=timestamp_ms,
-                        image=frame,
-                        width=width,
-                        height=height,
+                    break
+                
+                if frame_idx in target_indices:
+                    height, width = frame.shape[:2]
+                    timestamp_ms = int(capture.get(cv2.CAP_PROP_POS_MSEC))
+                    samples.append(
+                        FrameSample(
+                            frame_index=frame_idx,
+                            timestamp_ms=timestamp_ms,
+                            image=frame,
+                            width=width,
+                            height=height,
+                        )
                     )
-                )
+                frame_idx += 1
         finally:
             capture.release()
         return samples
