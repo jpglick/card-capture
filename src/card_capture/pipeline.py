@@ -112,6 +112,7 @@ class ProcessingOptions:
     use_kornia: bool = True
     kornia_device: str = "auto"
     triage_keep_percentile: float = 0.05
+    rotate_180: bool = True
 
 
 
@@ -659,92 +660,27 @@ def _resolve_session_tracks(
         by_session.setdefault(prepared.session_id, []).append((track_index, prepared))
 
     for session_tracks in by_session.values():
-        session_tracks.sort(key=lambda item: item[1].first_frame_index)
-        clusters: list[dict[str, Any]] = []
-        for track_index, prepared in session_tracks:
-            assigned_cluster = None
-            best_hash = None
-            for cluster_index, cluster in enumerate(clusters):
-                hash_distance = _min_hash_distance(
-                    prepared.candidate_hashes,
-                    cluster["hashes"],
-                    deduplicator,
-                )
-                text_distance = abs(prepared.side_score - cluster["side_score"])
-                appearance_similarity = _appearance_similarity(
-                    prepared.appearance_vector,
-                    cluster["appearance_vector"],
-                )
-                if (
-                    hash_distance <= _SESSION_DUPLICATE_HAMMING_MAX
-                    or appearance_similarity >= _SESSION_APPEARANCE_SIMILARITY_MIN
-                ) and (
-                    text_distance <= _SESSION_TEXTINESS_MARGIN
-                    or appearance_similarity >= _SESSION_APPEARANCE_SIMILARITY_MIN
-                ):
-                    print(f"[Stage: Deduplication] | Match Found | Hash Dist: {hash_distance} | App Sim: {appearance_similarity:.3f} | Text Dist: {text_distance:.3f}")
-                    if best_hash is None or hash_distance < best_hash:
-                        best_hash = hash_distance
-                        assigned_cluster = cluster_index
-
-            if assigned_cluster is None and len(clusters) >= 2:
-                side_distances = [
-                    abs(prepared.side_score - cluster["side_score"]) for cluster in clusters
-                ]
-                best_side_cluster = int(np.argmin(side_distances))
-                if side_distances[best_side_cluster] <= _SESSION_TEXTINESS_MARGIN:
-                    assigned_cluster = best_side_cluster
-
-            if assigned_cluster is None and len(clusters) < 2:
-                clusters.append(
-                    {
-                        "representative": track_index,
-                        "hashes": list(prepared.candidate_hashes),
-                        "side_score": prepared.side_score,
-                        "appearance_vector": prepared.appearance_vector.copy(),
-                    }
-                )
-                continue
-
-            if assigned_cluster is None:
-                side_distances = [
-                    abs(prepared.side_score - cluster["side_score"]) for cluster in clusters
-                ]
-                assigned_cluster = int(np.argmin(side_distances))
-
-            representative_index = int(clusters[assigned_cluster]["representative"])
-            prepared.duplicate_track_index = representative_index
-
-        if len(clusters) == 2:
-            similarity = _appearance_similarity(
-                clusters[0]["appearance_vector"],
-                clusters[1]["appearance_vector"],
-            )
-            if similarity >= _SESSION_MERGE_SIMILARITY_MIN:
-                first_rep = int(clusters[0]["representative"])
-                second_rep = int(clusters[1]["representative"])
-                prepared_tracks[second_rep].duplicate_track_index = first_rep
-                for sibling_index, sibling in session_tracks:
-                    if sibling.duplicate_track_index == second_rep:
-                        sibling.duplicate_track_index = first_rep
-                session_tracks = [
-                    (track_index, prepared)
-                    for track_index, prepared in session_tracks
-                    if track_index != second_rep
-                ]
-                clusters = [clusters[0]]
-
-        representative_angles: dict[int, str] = {}
-        for cluster_order, cluster in enumerate(clusters):
-            representative_index = int(cluster["representative"])
-            angle = "Back" if cluster["side_score"] >= 0.34 else "Front"
-            representative_angles[representative_index] = angle
-            prepared_tracks[representative_index].angle = angle
-
-        for track_index, prepared in session_tracks:
-            if prepared.duplicate_track_index is not None:
-                prepared.angle = representative_angles.get(prepared.duplicate_track_index, prepared.angle)
-
+        if not session_tracks:
+            continue
+            
+        # Sort by track length (descending)
+        session_tracks.sort(key=lambda item: len(item[1].track.candidates), reverse=True)
+        
+        # Longest track is front
+        first_index, first_prepared = session_tracks[0]
+        first_prepared.duplicate_track_index = None
+        first_prepared.angle = "Front"
+        
+        # Second longest is back
+        if len(session_tracks) > 1:
+            second_index, second_prepared = session_tracks[1]
+            second_prepared.duplicate_track_index = first_index
+            second_prepared.angle = "Back"
+            
+            # Any remaining are fragments, merge them to the front
+            for frag_index, frag_prepared in session_tracks[2:]:
+                frag_prepared.duplicate_track_index = first_index
+                frag_prepared.angle = "Front"
 
 def _build_candidates(rows: list[_DetectionEnvelope]) -> list[ScoredCandidate]:
     candidates: list[ScoredCandidate] = []
