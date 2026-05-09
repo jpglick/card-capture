@@ -23,7 +23,7 @@ class KorniaNormalizer:
         self.device = torch.device(device)
 
     def warp_canonical_batch(
-        self, batch_data: List[Tuple[Union[str, np.ndarray], List[Point]]]
+        self, batch_data: List[Tuple[Union[str, np.ndarray], List[Point]]], rotate_180: bool = True
     ) -> List[np.ndarray]:
         """
         batch_data: List of (image_or_path, corners)
@@ -67,5 +67,8 @@ class KorniaNormalizer:
         images: List[np.ndarray] = []
         for w in warped.cpu():
             rgb = kornia.tensor_to_image(w * 255.0).astype(np.uint8)
-            images.append(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+            bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+            if rotate_180:
+                bgr = cv2.rotate(bgr, cv2.ROTATE_180)
+            images.append(bgr)
         return images

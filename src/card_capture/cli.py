@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+
 import argparse
 import sys
 from pathlib import Path
@@ -87,6 +90,7 @@ def _run_process(args: argparse.Namespace) -> int:
             background_frames=config.background_frames,
             background_threshold=config.background_threshold,
             null_patience_frames=config.null_patience_frames,
+            rotate_180=config.rotate_180,
         ),
         debug_config=config.debug
     )

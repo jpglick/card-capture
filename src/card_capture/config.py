@@ -27,6 +27,7 @@ class PipelineConfig:
     background_frames: int = 30
     null_patience_frames: int = 20
     background_threshold: float = 15.0
+    rotate_180: bool = True
     debug: DebugConfig = field(default_factory=DebugConfig)
 
 def load_config(path: Path) -> PipelineConfig:
