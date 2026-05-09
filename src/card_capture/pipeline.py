@@ -80,7 +80,6 @@ class _FrameEnvelope:
 class _DetectionEnvelope:
     detection_packet: DetectionPacket
     source_frame_path: str
-    image_jpeg: bytes
     triage_metrics: dict[str, float]
 
 
@@ -285,32 +284,59 @@ class VideoProcessor:
         t_track = time.time() - t_track_start
         print(f"[Stage: Tracking] | {t_track:.2f}s | Tracks Finalized: {len(tracks)}")
 
+        # Stage 4: Refinement (Lazy High-Res Processing)
+        t_refine_start = time.time()
+        
+        # Collect all frame indices needed for canonical views across all tracks
+        canonical_indices_to_track: dict[int, list[tuple[Any, list[ScoredCandidate]]]] = {}
+        for track in tracks:
+            scored_candidates = sorted(track.candidates, key=lambda c: c.score.total, reverse=True)[:8]
+            for candidate in scored_candidates:
+                canonical_indices_to_track.setdefault(candidate.frame_index, []).append((track, scored_candidates))
+
+        # Sequentially decode only the required high-res frames
+        all_required_indices = sorted(canonical_indices_to_track.keys())
+        print(f"[Stage: Refinement] | Decoding {len(all_required_indices)} high-res frames sequentially...")
+        
+        # We'll use a local dictionary to store the decoded images
+        decoded_images: dict[int, np.ndarray] = {}
+        if all_required_indices:
+            # Use the sampler's decoding logic (which we optimized for sequential reading)
+            # We need to reach into the sampler's implementation or replicate the sequential read.
+            capture = cv2.VideoCapture(str(video_path))
+            try:
+                curr_idx = 0
+                target_idx_set = set(all_required_indices)
+                max_target = max(target_idx_set)
+                while curr_idx <= max_target:
+                    ok, frame = capture.read()
+                    if not ok: break
+                    if curr_idx in target_idx_set:
+                        decoded_images[curr_idx] = frame
+                    curr_idx += 1
+            finally:
+                capture.release()
+
+        # Now perform batch warping on the decoded high-res frames
         normalizer = PrecisionNormalizer()
         deduplicator = VisualDeduplicator()
         prepared_tracks: list[_PreparedTrack] = []
         saved_count = 0
-        t_refine_start = time.time()
+
         for track in tracks:
-            # Sort by total score to find best candidates, but cap at top 8 to prevent massive CPU/GPU burn
             scored_track = sorted(track.candidates, key=lambda c: c.score.total, reverse=True)[:8]
-            
             frame_entries = []
             normalized_by_detection: dict[int, np.ndarray] = {}
-            raw_images_by_detection: dict[int, np.ndarray] = {}
             
             if self.kornia_normalizer is not None:
                 batch_items: list[tuple[np.ndarray, list[tuple[float, float]]]] = []
                 batch_ids: list[int] = []
                 for candidate in scored_track:
-                    if not candidate.corners:
-                        continue
-                    row = detection_rows[candidate.detection_id]
-                    raw_image = _decode_detection_image(row)
-                    if raw_image is None:
-                        continue
-                    raw_images_by_detection[candidate.detection_id] = raw_image
+                    raw_image = decoded_images.get(candidate.frame_index)
+                    if raw_image is None: continue
                     batch_items.append((raw_image, candidate.corners))
                     batch_ids.append(candidate.detection_id)
+                
                 if batch_items:
                     try:
                         warped = self.kornia_normalizer.warp_canonical_batch(batch_items, rotate_180=options.rotate_180)
@@ -319,14 +345,11 @@ class VideoProcessor:
                     except Exception as e:
                         print(f"Kornia warp failed: {e}")
                         normalized_by_detection = {}
-                        
+
             for candidate in scored_track:
+                raw_image = decoded_images.get(candidate.frame_index)
+                if raw_image is None: continue
                 row = detection_rows[candidate.detection_id]
-                raw_image = raw_images_by_detection.get(candidate.detection_id)
-                if raw_image is None:
-                    raw_image = _decode_detection_image(row)
-                    if raw_image is None:
-                        continue
 
                 from .selector import _get_polygon_area, _aspect_ratio
                 if candidate.corners:
@@ -359,6 +382,7 @@ class VideoProcessor:
                 normalized = normalized_by_detection.get(candidate.detection_id)
                 if normalized is None:
                     normalized = normalizer.normalize(raw_image, candidate.corners, rotate_180=options.rotate_180)
+                
                 glare_centroid = find_glare_centroid(normalized)
                 glare_x, glare_y = glare_centroid if glare_centroid else (None, None)
                 frame_entries.append(
@@ -388,8 +412,10 @@ class VideoProcessor:
             for entry in canonical_entries:
                 h = str(entry["visual_hash"])
                 candidate_hashes.append(h)
+                # Apply 180-rotation check for hashing as well
                 rotated = cv2.rotate(entry["normalized"], cv2.ROTATE_180)
                 candidate_hashes.append(deduplicator.compute_phash(rotated))
+            
             first_frame_index = (
                 -1 if track.candidates[0].frame_index is None else int(track.candidates[0].frame_index)
             )
@@ -1027,10 +1053,15 @@ def _producer_main(
             if not accepted:
                 continue
 
-            accepted_frame_count += 1
             accepted_frame_presence.append((frame.frame_index, frame.timestamp_ms, False))
             t_ingest = timer.timings.get("t_ingest", 0.0)
             t_io = 0.0
+
+            # Resize to proxy for detection queue
+            h, w = frame.image.shape[:2]
+            scale = 640 / w
+            proxy_h = int(round(h * scale))
+            proxy_image = cv2.resize(frame.image, (640, proxy_h))
 
             _put_or_fail(
                 frame_queue,
@@ -1038,7 +1069,7 @@ def _producer_main(
                     frame_packet=FramePacket(
                         frame_index=frame.frame_index,
                         timestamp_ms=frame.timestamp_ms,
-                        image=frame.image,
+                        image=proxy_image,
                         width=frame.width,
                         height=frame.height,
                         triage_metrics={**metrics, "workspace_empty": 0.0},
@@ -1164,9 +1195,6 @@ def _consume_batch(
             source = source_by_frame.get((detection_packet.frame_index, detection_packet.timestamp_ms))
             if source is None:
                 continue
-            encoded, image_jpeg = cv2.imencode(".jpg", source.frame_packet.image)
-            if not encoded:
-                continue
 
             prod_telemetry = source.frame_packet.telemetry or PerformanceTelemetry()
             telemetry = PerformanceTelemetry(
@@ -1189,7 +1217,6 @@ def _consume_batch(
                     source_frame_path=(
                         f"video_frame_{source.frame_packet.frame_index}_{source.frame_packet.timestamp_ms}.jpg"
                     ),
-                    image_jpeg=image_jpeg.tobytes(),
                     triage_metrics=source.frame_packet.triage_metrics,
                 ),
             )
@@ -1218,9 +1245,6 @@ def _consume_batch(
         for detection in detections:
             if detection.confidence < corner_confidence_threshold:
                 continue
-            encoded, image_jpeg = cv2.imencode(".jpg", row.frame_packet.image)
-            if not encoded:
-                continue
             _put_or_fail(
                 detection_queue,
                 _DetectionEnvelope(
@@ -1239,7 +1263,6 @@ def _consume_batch(
                     source_frame_path=(
                         f"video_frame_{row.frame_packet.frame_index}_{row.frame_packet.timestamp_ms}.jpg"
                     ),
-                    image_jpeg=image_jpeg.tobytes(),
                     triage_metrics=row.frame_packet.triage_metrics,
                 ),
             )

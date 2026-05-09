@@ -16,7 +16,7 @@
     "triage_keep_percentile": 0.05,
     "null_patience_frames": 20,
     "background_threshold": 10.0,
-    "rotate_180": false,
+    "rotate_180": true,
     "debug": {
         "export_frames": false
     }
