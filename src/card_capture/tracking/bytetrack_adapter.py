@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Optional
 
 import numpy as np
@@ -40,6 +40,9 @@ class ByteTrackAdapter:
 
         self._ByteTrack = ByteTrack
         self._Detections = Detections
+        self._track_activation_threshold = track_activation_threshold
+        self._lost_track_buffer = lost_track_buffer
+        self._minimum_matching_threshold = minimum_matching_threshold
         self._tracker = ByteTrack(
             track_activation_threshold=track_activation_threshold,
             lost_track_buffer=lost_track_buffer,
@@ -51,10 +54,13 @@ class ByteTrackAdapter:
 
     def reset(self) -> None:
         """Reset tracker state (e.g., between sessions)."""
-        from supervision import ByteTrack
         self._all_finalized.extend(self._tracks.values())
         self._tracks = {}
-        self._tracker = self._ByteTrack()
+        self._tracker = self._ByteTrack(
+            track_activation_threshold=self._track_activation_threshold,
+            lost_track_buffer=self._lost_track_buffer,
+            minimum_matching_threshold=self._minimum_matching_threshold,
+        )
 
     def finalized_tracks(self) -> List[TrackState]:
         return list(self._all_finalized)
@@ -67,11 +73,13 @@ class ByteTrackAdapter:
         # Build supervision.Detections
         boxes = []
         confidences = []
+        valid_candidates: List[ScoredCandidate] = []
         for cand in candidates:
             if not cand.corners:
                 continue
             boxes.append(_xyxy_from_corners(cand.corners))
             confidences.append(float(cand.score.total))
+            valid_candidates.append(cand)
         if not boxes:
             return []
 
@@ -87,7 +95,7 @@ class ByteTrackAdapter:
             if track_id is None:
                 continue
             tid = int(track_id)
-            cand = candidates[i]
+            cand = valid_candidates[i]
             if tid not in self._tracks:
                 self._tracks[tid] = TrackState(
                     instance_id=str(uuid.uuid4()),

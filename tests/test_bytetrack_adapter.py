@@ -50,3 +50,21 @@ def test_adapter_finalize_returns_track_states():
     assert hasattr(track, "candidates")
     assert hasattr(track, "instance_id")
     assert len(track.candidates) >= 2
+
+
+def test_adapter_skips_candidates_without_corners():
+    """Regression: index mismatch when some candidates lack corners."""
+    adapter = ByteTrackAdapter()
+    cand_no_corners = ScoredCandidate(
+        detection_id=99,
+        timestamp_ms=0,
+        image_path="x.jpg",
+        score=QualityScore(total=0.9, components={"sharpness": 0.9, "blur": 0.0, "area": 0.5}),
+        corners=None,
+        frame_index=0,
+    )
+    cand_with_corners = _candidate(detection_id=1, frame_index=0, x=100, y=100)
+    # Should not crash; candidate with corners should be processed
+    out = adapter.process([cand_no_corners, cand_with_corners])
+    # out may be empty (ByteTrack needs a few frames to confirm a track) but should not crash
+    assert isinstance(out, list)
