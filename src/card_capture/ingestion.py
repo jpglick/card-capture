@@ -15,6 +15,22 @@ class FrameReader(Protocol):
         ...
 
 
+def _open_capture(path: "str | Path") -> cv2.VideoCapture:
+    """Open a VideoCapture with VideoToolbox hardware acceleration on macOS.
+
+    Falls back to software decode if the hardware-accelerated open fails.
+    """
+    cap = cv2.VideoCapture(
+        str(path),
+        cv2.CAP_FFMPEG,
+        [cv2.CAP_PROP_HW_ACCELERATION, cv2.VIDEO_ACCELERATION_ANY],
+    )
+    if cap.isOpened():
+        return cap
+    cap.release()
+    return cv2.VideoCapture(str(path))
+
+
 def _decord_available() -> bool:
     try:
         import decord  # noqa: F401

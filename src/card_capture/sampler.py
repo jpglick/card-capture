@@ -11,7 +11,7 @@ import numpy as np
 import torch
 
 from .models import FrameSample
-from .ingestion import _resolve_reader_backend
+from .ingestion import _resolve_reader_backend, _open_capture
 from .presence.classifier import PresenceClassifier as _PresenceClassifier
 from .gpu_utils import (
     compute_variance_gpu,
@@ -67,7 +67,7 @@ class VideoSampler:
             yield from self._sample_with_cv2(video_path, sample_fps)
 
     def _sample_with_cv2(self, video_path: Path, sample_fps: float) -> Iterator[FrameSample]:
-        capture = cv2.VideoCapture(str(video_path))
+        capture = _open_capture(video_path)
         if not capture.isOpened():
             raise ValueError(f"Could not decode video: {video_path}")
         source_fps = capture.get(cv2.CAP_PROP_FPS) or sample_fps
@@ -105,7 +105,7 @@ class StabilityBasedSampler:
             windows.append(StableWindow(start_frame=run_start, end_frame=run_frames[-1][0], best_frame_index=best_idx, frame_candidates=list(run_frames)))
 
     def _find_stable_windows(self, video_path: Path) -> List[StableWindow]:
-        capture = cv2.VideoCapture(str(video_path))
+        capture = _open_capture(video_path)
         if not capture.isOpened(): raise ValueError(f"Could not decode video: {video_path}")
         source_fps = capture.get(cv2.CAP_PROP_FPS) or self.scan_fps
         frame_step = max(1, int(round(source_fps / self.scan_fps)))
@@ -144,7 +144,7 @@ class StabilityBasedSampler:
         video_path = Path(video_path)
         windows = self._find_stable_windows(video_path)
         if not windows: return
-        capture = cv2.VideoCapture(str(video_path))
+        capture = _open_capture(video_path)
         if not capture.isOpened(): raise ValueError(f"Could not decode video: {video_path}")
         try:
             for window in windows:
@@ -203,7 +203,7 @@ class ContrastBasedSampler:
 
     def _find_presence_windows(self) -> list[PresenceWindow]:
         windows = []
-        cap = cv2.VideoCapture(self.video_path)
+        cap = _open_capture(self.video_path)
         try:
             fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
             frame_skip = max(1, int(fps / self.scan_fps))
@@ -243,7 +243,7 @@ class ContrastBasedSampler:
         return merged
 
     def _score_sharpness_in_window(self, window: PresenceWindow) -> PresenceWindow:
-        cap = cv2.VideoCapture(self.video_path)
+        cap = _open_capture(self.video_path)
         cap.set(cv2.CAP_PROP_POS_FRAMES, window.start_frame)
         try:
             frame_scores = []
@@ -259,7 +259,7 @@ class ContrastBasedSampler:
     def sample(self, video_path: Path = None, sample_fps: float = None) -> Iterator[FrameSample]:
         presence_windows = self._find_presence_windows()
         scored_windows = [self._score_sharpness_in_window(w) for w in presence_windows]
-        capture = cv2.VideoCapture(self.video_path)
+        capture = _open_capture(self.video_path)
         try:
             for window in scored_windows:
                 for frame_index, _ in window.frame_candidates:
@@ -422,7 +422,7 @@ class AdaptivePresenceSampler:
             effective_batch_size = 8
 
         raw_samples = sampler.sample(video_path, self.scan_fps)
-        cap = cv2.VideoCapture(str(video_path))
+        cap = _open_capture(video_path)
         self.last_source_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
         cap.release()
         records: list[_AdaptiveScanFrame] = []
@@ -621,7 +621,7 @@ class AdaptivePresenceSampler:
         if not frame_indices:
             return []
 
-        capture = cv2.VideoCapture(str(video_path))
+        capture = _open_capture(video_path)
         if not capture.isOpened():
             raise ValueError(f"Could not decode video: {video_path}")
 

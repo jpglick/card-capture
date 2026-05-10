@@ -19,7 +19,7 @@ from .gpu_refinement import KorniaNormalizer
 from .detectors import CardDetector
 from .deduplicator import VisualDeduplicator
 from .fuser import calculate_sharpness, find_glare_centroid
-from .ingestion import FrameTriageFilter
+from .ingestion import FrameTriageFilter, _open_capture
 from .models import (
     CornerDetection,
     DetectionPacket,
@@ -310,7 +310,7 @@ class VideoProcessor:
         if all_required_indices:
             # Use the sampler's decoding logic (which we optimized for sequential reading)
             # We need to reach into the sampler's implementation or replicate the sequential read.
-            capture = cv2.VideoCapture(str(video_path))
+            capture = _open_capture(video_path)
             try:
                 curr_idx = 0
                 target_idx_set = set(all_required_indices)
