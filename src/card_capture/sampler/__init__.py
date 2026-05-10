@@ -10,10 +10,10 @@ import cv2
 import numpy as np
 import torch
 
-from .models import FrameSample
-from .ingestion import _resolve_reader_backend, _open_capture
-from .presence.classifier import PresenceClassifier as _PresenceClassifier
-from .gpu_utils import (
+from ..models import FrameSample
+from ..ingestion import _resolve_reader_backend, _open_capture
+from ..presence.classifier import PresenceClassifier as _PresenceClassifier
+from ..gpu_utils import (
     compute_variance_gpu,
     compute_sharpness_gpu,
     compute_motion_gpu,
@@ -183,7 +183,7 @@ class ContrastBasedSampler:
         self.detection_metrics = detection_metrics if detection_metrics is not None else ["variance"]
         if device == "auto":
             try:
-                from .gpu_utils import get_device
+                from ..gpu_utils import get_device
                 self.device = get_device()
             except ImportError: self.device = torch.device("cpu")
         else: self.device = torch.device(device)
@@ -336,11 +336,11 @@ class AdaptivePresenceSampler:
         arr = np.asarray(values, dtype=np.float32)
         if float(arr.max() - arr.min()) <= 1e-3:
             return float(arr.min() - 1e-3) # Everything is active if no variation
-        
+
         # Clip for histogram binning to avoid issues with extreme tails
         p1, p99 = np.percentile(arr, [1, 99])
         clipped = np.clip(arr, p1, p99)
-        
+
         bins = max(8, min(64, int(math.sqrt(len(arr))) * 4))
         hist, bin_edges = np.histogram(clipped, bins=bins)
         total = hist.sum()
@@ -355,10 +355,10 @@ class AdaptivePresenceSampler:
         denominator = cumulative_prob * (1.0 - cumulative_prob)
         denominator[denominator == 0.0] = np.nan
         between_class = (global_mean * cumulative_prob - cumulative_mean) ** 2 / denominator
-        
+
         if np.all(np.isnan(between_class)):
             return float(np.median(arr))
-        
+
         # Soften threshold by picking the peak index directly rather than the edge after it
         best_index = int(np.nanargmax(between_class))
         return float(bin_edges[best_index])
@@ -408,7 +408,7 @@ class AdaptivePresenceSampler:
             resolved_device = torch.device(device) if device != "auto" else torch.device("cpu")
             if device == "auto":
                 try:
-                    from .gpu_utils import get_device
+                    from ..gpu_utils import get_device
 
                     resolved_device = get_device()
                 except Exception:
@@ -592,7 +592,7 @@ class AdaptivePresenceSampler:
         # We want to keep as many frames as possible to ensure tracking continuity.
         # Only cap at max_candidates_per_window to prevent memory explosions on very long holds.
         target = min(self.max_candidates_per_window, window_len)
-        
+
         if window_len <= target:
             window.frame_candidates = [
                 (record.frame_index, record.presence_score)
@@ -603,7 +603,7 @@ class AdaptivePresenceSampler:
         # If window exceeds max_candidates_per_window, pick frames with highest presence scores
         scored_records = sorted(records, key=lambda record: record.presence_score, reverse=True)
         top_indices = {r.frame_index for r in scored_records[:target]}
-        
+
         # Ensure we always include start and end of presence for boundary detection
         top_indices.add(records[0].frame_index)
         top_indices.add(records[-1].frame_index)
@@ -628,14 +628,14 @@ class AdaptivePresenceSampler:
         samples: list[FrameSample] = []
         target_indices = set(frame_indices)
         max_target = max(target_indices)
-        
+
         frame_idx = 0
         try:
             while frame_idx <= max_target:
                 ok, frame = capture.read()
                 if not ok:
                     break
-                
+
                 if frame_idx in target_indices:
                     height, width = frame.shape[:2]
                     timestamp_ms = int(capture.get(cv2.CAP_PROP_POS_MSEC))
