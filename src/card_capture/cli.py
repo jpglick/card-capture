@@ -32,7 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
     process.add_argument("--fast-scan-fps", type=float, default=None, dest="fast_scan_fps")
     process.add_argument("--confirm-scan-fps", type=float, default=None, dest="confirm_scan_fps")
     process.add_argument("--valley-drop-ratio", type=float, default=None, dest="valley_drop_ratio")
-    process.add_argument("--valley-min-width", type=int, default=None, dest="valley_min_width_frames")
+    process.add_argument("--valley-min-width-frames", type=int, default=None)
     process.add_argument("--delta-spike-ratio", type=float, default=None, dest="delta_spike_ratio")
     process.add_argument("--centroid-jump-ratio", type=float, default=None, dest="centroid_jump_ratio")
     process.add_argument("--centroid-jump-frames", type=int, default=None, dest="centroid_jump_frames")
@@ -129,6 +129,16 @@ def _run_process(args: argparse.Namespace) -> int:
     if not args.config.exists():
         save_config(config, args.config)
 
+    # Apply CLI overrides for new segmentation flags
+    for attr in (
+        "tracker_backend", "fast_scan_fps", "confirm_scan_fps",
+        "valley_drop_ratio", "valley_min_width_frames", "delta_spike_ratio",
+        "centroid_jump_ratio", "centroid_jump_frames", "reid_distance_threshold",
+    ):
+        val = getattr(args, attr, None)
+        if val is not None:
+            setattr(config, attr, val)
+
     if config.detector == "fake":
         detector = FakeCardDetector()
         sampler = SyntheticSampler()
@@ -173,6 +183,9 @@ def _run_process(args: argparse.Namespace) -> int:
             background_threshold=config.background_threshold,
             null_patience_frames=config.null_patience_frames,
             rotate_180=config.rotate_180,
+            tracker_backend=config.tracker_backend,
+            centroid_jump_ratio=config.centroid_jump_ratio,
+            centroid_jump_frames=config.centroid_jump_frames,
         ),
         debug_config=config.debug
     )
@@ -388,6 +401,10 @@ def _run_sampler_sessions(args: argparse.Namespace) -> int:
     sampler = AdaptivePresenceSampler(
         presence_weights_path=weights_path if weights_path.exists() else None,
         presence_threshold=0.5,
+        fast_scan_fps=getattr(config, 'fast_scan_fps', 15.0),
+        valley_drop_ratio=getattr(config, 'valley_drop_ratio', 0.40),
+        valley_min_width_frames=getattr(config, 'valley_min_width_frames', 3),
+        delta_spike_ratio=getattr(config, 'delta_spike_ratio', 0.60),
     )
 
     print(f"Scanning {video_path.name} …")
@@ -395,9 +412,34 @@ def _run_sampler_sessions(args: argparse.Namespace) -> int:
     t0 = time.time()
     scan_frames = sampler._scan_video(video_path)
     sampler._scan_frames = scan_frames
-    windows = sampler._build_windows(scan_frames)
+
+    # Compute valley splits from fast-scan signal
+    from .sampler.valley_splits import find_valley_splits
+    sobel_scores = [getattr(f, 'sobel_score', 0.0) for f in scan_frames]
+    delta_scores = [getattr(f, 'delta_score', 0.0) for f in scan_frames]
+    frame_indices = [f.frame_index for f in scan_frames]
+    valley_splits = find_valley_splits(
+        sobel_scores, delta_scores, frame_indices,
+        valley_drop_ratio=sampler.valley_drop_ratio,
+        valley_min_width_frames=sampler.valley_min_width_frames,
+        delta_spike_ratio=sampler.delta_spike_ratio,
+    )
+    sampler.last_valley_splits = valley_splits
+
+    windows = sampler._build_windows(scan_frames, forced_splits=valley_splits)
     elapsed = time.time() - t0
-    print(f"Scan + window build: {elapsed:.1f}s | {len(scan_frames)} scan frames | {len(windows)} presence windows")
+
+    fast_scan_count = getattr(sampler, 'last_scan_frame_count', len(scan_frames))
+    print(
+        f"Scan + window build: {elapsed:.1f}s | "
+        f"fast_scan_frames={len(scan_frames)} | "
+        f"presence_windows={len(windows)}"
+    )
+    if valley_splits:
+        print(f"Valley splits ({len(valley_splits)}): frame indices {valley_splits}")
+        print("  (sobel valleys + delta spikes — these forced window boundaries)")
+    else:
+        print("Valley splits: none detected")
 
     if not windows:
         print("No presence windows found — nothing would be tracked.")

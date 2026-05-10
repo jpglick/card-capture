@@ -10,10 +10,10 @@ import cv2
 import numpy as np
 import torch
 
-from .models import FrameSample
-from .ingestion import _resolve_reader_backend, _open_capture
-from .presence.classifier import PresenceClassifier as _PresenceClassifier
-from .gpu_utils import (
+from ..models import FrameSample
+from ..ingestion import _resolve_reader_backend, _open_capture
+from ..presence.classifier import PresenceClassifier as _PresenceClassifier
+from ..gpu_utils import (
     compute_variance_gpu,
     compute_sharpness_gpu,
     compute_motion_gpu,
@@ -53,6 +53,21 @@ class _AdaptiveScanFrame:
     metrics: dict[str, float]
     motion: float = 0.0
     presence_score: float = 0.0
+    delta_score: float = 0.0
+
+    @property
+    def sobel_score(self) -> float:
+        """Alias for metrics['edge_density'], used by valley-split logic (matches _ScanFrame API)."""
+        return self.metrics.get("edge_density", 0.0)
+
+
+@dataclass
+class _ScanFrame:
+    """Lightweight scan frame used in fast-scan Pass 1 (no full metrics, no image storage)."""
+    frame_index: int
+    timestamp_ms: float
+    sobel_score: float
+    delta_score: float = 0.0
 
 class VideoSampler:
     def __init__(self, reader_backend: str = "auto"):
@@ -183,7 +198,7 @@ class ContrastBasedSampler:
         self.detection_metrics = detection_metrics if detection_metrics is not None else ["variance"]
         if device == "auto":
             try:
-                from .gpu_utils import get_device
+                from ..gpu_utils import get_device
                 self.device = get_device()
             except ImportError: self.device = torch.device("cpu")
         else: self.device = torch.device(device)
@@ -289,10 +304,23 @@ class AdaptivePresenceSampler:
         sobel_threshold: float = 50.0,
         presence_weights_path: Optional[Path] = None,
         presence_threshold: float = 0.5,
+        fast_scan_fps: float = 15.0,
+        confirm_scan_fps: Optional[float] = None,
+        valley_drop_ratio: float = 0.40,
+        valley_min_width_frames: int = 3,
+        delta_spike_ratio: float = 0.60,
     ):
         self.video_path = str(video_path) if video_path is not None else None
         self.reader_backend = _resolve_reader_backend(reader_backend)
+        # scan_fps is the legacy param; fast_scan_fps overrides it for Pass 1
         self.scan_fps = scan_fps
+        self.fast_scan_fps = fast_scan_fps
+        # confirm_scan_fps defaults to scan_fps for backward compat
+        self.confirm_scan_fps = confirm_scan_fps if confirm_scan_fps is not None else scan_fps
+        self.valley_drop_ratio = valley_drop_ratio
+        self.valley_min_width_frames = valley_min_width_frames
+        self.delta_spike_ratio = delta_spike_ratio
+        self.last_valley_splits: list[int] = []
         self.scan_width = scan_width
         self.device = device
         self.min_presence_frames = max(1, min_presence_frames)
@@ -336,11 +364,11 @@ class AdaptivePresenceSampler:
         arr = np.asarray(values, dtype=np.float32)
         if float(arr.max() - arr.min()) <= 1e-3:
             return float(arr.min() - 1e-3) # Everything is active if no variation
-        
+
         # Clip for histogram binning to avoid issues with extreme tails
         p1, p99 = np.percentile(arr, [1, 99])
         clipped = np.clip(arr, p1, p99)
-        
+
         bins = max(8, min(64, int(math.sqrt(len(arr))) * 4))
         hist, bin_edges = np.histogram(clipped, bins=bins)
         total = hist.sum()
@@ -355,10 +383,10 @@ class AdaptivePresenceSampler:
         denominator = cumulative_prob * (1.0 - cumulative_prob)
         denominator[denominator == 0.0] = np.nan
         between_class = (global_mean * cumulative_prob - cumulative_mean) ** 2 / denominator
-        
+
         if np.all(np.isnan(between_class)):
             return float(np.median(arr))
-        
+
         # Soften threshold by picking the peak index directly rather than the edge after it
         best_index = int(np.nanargmax(between_class))
         return float(bin_edges[best_index])
@@ -408,7 +436,7 @@ class AdaptivePresenceSampler:
             resolved_device = torch.device(device) if device != "auto" else torch.device("cpu")
             if device == "auto":
                 try:
-                    from .gpu_utils import get_device
+                    from ..gpu_utils import get_device
 
                     resolved_device = get_device()
                 except Exception:
@@ -421,17 +449,18 @@ class AdaptivePresenceSampler:
         except Exception:
             effective_batch_size = 8
 
-        raw_samples = sampler.sample(video_path, self.scan_fps)
+        raw_samples = sampler.sample(video_path, self.fast_scan_fps)
         cap = _open_capture(video_path)
         self.last_source_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
         cap.release()
         records: list[_AdaptiveScanFrame] = []
         previous_gray: Optional[np.ndarray] = None
+        previous_img: Optional[np.ndarray] = None
         batch_samples: list[FrameSample] = []
         batch_images: list[np.ndarray] = []
 
         def flush_batch() -> None:
-            nonlocal previous_gray
+            nonlocal previous_gray, previous_img
             if not batch_images:
                 return
             batch_metrics = compute_presence_metrics_batched(
@@ -448,6 +477,13 @@ class AdaptivePresenceSampler:
                 else:
                     motion = float(np.abs(gray.astype(np.float32) - previous_gray.astype(np.float32)).mean())
                 previous_gray = gray
+                # Compute delta_score as mean absolute pixel diff vs previous frame
+                img_f32 = scan_image.astype(np.float32)
+                if previous_img is None:
+                    delta_score = 0.0
+                else:
+                    delta_score = float(np.mean(np.abs(img_f32 - previous_img)))
+                previous_img = img_f32
                 records.append(
                     _AdaptiveScanFrame(
                         frame_index=sample.frame_index,
@@ -455,6 +491,7 @@ class AdaptivePresenceSampler:
                         image=scan_image,
                         metrics=metrics,
                         motion=motion,
+                        delta_score=delta_score,
                     )
                 )
             batch_samples.clear()
@@ -469,10 +506,12 @@ class AdaptivePresenceSampler:
         print(f"AdaptivePresenceSampler._scan_video took {time.time() - start_time:.2f} seconds.")
         return records
 
-    def _build_windows(self, records: list[_AdaptiveScanFrame]) -> list[PresenceWindow]:
+    def _build_windows(self, records: list[_AdaptiveScanFrame], forced_splits: Optional[list[int]] = None) -> list[PresenceWindow]:
         if not records:
             self.last_inter_window_gaps_frames = []
             return []
+
+        forced = set(forced_splits or [])
 
         threshold = self.presence_threshold  # classifier path; overwritten by Otsu in fallback
         if self.presence_weights_path is not None:
@@ -509,9 +548,27 @@ class AdaptivePresenceSampler:
                 active_flags.append(is_otsu_active or is_feature_active)
         windows: list[PresenceWindow] = []
 
+        def _flush_window(start: int, end: int) -> None:
+            window_records = records[start : end + 1]
+            if len(window_records) >= self.min_presence_frames:
+                windows.append(
+                    PresenceWindow(
+                        start_frame=window_records[0].frame_index,
+                        end_frame=window_records[-1].frame_index,
+                        detection_methods=["adaptive_presence"],
+                    )
+                )
+
         start_idx: Optional[int] = None
         last_active_idx: Optional[int] = None
         for idx, is_active in enumerate(active_flags):
+            # Forced split: close any open window before processing this frame
+            if forced and records[idx].frame_index in forced:
+                if start_idx is not None and last_active_idx is not None:
+                    _flush_window(start_idx, last_active_idx)
+                start_idx = None
+                last_active_idx = None
+
             if is_active:
                 if start_idx is None:
                     start_idx = idx
@@ -521,28 +578,12 @@ class AdaptivePresenceSampler:
                 gap_frames = records[idx].frame_index - records[last_active_idx].frame_index
                 if gap_frames <= self.window_merge_gap:
                     continue
-                window_records = records[start_idx : last_active_idx + 1]
-                if len(window_records) >= self.min_presence_frames:
-                    windows.append(
-                        PresenceWindow(
-                            start_frame=window_records[0].frame_index,
-                            end_frame=window_records[-1].frame_index,
-                            detection_methods=["adaptive_presence"],
-                        )
-                    )
+                _flush_window(start_idx, last_active_idx)
                 start_idx = None
                 last_active_idx = None
 
         if start_idx is not None and last_active_idx is not None:
-            window_records = records[start_idx : last_active_idx + 1]
-            if len(window_records) >= self.min_presence_frames:
-                windows.append(
-                    PresenceWindow(
-                        start_frame=window_records[0].frame_index,
-                        end_frame=window_records[-1].frame_index,
-                        detection_methods=["adaptive_presence"],
-                    )
-                )
+            _flush_window(start_idx, last_active_idx)
 
         if windows:
             self.last_presence_window_count = len(windows)
@@ -592,7 +633,7 @@ class AdaptivePresenceSampler:
         # We want to keep as many frames as possible to ensure tracking continuity.
         # Only cap at max_candidates_per_window to prevent memory explosions on very long holds.
         target = min(self.max_candidates_per_window, window_len)
-        
+
         if window_len <= target:
             window.frame_candidates = [
                 (record.frame_index, record.presence_score)
@@ -603,7 +644,7 @@ class AdaptivePresenceSampler:
         # If window exceeds max_candidates_per_window, pick frames with highest presence scores
         scored_records = sorted(records, key=lambda record: record.presence_score, reverse=True)
         top_indices = {r.frame_index for r in scored_records[:target]}
-        
+
         # Ensure we always include start and end of presence for boundary detection
         top_indices.add(records[0].frame_index)
         top_indices.add(records[-1].frame_index)
@@ -628,14 +669,14 @@ class AdaptivePresenceSampler:
         samples: list[FrameSample] = []
         target_indices = set(frame_indices)
         max_target = max(target_indices)
-        
+
         frame_idx = 0
         try:
             while frame_idx <= max_target:
                 ok, frame = capture.read()
                 if not ok:
                     break
-                
+
                 if frame_idx in target_indices:
                     height, width = frame.shape[:2]
                     timestamp_ms = int(capture.get(cv2.CAP_PROP_POS_MSEC))
@@ -659,15 +700,31 @@ class AdaptivePresenceSampler:
             raise ValueError("video_path must be provided")
         return Path(resolved)
 
+    def _compute_valley_splits(self, scan_frames: list[_AdaptiveScanFrame]) -> list[int]:
+        from .valley_splits import find_valley_splits
+        sobel_scores = [r.sobel_score for r in scan_frames]
+        delta_scores = [r.delta_score for r in scan_frames]
+        frame_indices = [r.frame_index for r in scan_frames]
+        return find_valley_splits(
+            sobel_scores,
+            delta_scores,
+            frame_indices,
+            valley_drop_ratio=self.valley_drop_ratio,
+            valley_min_width_frames=self.valley_min_width_frames,
+            delta_spike_ratio=self.delta_spike_ratio,
+        )
+
     def _find_presence_windows(self) -> list[PresenceWindow]:
         video_path = self._resolve_video_path(None)
         self._scan_frames = self._scan_video(video_path)
-        return self._build_windows(self._scan_frames)
+        self.last_valley_splits = self._compute_valley_splits(self._scan_frames)
+        return self._build_windows(self._scan_frames, forced_splits=self.last_valley_splits)
 
     def sample(self, video_path: Path = None, sample_fps: float = None) -> Iterator[FrameSample]:
         resolved_video_path = self._resolve_video_path(video_path)
         self._scan_frames = self._scan_video(resolved_video_path)
-        windows = self._build_windows(self._scan_frames)
+        self.last_valley_splits = self._compute_valley_splits(self._scan_frames)
+        windows = self._build_windows(self._scan_frames, forced_splits=self.last_valley_splits)
         scored_windows = [self._score_sharpness_in_window(window) for window in windows]
         selected_frame_indices: list[int] = []
         for window in scored_windows:

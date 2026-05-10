@@ -33,3 +33,22 @@ class VisualDeduplicator:
 
     def is_duplicate(self, hash1: str, hash2: str) -> bool:
         return self.hamming_distance(hash1, hash2) <= self.threshold
+
+    def is_reid_duplicate(
+        self,
+        emb1: "np.ndarray",
+        emb2: "np.ndarray",
+        threshold: float = 0.15,
+    ) -> bool:
+        """Returns True if cosine distance between embeddings is <= threshold.
+
+        Cosine distance = 1 - cosine_similarity.
+        Threshold of 0.15 means >85% cosine similarity → same card.
+        """
+        n1 = np.linalg.norm(emb1)
+        n2 = np.linalg.norm(emb2)
+        if n1 == 0 or n2 == 0:
+            return False
+        cosine_sim = float(np.dot(emb1, emb2) / (n1 * n2))
+        cosine_distance = 1.0 - cosine_sim
+        return cosine_distance <= threshold

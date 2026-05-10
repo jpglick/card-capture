@@ -4,6 +4,8 @@ import math
 from dataclasses import dataclass, field
 from typing import Iterable, List, Tuple, Optional
 
+import numpy as np
+
 from .models import QualityScore
 
 
@@ -26,6 +28,7 @@ class TrackState:
     missed_frames: int = 0
     active: bool = True
     angle: str = "Front"
+    reid_embedding: Optional[np.ndarray] = None
 
 
 @dataclass
