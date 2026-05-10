@@ -1,0 +1,107 @@
+from __future__ import annotations
+
+import uuid
+from dataclasses import dataclass, field
+from typing import List, Optional
+
+import numpy as np
+
+from ..selector import ScoredCandidate, TrackState
+
+
+def _xyxy_from_corners(corners) -> np.ndarray:
+    xs = [c[0] for c in corners]
+    ys = [c[1] for c in corners]
+    return np.array([min(xs), min(ys), max(xs), max(ys)], dtype=np.float32)
+
+
+@dataclass
+class _AdaptedDetection:
+    candidate: ScoredCandidate
+    track_id: int
+    instance_id: str
+
+
+class ByteTrackAdapter:
+    """Wraps supervision.ByteTrack to consume ScoredCandidate streams.
+
+    The adapter maintains a stable instance_id (UUID string) per ByteTrack track_id
+    so downstream pipeline code keeps its existing identifier shape.
+    """
+
+    def __init__(
+        self,
+        min_track_length: int = 3,
+        track_activation_threshold: float = 0.25,
+        lost_track_buffer: int = 30,
+        minimum_matching_threshold: float = 0.8,
+    ):
+        from supervision import ByteTrack, Detections
+
+        self._ByteTrack = ByteTrack
+        self._Detections = Detections
+        self._tracker = ByteTrack(
+            track_activation_threshold=track_activation_threshold,
+            lost_track_buffer=lost_track_buffer,
+            minimum_matching_threshold=minimum_matching_threshold,
+        )
+        self.min_track_length = min_track_length
+        self._tracks: dict[int, TrackState] = {}  # track_id -> TrackState
+        self._all_finalized: list[TrackState] = []
+
+    def reset(self) -> None:
+        """Reset tracker state (e.g., between sessions)."""
+        from supervision import ByteTrack
+        self._all_finalized.extend(self._tracks.values())
+        self._tracks = {}
+        self._tracker = self._ByteTrack()
+
+    def finalized_tracks(self) -> List[TrackState]:
+        return list(self._all_finalized)
+
+    def process(self, candidates: List[ScoredCandidate]) -> List[_AdaptedDetection]:
+        """Process detections from one frame; returns adapted detections with track_id."""
+        if not candidates:
+            return []
+
+        # Build supervision.Detections
+        boxes = []
+        confidences = []
+        for cand in candidates:
+            if not cand.corners:
+                continue
+            boxes.append(_xyxy_from_corners(cand.corners))
+            confidences.append(float(cand.score.total))
+        if not boxes:
+            return []
+
+        det = self._Detections(
+            xyxy=np.array(boxes, dtype=np.float32),
+            confidence=np.array(confidences, dtype=np.float32),
+            class_id=np.zeros(len(boxes), dtype=int),
+        )
+        tracked = self._tracker.update_with_detections(det)
+
+        out: List[_AdaptedDetection] = []
+        for i, track_id in enumerate(tracked.tracker_id):
+            if track_id is None:
+                continue
+            tid = int(track_id)
+            cand = candidates[i]
+            if tid not in self._tracks:
+                self._tracks[tid] = TrackState(
+                    instance_id=str(uuid.uuid4()),
+                    candidates=[],
+                    last_centroid=None,
+                    last_frame_index=cand.frame_index,
+                )
+            state = self._tracks[tid]
+            state.candidates.append(cand)
+            state.last_frame_index = cand.frame_index
+            out.append(_AdaptedDetection(candidate=cand, track_id=tid, instance_id=state.instance_id))
+        return out
+
+    def finalize(self) -> List[TrackState]:
+        """Return all tracks (current + previously reset) above min length."""
+        all_tracks = list(self._tracks.values()) + list(self._all_finalized)
+        return [t for t in all_tracks if len(t.candidates) >= self.min_track_length]
