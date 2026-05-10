@@ -218,3 +218,44 @@ def test_readme_mentions_reader_backend_flag():
 def test_quick_reference_mentions_multiprocessing_pipeline():
     quick_reference = Path("QUICK_REFERENCE.md").read_text(encoding="utf-8").lower()
     assert "producer/consumer pipeline" in quick_reference
+
+
+def test_cli_process_accepts_new_segmentation_flags():
+    parser = build_parser()
+    args = parser.parse_args([
+        "process", "video.mov",
+        "--tracker-backend", "botsort",
+        "--fast-scan-fps", "15",
+        "--valley-drop-ratio", "0.4",
+        "--delta-spike-ratio", "0.6",
+        "--centroid-jump-ratio", "0.3",
+        "--centroid-jump-frames", "3",
+        "--reid-distance-threshold", "0.6",
+    ])
+    assert args.tracker_backend == "botsort"
+    assert args.fast_scan_fps == 15.0
+    assert args.valley_drop_ratio == 0.4
+    assert args.delta_spike_ratio == 0.6
+    assert args.centroid_jump_ratio == 0.3
+    assert args.centroid_jump_frames == 3
+    assert args.reid_distance_threshold == 0.6
+
+
+def test_cli_process_tracker_backend_choices():
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["process", "video.mov", "--tracker-backend", "invalidbackend"])
+
+
+def test_pipeline_config_has_new_fields():
+    from card_capture.config import PipelineConfig
+    cfg = PipelineConfig()
+    assert cfg.tracker_backend == "botsort"
+    assert cfg.fast_scan_fps == 15.0
+    assert cfg.confirm_scan_fps == 5.0
+    assert cfg.valley_drop_ratio == 0.40
+    assert cfg.valley_min_width_frames == 3
+    assert cfg.delta_spike_ratio == 0.60
+    assert cfg.centroid_jump_ratio == 0.30
+    assert cfg.centroid_jump_frames == 3
+    assert cfg.reid_distance_threshold == 0.6

@@ -18,6 +18,7 @@ dependencies = [
 pipeline_v21 = [
   "av",
   "onnxruntime",
+  "boxmot>=0.14.0",
 ]
 model = [
   "huggingface-hub",
