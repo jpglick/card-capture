@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Label video {{ video_id }}</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 1rem; }
+    table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+    th, td { border: 1px solid #ccc; padding: 0.4rem 0.6rem; font-size: 14px; }
+    th { background: #f4f4f4; text-align: left; }
+    img { max-height: 80px; }
+    button { padding: 0.4rem 0.8rem; margin: 0.2rem; }
+    .saved { color: green; }
+    .err { color: red; }
+  </style>
+</head>
+<body>
+  <h1>Label video {{ video_id }}</h1>
+  <p><strong>Source:</strong> {{ video_path }}</p>
+  <p><strong>Truth file:</strong> {{ truth_path }}</p>
+
+  <h2>Pipeline-detected Card Instances</h2>
+  <p>Mark each instance: select its true side (Front/Back) and assign a card_id. Leave side empty to mark as phantom. Add a physical_card_key to link cross-video duplicates.</p>
+
+  <table id="instances">
+    <thead>
+      <tr>
+        <th>iid</th><th>thumb</th><th>session</th><th>auto angle</th>
+        <th>start_ms</th><th>end_ms</th>
+        <th>true side</th><th>card_id</th><th>physical_card_key</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for inst in instances %}
+      <tr data-iid="{{ inst.instance_id }}" data-start="{{ inst.start_time }}" data-end="{{ inst.end_time }}">
+        <td>{{ inst.instance_id }}</td>
+        <td>{% if inst.fused_image_path %}<img src="/fused_images/{{ inst.instance_id }}">{% endif %}</td>
+        <td>{{ inst.session_id }}</td>
+        <td>{{ inst.angle }}</td>
+        <td>{{ inst.start_time }}</td>
+        <td>{{ inst.end_time }}</td>
+        <td>
+          <select class="side">
+            <option value="">(phantom)</option>
+            <option value="F">Front</option>
+            <option value="B">Back</option>
+          </select>
+        </td>
+        <td><input class="card_id" placeholder="e.g. card_001" style="width:90px"></td>
+        <td><input class="phys_key" placeholder="e.g. topps_42" style="width:110px"></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <h2>Missing cards (not detected by pipeline)</h2>
+  <p>Add rows for cards the pipeline missed entirely.</p>
+  <table id="missing">
+    <thead>
+      <tr><th>card_id</th><th>front_ms start,end</th><th>back_ms start,end</th><th>physical_card_key</th><th></th></tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+  <button id="add-missing">+ Add missing card</button>
+
+  <h2>Save</h2>
+  <button id="save">Save truth.json</button>
+  <span id="status"></span>
+
+  <script>
+    const VIDEO_ID = {{ video_id }};
+    const VIDEO_PATH = {{ video_path | tojson }};
+
+    function addMissingRow(card) {
+      const card_id = card ? card.card_id || '' : '';
+      const front = card && card.approx_front_window_ms ? card.approx_front_window_ms.join(',') : '';
+      const back = card && card.approx_back_window_ms ? card.approx_back_window_ms.join(',') : '';
+      const phys = card ? card.physical_card_key || '' : '';
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td><input class="m_card_id" value="${card_id}" placeholder="card_001" style="width:80px"></td>
+        <td><input class="m_front" value="${front}" placeholder="12000,15800" style="width:110px"></td>
+        <td><input class="m_back" value="${back}" placeholder="16000,18000" style="width:110px"></td>
+        <td><input class="m_phys" value="${phys}" placeholder="topps_42" style="width:110px"></td>
+        <td><button onclick="this.closest('tr').remove()">✕</button></td>
+      `;
+      document.querySelector('#missing tbody').appendChild(tr);
+    }
+
+    document.getElementById('add-missing').onclick = () => addMissingRow(null);
+
+    document.getElementById('save').onclick = async () => {
+      const cards = {};
+
+      for (const tr of document.querySelectorAll('#instances tr[data-iid]')) {
+        const side = tr.querySelector('.side').value;
+        const card_id = tr.querySelector('.card_id').value.trim();
+        const phys = tr.querySelector('.phys_key').value.trim();
+        if (!side || !card_id) continue;
+        const start = parseInt(tr.dataset.start);
+        const end = parseInt(tr.dataset.end);
+        if (!cards[card_id]) cards[card_id] = { card_id, front_present: false, back_present: false };
+        const c = cards[card_id];
+        if (side === 'F') { c.front_present = true; c.approx_front_window_ms = [start, end]; }
+        else              { c.back_present = true;  c.approx_back_window_ms  = [start, end]; }
+        if (phys) c.physical_card_key = phys;
+      }
+
+      for (const tr of document.querySelectorAll('#missing tbody tr')) {
+        const card_id = tr.querySelector('.m_card_id').value.trim();
+        if (!card_id) continue;
+        const front = tr.querySelector('.m_front').value.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+        const back  = tr.querySelector('.m_back').value.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+        const phys  = tr.querySelector('.m_phys').value.trim();
+        cards[card_id] = {
+          card_id,
+          front_present: front.length === 2, back_present: back.length === 2,
+          ...(front.length === 2 && { approx_front_window_ms: front }),
+          ...(back.length  === 2 && { approx_back_window_ms:  back  }),
+          ...(phys && { physical_card_key: phys }),
+        };
+      }
+
+      const payload = {
+        video_id: 'video_' + VIDEO_ID,
+        video_path: VIDEO_PATH,
+        labeled_at: new Date().toISOString().slice(0, 10),
+        expected_cards: Object.values(cards),
+      };
+
+      const status = document.getElementById('status');
+      try {
+        const resp = await fetch(`/label/${VIDEO_ID}/save`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const out = await resp.json();
+        status.innerHTML = out.ok
+          ? `<span class="saved">✓ saved → ${out.path}</span>`
+          : `<span class="err">Error: ${out.error}</span>`;
+      } catch (e) {
+        status.innerHTML = `<span class="err">${e.message}</span>`;
+      }
+    };
+  </script>
+</body>
+</html>
