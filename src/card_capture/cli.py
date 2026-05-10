@@ -45,6 +45,27 @@ def build_parser() -> argparse.ArgumentParser:
     harness_compare.add_argument("current", type=Path)
     harness_compare.add_argument("--out", type=Path, default=None)
 
+    # dataset subcommand
+    dataset_p = subparsers.add_parser("dataset", help="Training dataset utilities")
+    dataset_sub = dataset_p.add_subparsers(dest="dataset_command", required=True)
+    ds_export = dataset_sub.add_parser("export", help="Mine positives and negatives from processed videos")
+    ds_export.add_argument("--db", type=Path, default=Path("card_capture_output/cards.sqlite"))
+    ds_export.add_argument("--out-dir", type=Path, default=Path("data/presence_dataset"))
+    ds_export.add_argument("--confidence-floor", type=float, default=0.7)
+    ds_export.add_argument("--negatives-per-frame", type=int, default=2)
+    ds_export.add_argument("--video-id", type=int, default=None,
+                           help="Limit to one video ID; default exports all videos")
+
+    # train subcommand
+    train_p = subparsers.add_parser("train", help="Model training utilities")
+    train_sub = train_p.add_subparsers(dest="train_command", required=True)
+    train_presence = train_sub.add_parser("presence", help="Train MobileNetV3-Small presence classifier")
+    train_presence.add_argument("--data", type=Path, default=Path("data/presence_dataset"))
+    train_presence.add_argument("--out", type=Path, default=Path("models/presence_classifier.pt"))
+    train_presence.add_argument("--epochs", type=int, default=8)
+    train_presence.add_argument("--batch-size", type=int, default=64)
+    train_presence.add_argument("--lr", type=float, default=1e-3)
+
     return parser
 
 
@@ -57,6 +78,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _run_review(args)
     if args.command == "harness":
         return _run_harness(args)
+    if args.command == "dataset":
+        return _run_dataset(args)
+    if args.command == "train":
+        return _run_train(args)
     parser.error("unknown command")
     return 2
 
@@ -251,6 +276,63 @@ def _run_harness_compare(args: argparse.Namespace) -> int:
     write_markdown_report(current, out, baseline=baseline)
     print(f"Wrote {out}")
     return 0
+
+
+def _run_dataset(args: argparse.Namespace) -> int:
+    import sqlite3
+    from .presence.training_data import export_dataset
+
+    db_path: Path = args.db
+    if not db_path.exists():
+        print(f"Database not found: {db_path}", file=sys.stderr)
+        return 1
+
+    if args.video_id is not None:
+        video_ids = [args.video_id]
+    else:
+        with sqlite3.connect(db_path) as conn:
+            rows = conn.execute("SELECT id FROM videos ORDER BY id").fetchall()
+        video_ids = [r[0] for r in rows]
+
+    if not video_ids:
+        print("No videos found in database.")
+        return 0
+
+    total_pos = total_neg = 0
+    for vid in video_ids:
+        pos, neg = export_dataset(
+            db_path=db_path,
+            video_id=vid,
+            out_dir=args.out_dir,
+            confidence_floor=args.confidence_floor,
+            negatives_per_frame=args.negatives_per_frame,
+        )
+        print(f"video {vid}: {pos} positives, {neg} negatives")
+        total_pos += pos
+        total_neg += neg
+
+    print(f"\nTotal: {total_pos} positives, {total_neg} negatives → {args.out_dir}")
+    if total_pos < 200:
+        print("⚠  Fewer than 200 positives. Consider processing more videos before training.")
+    return 0
+
+
+def _run_train(args: argparse.Namespace) -> int:
+    if args.train_command == "presence":
+        from .train.presence import train
+        if not args.data.exists():
+            print(f"Dataset not found: {args.data}", file=sys.stderr)
+            print("Run `card-capture dataset export` first.", file=sys.stderr)
+            return 1
+        train(
+            data_dir=args.data,
+            out_path=args.out,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            lr=args.lr,
+        )
+        return 0
+    return 2
 
 
 if __name__ == "__main__":

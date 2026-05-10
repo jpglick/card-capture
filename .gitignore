@@ -39,3 +39,7 @@ reports/*
 
 # Training data
 data/
+
+models/*
+!models/.gitkeep
+!models/presence_classifier.pt
