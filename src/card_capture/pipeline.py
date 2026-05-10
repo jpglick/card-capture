@@ -295,6 +295,8 @@ class VideoProcessor:
         # The sampler omits frames where the workspace is empty.
         # If the gap between two accepted frames is large, a physical swap occurred.
         t_track_start = time.time()
+        tracker_events: list[dict] = []
+        _tracked_instance_ids: set[str] = set()
         for frame_index, timestamp_ms, _ in stats.accepted_frame_presence:
             if last_frame_idx != -1 and (frame_index - last_frame_idx) > effective_session_gap_frames:
                 self.tracker.finalize()
@@ -310,6 +312,7 @@ class VideoProcessor:
                 self.session_manager.active_session_id = None
                 self.tracker.reset()
                 centroid_detector.reset()
+                _tracked_instance_ids.clear()
             last_frame_idx = frame_index
 
             # --- Centroid jump split ---
@@ -333,6 +336,7 @@ class VideoProcessor:
                 )
                 self.tracker.reset()
                 centroid_detector.reset()
+                _tracked_instance_ids.clear()
                 self.session_manager.active_session_id = None
                 current_session_id += 1
 
@@ -351,6 +355,7 @@ class VideoProcessor:
                 )
                 self.tracker.reset()
                 centroid_detector.reset()
+                _tracked_instance_ids.clear()
                 self.session_manager.active_session_id = None
                 current_session_id += 1
 
@@ -360,11 +365,18 @@ class VideoProcessor:
                 self.session_manager.active_session_id = str(timestamp_ms)
                 current_session_id += 1
             frame_to_session[frame_index] = current_session_id
-            self.tracker.process(frame_candidates)
+            for adapted in self.tracker.process(frame_candidates):
+                action = "new_track" if adapted.instance_id not in _tracked_instance_ids else "assigned_existing"
+                _tracked_instance_ids.add(adapted.instance_id)
+                tracker_events.append({
+                    "action": action,
+                    "frame_index": int(frame_index),
+                    "track_id": adapted.track_id,
+                    "instance_id": adapted.instance_id,
+                })
 
         tracks = self.tracker.finalize()
         raw_track_lengths = [len(track.candidates) for track in tracks]
-        tracker_events = []  # ByteTrackAdapter does not emit association events
         t_track = time.time() - t_track_start
         print(f"[Stage: Tracking] | {t_track:.2f}s | Tracks Finalized: {len(tracks)}")
 
@@ -417,7 +429,11 @@ class VideoProcessor:
                 batch_ids: list[int] = []
                 for candidate in scored_track:
                     raw_image = decoded_images.get(candidate.frame_index)
-                    if raw_image is None: continue
+                    if raw_image is None:
+                        _r = detection_rows[candidate.detection_id]
+                        raw_image = np.zeros(
+                            (_r.detection_packet.height, _r.detection_packet.width, 3), dtype=np.uint8
+                        )
                     batch_items.append((raw_image, candidate.corners))
                     batch_ids.append(candidate.detection_id)
                 
@@ -432,8 +448,11 @@ class VideoProcessor:
 
             for candidate in scored_track:
                 raw_image = decoded_images.get(candidate.frame_index)
-                if raw_image is None: continue
                 row = detection_rows[candidate.detection_id]
+                if raw_image is None:
+                    raw_image = np.zeros(
+                        (row.detection_packet.height, row.detection_packet.width, 3), dtype=np.uint8
+                    )
 
                 from .selector import _get_polygon_area, _aspect_ratio
                 if candidate.corners:
@@ -1146,6 +1165,7 @@ def _producer_main(
                 continue
 
             accepted_frame_presence.append((frame.frame_index, frame.timestamp_ms, False))
+            accepted_frame_count += 1
             t_ingest = timer.timings.get("t_ingest", 0.0)
             t_io = 0.0
 
