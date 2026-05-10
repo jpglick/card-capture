@@ -24,7 +24,7 @@ def compute_session_gap_frames(
     floor = int(round(floor_seconds * fps))
     cap = int(round(cap_seconds * fps))
 
-    if not inter_window_gaps_frames:
+    if len(inter_window_gaps_frames) == 0:
         return GapDistribution(p50_frames=0, p95_frames=0, recommended_gap_frames=floor)
 
     arr = np.asarray(list(inter_window_gaps_frames), dtype=np.float32)
