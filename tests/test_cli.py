@@ -226,7 +226,9 @@ def test_cli_process_accepts_new_segmentation_flags():
         "process", "video.mov",
         "--tracker-backend", "botsort",
         "--fast-scan-fps", "15",
+        "--confirm-scan-fps", "5",
         "--valley-drop-ratio", "0.4",
+        "--valley-min-width-frames", "3",
         "--delta-spike-ratio", "0.6",
         "--centroid-jump-ratio", "0.3",
         "--centroid-jump-frames", "3",
@@ -234,7 +236,9 @@ def test_cli_process_accepts_new_segmentation_flags():
     ])
     assert args.tracker_backend == "botsort"
     assert args.fast_scan_fps == 15.0
+    assert args.confirm_scan_fps == 5.0
     assert args.valley_drop_ratio == 0.4
+    assert args.valley_min_width_frames == 3
     assert args.delta_spike_ratio == 0.6
     assert args.centroid_jump_ratio == 0.3
     assert args.centroid_jump_frames == 3
@@ -243,8 +247,9 @@ def test_cli_process_accepts_new_segmentation_flags():
 
 def test_cli_process_tracker_backend_choices():
     parser = build_parser()
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as exc_info:
         parser.parse_args(["process", "video.mov", "--tracker-backend", "invalidbackend"])
+    assert exc_info.value.code == 2
 
 
 def test_pipeline_config_has_new_fields():

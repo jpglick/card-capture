@@ -32,7 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
     process.add_argument("--fast-scan-fps", type=float, default=None, dest="fast_scan_fps")
     process.add_argument("--confirm-scan-fps", type=float, default=None, dest="confirm_scan_fps")
     process.add_argument("--valley-drop-ratio", type=float, default=None, dest="valley_drop_ratio")
-    process.add_argument("--valley-min-width", type=int, default=None, dest="valley_min_width_frames")
+    process.add_argument("--valley-min-width-frames", type=int, default=None)
     process.add_argument("--delta-spike-ratio", type=float, default=None, dest="delta_spike_ratio")
     process.add_argument("--centroid-jump-ratio", type=float, default=None, dest="centroid_jump_ratio")
     process.add_argument("--centroid-jump-frames", type=int, default=None, dest="centroid_jump_frames")
@@ -128,6 +128,16 @@ def _run_process(args: argparse.Namespace) -> int:
     # Save the defaults if it didn't exist
     if not args.config.exists():
         save_config(config, args.config)
+
+    # Apply CLI overrides for new segmentation flags
+    for attr in (
+        "tracker_backend", "fast_scan_fps", "confirm_scan_fps",
+        "valley_drop_ratio", "valley_min_width_frames", "delta_spike_ratio",
+        "centroid_jump_ratio", "centroid_jump_frames", "reid_distance_threshold",
+    ):
+        val = getattr(args, attr, None)
+        if val is not None:
+            setattr(config, attr, val)
 
     if config.detector == "fake":
         detector = FakeCardDetector()
