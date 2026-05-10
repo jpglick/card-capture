@@ -28,6 +28,23 @@ def build_parser() -> argparse.ArgumentParser:
     review.add_argument("--db", type=Path, default=Path("card_capture_output/cards.sqlite"))
     review.add_argument("--host", default="127.0.0.1")
     review.add_argument("--port", type=int, default=8000)
+
+    harness_p = subparsers.add_parser("harness", help="Run regression harness against golden corpus")
+    harness_sub = harness_p.add_subparsers(dest="harness_command", required=True)
+
+    harness_run = harness_sub.add_parser("run", help="Run pipeline on corpus and write report")
+    harness_run.add_argument("--corpus", type=Path, default=Path("tests/fixtures/golden_corpus"))
+    harness_run.add_argument("--db", type=Path, default=Path("card_capture_output/cards.sqlite"))
+    harness_run.add_argument("--output-dir", type=Path, default=Path("card_capture_output"))
+    harness_run.add_argument("--reports-dir", type=Path, default=Path("reports"))
+    harness_run.add_argument("--baseline", type=Path, default=None,
+                              help="Optional baseline JSON report to compute deltas against")
+
+    harness_compare = harness_sub.add_parser("compare", help="Compare two existing reports")
+    harness_compare.add_argument("baseline", type=Path)
+    harness_compare.add_argument("current", type=Path)
+    harness_compare.add_argument("--out", type=Path, default=None)
+
     return parser
 
 
@@ -38,6 +55,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _run_process(args)
     if args.command == "review":
         return _run_review(args)
+    if args.command == "harness":
+        return _run_harness(args)
     parser.error("unknown command")
     return 2
 
@@ -158,6 +177,79 @@ def _run_review(args: argparse.Namespace) -> int:
 
     app = create_app(args.db)
     uvicorn.run(app, host=args.host, port=args.port)
+    return 0
+
+
+def _run_harness(args: argparse.Namespace) -> int:
+    if args.harness_command == "run":
+        return _run_harness_run(args)
+    if args.harness_command == "compare":
+        return _run_harness_compare(args)
+    return 2
+
+
+def _run_harness_run(args: argparse.Namespace) -> int:
+    import json
+    import subprocess
+    from tests.regression.harness import HarnessConfig, run_corpus
+    from tests.regression.report import write_json_report, write_markdown_report, AggregateReport
+    from tests.regression.metrics import VideoMetrics
+    from tests.regression.cross_video import DedupMetrics
+
+    try:
+        sha = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            stderr=subprocess.DEVNULL
+        ).decode().strip()
+    except Exception:
+        sha = "unknown"
+
+    cfg = HarnessConfig(
+        corpus_dir=args.corpus,
+        output_dir=args.output_dir,
+        git_sha=sha,
+        db_path=args.db,
+    )
+    report = run_corpus(cfg)
+
+    args.reports_dir.mkdir(parents=True, exist_ok=True)
+    json_path = args.reports_dir / f"{sha}.json"
+    md_path = args.reports_dir / f"{sha}.md"
+
+    baseline_report = None
+    if args.baseline and args.baseline.exists():
+        raw = json.loads(args.baseline.read_text())
+        baseline_report = AggregateReport(
+            git_sha=raw["git_sha"],
+            per_video=tuple(VideoMetrics(**v) for v in raw["per_video"]),
+            dedup=DedupMetrics(**raw["dedup"]),
+        )
+
+    write_json_report(report, json_path)
+    write_markdown_report(report, md_path, baseline=baseline_report)
+    print(f"Wrote {json_path} and {md_path}")
+    return 0
+
+
+def _run_harness_compare(args: argparse.Namespace) -> int:
+    import json
+    from tests.regression.report import AggregateReport, write_markdown_report
+    from tests.regression.metrics import VideoMetrics
+    from tests.regression.cross_video import DedupMetrics
+
+    def _load(path: Path) -> AggregateReport:
+        raw = json.loads(path.read_text())
+        return AggregateReport(
+            git_sha=raw["git_sha"],
+            per_video=tuple(VideoMetrics(**v) for v in raw["per_video"]),
+            dedup=DedupMetrics(**raw["dedup"]),
+        )
+
+    baseline = _load(args.baseline)
+    current = _load(args.current)
+    out = args.out or args.current.with_suffix(".compare.md")
+    write_markdown_report(current, out, baseline=baseline)
+    print(f"Wrote {out}")
     return 0
 
 
