@@ -31,3 +31,11 @@ sample_run_*/
 # Plan & Spec working files
 .worktrees/
 .pytest_cache/
+
+# Harness reports — track only baselines
+reports/*
+!reports/.gitkeep
+!reports/baseline_*
+
+# Training data
+data/
