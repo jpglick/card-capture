@@ -306,6 +306,7 @@ class AdaptivePresenceSampler:
         self.last_selected_frame_count = 0
         self.last_score_threshold: float = 0.0
         self.last_fallback_used = False
+        self.last_inter_window_gaps_frames: list[int] = []
 
     @staticmethod
     def _robust_zscores(values: list[float]) -> list[float]:
@@ -460,6 +461,7 @@ class AdaptivePresenceSampler:
 
     def _build_windows(self, records: list[_AdaptiveScanFrame]) -> list[PresenceWindow]:
         if not records:
+            self.last_inter_window_gaps_frames = []
             return []
 
         scores = self._score_records(records)
@@ -523,6 +525,10 @@ class AdaptivePresenceSampler:
             self.last_presence_window_count = len(windows)
             self.last_score_threshold = threshold
             self.last_fallback_used = False
+            self.last_inter_window_gaps_frames = [
+                (windows[i + 1].start_frame - windows[i].end_frame)
+                for i in range(len(windows) - 1)
+            ]
             return windows
 
         best_idx = int(np.argmax(scores))
@@ -536,6 +542,7 @@ class AdaptivePresenceSampler:
             self.last_presence_window_count = 1
             self.last_score_threshold = threshold
             self.last_fallback_used = True
+            self.last_inter_window_gaps_frames = []
             return [
                 PresenceWindow(
                     start_frame=window_records[0].frame_index,
@@ -543,6 +550,7 @@ class AdaptivePresenceSampler:
                     detection_methods=["adaptive_fallback"],
                 )
             ]
+        self.last_inter_window_gaps_frames = []
         return []
 
     def _candidate_records_for_window(self, window: PresenceWindow) -> list[_AdaptiveScanFrame]:

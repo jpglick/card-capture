@@ -33,6 +33,7 @@ from .scoring import QualityScorer
 from .selector import CandidateSelector, ScoredCandidate
 from .tracking import ByteTrackAdapter
 from .storage import Storage
+from .adaptive_gap import compute_session_gap_frames
 
 _SENTINEL = "__card_capture_queue_sentinel__"
 _QUEUE_POLL_INTERVAL_SECONDS = 0.1
@@ -215,6 +216,17 @@ class VideoProcessor:
         t_ml = time.time() - t_start
         print(f"[Stage: ML Inference] | {t_ml:.2f}s | Detections: {len(detection_rows)}")
 
+        inter_window_gaps = stats.sampler_telemetry.get("last_inter_window_gaps_frames") or []
+        video_fps = getattr(self.sampler, "scan_fps", 30.0)
+        gap_dist = compute_session_gap_frames(
+            inter_window_gaps,
+            fps=video_fps,
+        )
+        effective_session_gap_frames = min(
+            options.null_patience_frames,
+            gap_dist.recommended_gap_frames,
+        )
+
         candidates = _build_candidates(detection_rows)
         candidate_confidences = [candidate.score.total for candidate in candidates]
         if candidate_confidences:
@@ -246,7 +258,7 @@ class VideoProcessor:
         # If the gap between two accepted frames is large, a physical swap occurred.
         t_track_start = time.time()
         for frame_index, timestamp_ms, _ in stats.accepted_frame_presence:
-            if last_frame_idx != -1 and (frame_index - last_frame_idx) > options.null_patience_frames:
+            if last_frame_idx != -1 and (frame_index - last_frame_idx) > effective_session_gap_frames:
                 self.tracker.finalize()
                 # ByteTrackAdapter does not have record_reset_event; events are logged via storage below
                 self.storage.add_pipeline_event(
@@ -454,6 +466,10 @@ class VideoProcessor:
         sampler_telemetry["tracker_event_count"] = len(tracker_events)
         sampler_telemetry["tracker_event_actions"] = _count_event_values(tracker_events, "action")
         sampler_telemetry["tracker_split_reasons"] = _count_event_values(tracker_events, "split_reason")
+        sampler_telemetry["adaptive_gap_p50"] = gap_dist.p50_frames
+        sampler_telemetry["adaptive_gap_p95"] = gap_dist.p95_frames
+        sampler_telemetry["adaptive_gap_recommended"] = gap_dist.recommended_gap_frames
+        sampler_telemetry["adaptive_gap_effective"] = effective_session_gap_frames
 
         t_storage_start = time.time()
         track_instance_ids: dict[int, int] = {}
@@ -1090,6 +1106,7 @@ def _producer_main(
             "last_selected_frame_count",
             "last_score_threshold",
             "last_fallback_used",
+            "last_inter_window_gaps_frames",
         ):
             value = getattr(sampler, attr, None)
             if value is not None:
