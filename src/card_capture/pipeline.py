@@ -222,10 +222,10 @@ class VideoProcessor:
             inter_window_gaps,
             fps=video_fps,
         )
-        effective_session_gap_frames = min(
-            options.null_patience_frames,
-            gap_dist.recommended_gap_frames,
-        )
+        # Use the adaptive gap directly — null_patience_frames is too small (6 frames)
+        # to serve as a session gap cap and incorrectly triggers resets on every inter-window
+        # gap.  The compute_session_gap_frames already floors at 0.5 s and caps at 3 s.
+        effective_session_gap_frames = gap_dist.recommended_gap_frames
 
         candidates = _build_candidates(detection_rows)
         candidate_confidences = [candidate.score.total for candidate in candidates]
@@ -240,9 +240,13 @@ class VideoProcessor:
             3,
             min(options.min_track_length, max(3, len(detection_rows) // 3)),
         )
+        # lost_track_buffer: keep a ByteTrack "lost" track alive for half the session gap
+        # so detections that briefly disappear within a session are re-associated rather
+        # than spawning a new track.
+        lost_track_buffer = max(options.null_patience_frames * 2, effective_session_gap_frames // 2)
         self.tracker = ByteTrackAdapter(
             min_track_length=adaptive_min_track_length,
-            lost_track_buffer=options.null_patience_frames * 2,
+            lost_track_buffer=lost_track_buffer,
         )
         by_frame: dict[int, list[ScoredCandidate]] = {}
         for candidate in candidates:
