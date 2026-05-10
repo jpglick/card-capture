@@ -36,7 +36,7 @@ test = [
 card-capture = "card_capture.cli:main"
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 
 [tool.setuptools.packages.find]
 where = ["src"]
