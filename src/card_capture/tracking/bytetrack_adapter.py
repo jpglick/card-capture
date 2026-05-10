@@ -91,6 +91,8 @@ class ByteTrackAdapter:
         self._tracker.update_with_detections(det)
 
         out: List[_AdaptedDetection] = []
+        if det.tracker_id is None:
+            return out
         for i, track_id in enumerate(det.tracker_id):
             if track_id is None or int(track_id) == -1:
                 continue

@@ -78,3 +78,23 @@ def test_adapter_skips_candidates_without_corners():
     out = adapter.process([cand_no_corners, cand_with_corners])
     # out may be empty (ByteTrack needs a few frames to confirm a track) but should not crash
     assert isinstance(out, list)
+
+
+def test_adapter_first_frame_does_not_crash_when_tracker_id_is_none():
+    """Regression: update_with_detections mutates det.tracker_id in-place;
+    on the very first call tracker_id may remain None if ByteTrack hasn't
+    confirmed any tracks yet. process() must guard against this."""
+    adapter = ByteTrackAdapter()
+    cand = _candidate(detection_id=0, frame_index=0, x=100, y=100)
+    # Single call on a fresh adapter — ByteTrack hasn't seen enough frames to
+    # confirm a track, so tracker_id can be None. Must return a list, not raise.
+    result = adapter.process([cand])
+    assert isinstance(result, list)
+
+
+def test_adapter_returns_empty_not_none_on_first_frame():
+    """process() must always return a list, even when no tracks are confirmed."""
+    adapter = ByteTrackAdapter()
+    result = adapter.process([_candidate(0, 0, x=200, y=200)])
+    assert result is not None
+    assert isinstance(result, list)
