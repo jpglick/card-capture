@@ -28,6 +28,15 @@ class PipelineConfig:
     null_patience_frames: int = 6
     background_threshold: float = 15.0
     rotate_180: bool = False
+    tracker_backend: str = "botsort"
+    fast_scan_fps: float = 15.0
+    confirm_scan_fps: float = 5.0
+    valley_drop_ratio: float = 0.40
+    valley_min_width_frames: int = 3
+    delta_spike_ratio: float = 0.60
+    centroid_jump_ratio: float = 0.30
+    centroid_jump_frames: int = 3
+    reid_distance_threshold: float = 0.6
     debug: DebugConfig = field(default_factory=DebugConfig)
 
 def load_config(path: Path) -> PipelineConfig:

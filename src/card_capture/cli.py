@@ -28,6 +28,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Classifier confidence threshold for card presence (0–1). Default: 0.5. "
              "Raise to reduce phantoms; lower to increase recall.",
     )
+    process.add_argument("--tracker-backend", choices=["botsort", "bytetrack"], default=None)
+    process.add_argument("--fast-scan-fps", type=float, default=None, dest="fast_scan_fps")
+    process.add_argument("--confirm-scan-fps", type=float, default=None, dest="confirm_scan_fps")
+    process.add_argument("--valley-drop-ratio", type=float, default=None, dest="valley_drop_ratio")
+    process.add_argument("--valley-min-width", type=int, default=None, dest="valley_min_width_frames")
+    process.add_argument("--delta-spike-ratio", type=float, default=None, dest="delta_spike_ratio")
+    process.add_argument("--centroid-jump-ratio", type=float, default=None, dest="centroid_jump_ratio")
+    process.add_argument("--centroid-jump-frames", type=int, default=None, dest="centroid_jump_frames")
+    process.add_argument("--reid-distance-threshold", type=float, default=None, dest="reid_distance_threshold")
 
     review = subparsers.add_parser("review", help="Start the local review UI")
     review.add_argument("--db", type=Path, default=Path("card_capture_output/cards.sqlite"))
