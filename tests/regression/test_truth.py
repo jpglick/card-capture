@@ -68,3 +68,26 @@ def test_load_truth_allows_missing_optional_fields(tmp_path):
     assert card.physical_card_key is None
     assert card.approx_back_window_ms is None
     assert card.notes == ""
+
+
+def test_load_truth_rejects_non_bool_front_present(tmp_path):
+    path = _write(tmp_path, {
+        "video_id": "v1",
+        "video_path": "x.mp4",
+        "expected_cards": [
+            {"card_id": "c1", "front_present": "yes", "back_present": False,
+             "approx_front_window_ms": [0, 1000]},
+        ],
+    })
+    with pytest.raises(TruthValidationError, match="front_present"):
+        load_truth(path)
+
+
+def test_load_truth_rejects_card_missing_card_id(tmp_path):
+    path = _write(tmp_path, {
+        "video_id": "v1",
+        "video_path": "x.mp4",
+        "expected_cards": [{"front_present": True, "back_present": False}],
+    })
+    with pytest.raises(TruthValidationError, match="card_id"):
+        load_truth(path)

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -50,11 +48,16 @@ def load_truth(path: Path) -> GroundTruth:
         for required in ("card_id", "front_present", "back_present"):
             if required not in entry:
                 raise TruthValidationError(f"card missing required field: {required}")
+        for bool_field in ("front_present", "back_present"):
+            if not isinstance(entry[bool_field], bool):
+                raise TruthValidationError(
+                    f"card field {bool_field!r} must be a boolean, got {entry[bool_field]!r}"
+                )
         cards.append(
             ExpectedCard(
                 card_id=str(entry["card_id"]),
-                front_present=bool(entry["front_present"]),
-                back_present=bool(entry["back_present"]),
+                front_present=entry["front_present"],
+                back_present=entry["back_present"],
                 approx_front_window_ms=_coerce_window(entry.get("approx_front_window_ms")),
                 approx_back_window_ms=_coerce_window(entry.get("approx_back_window_ms")),
                 physical_card_key=entry.get("physical_card_key"),
