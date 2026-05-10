@@ -19,9 +19,20 @@ def find_valley_splits(
       Split placed at the valley minimum frame.
     - Delta spike: frame-to-frame pixel delta >= delta_spike_ratio * max(delta_scores).
       Split placed at the spike frame.
+
+    All three lists must be the same length. For frame 0, delta_score should be 0.0.
     """
     if not sobel_scores:
         return []
+
+    if delta_scores and len(delta_scores) != len(sobel_scores):
+        raise ValueError(
+            f"delta_scores length ({len(delta_scores)}) must equal sobel_scores length ({len(sobel_scores)})"
+        )
+    if frame_indices and len(frame_indices) != len(sobel_scores):
+        raise ValueError(
+            f"frame_indices length ({len(frame_indices)}) must equal sobel_scores length ({len(sobel_scores)})"
+        )
 
     split_frames: set[int] = set()
 
@@ -58,7 +69,7 @@ def find_valley_splits(
         max_delta = max(delta_scores)
         if max_delta > 0:
             threshold = delta_spike_ratio * max_delta
-            for i, (delta, fi) in enumerate(zip(delta_scores, frame_indices)):
+            for delta, fi in zip(delta_scores, frame_indices):
                 if delta >= threshold:
                     split_frames.add(fi)
 

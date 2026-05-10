@@ -1,4 +1,3 @@
-import pytest
 from card_capture.sampler.valley_splits import find_valley_splits
 
 
@@ -59,3 +58,19 @@ def test_result_is_sorted():
     splits = find_valley_splits(scores, deltas, frames, valley_drop_ratio=0.4, valley_min_width_frames=2)
     assert splits == sorted(splits)
     assert len(splits) == 2
+
+
+def test_trailing_valley_at_end_of_signal():
+    # Valley at end of signal (no recovery) — should still split if wide enough
+    scores = [1.0, 1.2, 0.3, 0.25, 0.2]
+    deltas = [0.0] * 5
+    frames = [0, 1, 2, 3, 4]
+    splits = find_valley_splits(scores, deltas, frames, valley_drop_ratio=0.4, valley_min_width_frames=3)
+    assert len(splits) == 1
+    assert splits[0] == 4  # minimum is at last frame
+
+
+def test_mismatched_lengths_raise_value_error():
+    import pytest
+    with pytest.raises(ValueError):
+        find_valley_splits([1.0, 1.0], [0.0], [0, 1])  # delta_scores wrong length
