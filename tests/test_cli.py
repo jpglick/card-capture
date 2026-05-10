@@ -260,7 +260,7 @@ def test_pipeline_config_has_new_fields():
     assert cfg.confirm_scan_fps == 5.0
     assert cfg.valley_drop_ratio == 0.40
     assert cfg.valley_min_width_frames == 3
-    assert cfg.delta_spike_ratio == 0.60
+    assert cfg.delta_spike_ratio == 0.50
     assert cfg.centroid_jump_ratio == 0.30
     assert cfg.centroid_jump_frames == 3
     assert cfg.reid_distance_threshold == 0.6

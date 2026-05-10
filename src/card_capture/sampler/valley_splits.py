@@ -9,7 +9,7 @@ def find_valley_splits(
     frame_indices: list[int],
     valley_drop_ratio: float = 0.40,
     valley_min_width_frames: int = 3,
-    delta_spike_ratio: float = 0.60,
+    delta_spike_ratio: float = 0.50,
 ) -> list[int]:
     """Return sorted unique frame indices where a card swap is detected.
 
@@ -64,13 +64,25 @@ def find_valley_splits(
             min_idx = valley_start + int(np.argmin(sobel_scores[valley_start:]))
             split_frames.add(frame_indices[min_idx])
 
-    # --- Delta spike detection ---
+    # --- Delta spike detection with peak clustering ---
+    # A card swap produces a burst of high-delta frames (hand crossing camera).
+    # We cluster consecutive threshold-exceeding frames and emit one split per
+    # cluster at the peak, avoiding duplicate splits for the same physical event.
     if delta_scores:
         max_delta = max(delta_scores)
         if max_delta > 0:
             threshold = delta_spike_ratio * max_delta
-            for delta, fi in zip(delta_scores, frame_indices):
+            merge_window = max(5, valley_min_width_frames * 2)
+            # Each cluster: list of (scan_idx, frame_index, delta)
+            clusters: list[list[tuple[int, int, float]]] = []
+            for scan_i, (delta, fi) in enumerate(zip(delta_scores, frame_indices)):
                 if delta >= threshold:
-                    split_frames.add(fi)
+                    if clusters and scan_i - clusters[-1][-1][0] <= merge_window:
+                        clusters[-1].append((scan_i, fi, delta))
+                    else:
+                        clusters.append([(scan_i, fi, delta)])
+            for cluster in clusters:
+                _, peak_fi, _ = max(cluster, key=lambda x: x[2])
+                split_frames.add(peak_fi)
 
     return sorted(split_frames)

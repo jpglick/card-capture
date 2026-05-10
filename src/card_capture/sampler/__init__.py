@@ -308,7 +308,7 @@ class AdaptivePresenceSampler:
         confirm_scan_fps: Optional[float] = None,
         valley_drop_ratio: float = 0.40,
         valley_min_width_frames: int = 3,
-        delta_spike_ratio: float = 0.60,
+        delta_spike_ratio: float = 0.50,
     ):
         self.video_path = str(video_path) if video_path is not None else None
         self.reader_backend = _resolve_reader_backend(reader_backend)

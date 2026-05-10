@@ -452,7 +452,7 @@ def _run_sampler_sessions(args: argparse.Namespace) -> int:
         if gap > 0:
             inter_window_gaps.append(gap)
 
-    fps = getattr(sampler, "_last_source_fps", None) or 30.0
+    fps = getattr(sampler, "last_source_fps", None) or 30.0
     gap_dist = compute_session_gap_frames(inter_window_gaps, fps=fps)
     effective_gap = gap_dist.recommended_gap_frames
     null_patience = config.null_patience_frames
@@ -462,7 +462,11 @@ def _run_sampler_sessions(args: argparse.Namespace) -> int:
         f"null_patience={null_patience}f (was capping to {min(null_patience, effective_gap)}f before fix)"
     )
 
-    # Simulate session boundaries
+    # Simulate session boundaries.
+    # A new session starts when: (a) the inter-window gap exceeds the recommended
+    # gap threshold, OR (b) a valley split falls between the two windows (meaning
+    # a vision signal detected a card swap regardless of gap size).
+    valley_split_set = set(valley_splits)
     sessions: list[list[object]] = []
     current_session: list[object] = []
     for i, w in enumerate(windows):
@@ -470,7 +474,9 @@ def _run_sampler_sessions(args: argparse.Namespace) -> int:
             current_session.append(w)
             continue
         gap = w.start_frame - windows[i - 1].end_frame
-        if gap > effective_gap:
+        prev_end = windows[i - 1].end_frame
+        valley_in_gap = any(prev_end <= vs <= w.start_frame for vs in valley_split_set)
+        if gap > effective_gap or valley_in_gap:
             sessions.append(current_session)
             current_session = [w]
         else:
