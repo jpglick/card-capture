@@ -30,7 +30,8 @@ from .models import (
     QualityScore,
 )
 from .scoring import QualityScorer
-from .selector import CandidateSelector, HysteresisTracker, ScoredCandidate
+from .selector import CandidateSelector, ScoredCandidate
+from .tracking import ByteTrackAdapter
 from .storage import Storage
 
 _SENTINEL = "__card_capture_queue_sentinel__"
@@ -166,11 +167,11 @@ class VideoProcessor:
         self.selector = selector
         self.null_detector = None
         self.session_manager = SessionManager()
-        self.tracker = HysteresisTracker(max_dist=150.0, min_track_length=12, max_gap_frames=15)
+        self.tracker = ByteTrackAdapter(min_track_length=12)
 
     def flush_tracker(self):
         self.tracker.finalize()
-        self.tracker.reset_active()
+        self.tracker.reset()
 
     def process(self, video_path: Path, options: ProcessingOptions, debug_config: Any = None) -> ProcessingResult:
         video_path = Path(video_path).resolve()
@@ -227,12 +228,9 @@ class VideoProcessor:
             3,
             min(options.min_track_length, max(3, len(detection_rows) // 3)),
         )
-        self.tracker = HysteresisTracker(
-            t_high=tracker_t_high,
-            t_low=tracker_t_low,
-            max_dist=options.spatial_variance_threshold,
+        self.tracker = ByteTrackAdapter(
             min_track_length=adaptive_min_track_length,
-            max_gap_frames=options.null_patience_frames * 2, # Allow for slightly larger gaps in sparse sampling
+            lost_track_buffer=options.null_patience_frames * 2,
         )
         by_frame: dict[int, list[ScoredCandidate]] = {}
         for candidate in candidates:
@@ -250,12 +248,7 @@ class VideoProcessor:
         for frame_index, timestamp_ms, _ in stats.accepted_frame_presence:
             if last_frame_idx != -1 and (frame_index - last_frame_idx) > options.null_patience_frames:
                 self.tracker.finalize()
-                self.tracker.record_reset_event(
-                    frame_index=frame_index,
-                    timestamp_ms=timestamp_ms,
-                    reason="sampled_frame_gap",
-                    gap_frames=frame_index - last_frame_idx,
-                )
+                # ByteTrackAdapter does not have record_reset_event; events are logged via storage below
                 self.storage.add_pipeline_event(
                     video_id=video_id,
                     frame_index=frame_index,
@@ -265,7 +258,7 @@ class VideoProcessor:
                 )
                 print(f"[Stage: Tracking] | Session: {current_session_id} | Action: Session Reset (Gap: {frame_index - last_frame_idx} frames)")
                 self.session_manager.active_session_id = None
-                self.tracker.reset_active()
+                self.tracker.reset()
             last_frame_idx = frame_index
 
             frame_candidates = by_frame.get(frame_index, [])
@@ -274,13 +267,11 @@ class VideoProcessor:
                 self.session_manager.active_session_id = str(timestamp_ms)
                 current_session_id += 1
             frame_to_session[frame_index] = current_session_id
-            self.tracker.tick()
-            for candidate in frame_candidates:
-                self.tracker.process(candidate)
+            self.tracker.process(frame_candidates)
 
-        raw_track_lengths = [len(track.candidates) for track in self.tracker.active_tracks]
-        tracker_events = list(self.tracker.association_events)
         tracks = self.tracker.finalize()
+        raw_track_lengths = [len(track.candidates) for track in tracks]
+        tracker_events = []  # ByteTrackAdapter does not emit association events
         t_track = time.time() - t_track_start
         print(f"[Stage: Tracking] | {t_track:.2f}s | Tracks Finalized: {len(tracks)}")
 
@@ -542,12 +533,17 @@ class VideoProcessor:
                             queue_wait=telemetry.queue_wait,
                         ),
                     )
+                raw_image = decoded_images.get(row.detection_packet.frame_index)
+                if raw_image is None:
+                    raw_image = np.zeros((10, 10, 3), dtype=np.uint8)
+
                 self.storage.add_evidence_frame(
                     card_view_id=view_id,
                     source_frame_path=_persist_source_frame(
                         frame_dir=frame_dir,
                         video_id=video_id,
                         row=row,
+                        image=raw_image,
                         persisted_frames=persisted_frames,
                     ),
                     frame_width=row.detection_packet.width,
@@ -684,6 +680,7 @@ def _persist_source_frame(
     frame_dir: Path,
     video_id: int,
     row: _DetectionEnvelope,
+    image: np.ndarray,
     persisted_frames: dict[tuple[int, int], str],
 ) -> str:
     key = (int(row.detection_packet.frame_index), int(row.detection_packet.timestamp_ms))
@@ -695,15 +692,13 @@ def _persist_source_frame(
         frame_dir
         / f"video_{video_id}_frame_{row.detection_packet.frame_index}_{row.detection_packet.timestamp_ms}.jpg"
     ).resolve()
-    path.write_bytes(row.image_jpeg)
+    cv2.imwrite(str(path), image)
     persisted = str(path)
     persisted_frames[key] = persisted
     return persisted
 
 
-def _decode_detection_image(row: _DetectionEnvelope) -> Optional[np.ndarray]:
-    array = np.frombuffer(row.image_jpeg, dtype=np.uint8)
-    return cv2.imdecode(array, cv2.IMREAD_COLOR)
+
 
 
 def _min_hash_distance(
