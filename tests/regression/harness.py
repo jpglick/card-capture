@@ -22,6 +22,7 @@ class HarnessConfig:
     git_sha: str
     tolerance_ms: int = 500
     db_path: Path = Path("card_capture_output/cards.sqlite")
+    presence_threshold: float = 0.5
 
 
 def _peak_memory_mb() -> float:
@@ -35,6 +36,7 @@ def run_pipeline_for_video(
     video_path: Path,
     db_path: Path,
     output_dir: Path,
+    presence_threshold: float = 0.5,
 ) -> Tuple[List[HarnessInstance], float, float, list]:
     """Run the real pipeline against a video and return harness records.
 
@@ -49,6 +51,7 @@ def run_pipeline_for_video(
         output_dir=Path(output_dir),
         db=Path(db_path),
         config=Path("card_capture_config.json"),
+        presence_threshold=presence_threshold,
     )
 
     start = time.perf_counter()
@@ -103,6 +106,7 @@ def run_corpus(cfg: HarnessConfig) -> AggregateReport:
             video_path=video_path,
             db_path=cfg.db_path,
             output_dir=cfg.output_dir,
+            presence_threshold=cfg.presence_threshold,
         )
         match = match_instances_to_truth(instances, truth.expected_cards, tolerance_ms=cfg.tolerance_ms)
 

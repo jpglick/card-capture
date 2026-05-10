@@ -288,6 +288,7 @@ class AdaptivePresenceSampler:
         empty_pixel_threshold: float = 8.0,
         sobel_threshold: float = 50.0,
         presence_weights_path: Optional[Path] = None,
+        presence_threshold: float = 0.5,
     ):
         self.video_path = str(video_path) if video_path is not None else None
         self.reader_backend = _resolve_reader_backend(reader_backend)
@@ -303,6 +304,7 @@ class AdaptivePresenceSampler:
         self.empty_pixel_threshold = empty_pixel_threshold
         self.sobel_threshold = sobel_threshold
         self.presence_weights_path = presence_weights_path
+        self.presence_threshold = max(0.0, min(1.0, presence_threshold))
         self._presence_classifier: Optional[_PresenceClassifier] = None
         self._scan_frames: list[_AdaptiveScanFrame] = []
         self.last_scan_frame_count = 0
@@ -472,7 +474,7 @@ class AdaptivePresenceSampler:
             self.last_inter_window_gaps_frames = []
             return []
 
-        threshold = 0.5  # default (classifier path); overwritten by Otsu in fallback
+        threshold = self.presence_threshold  # classifier path; overwritten by Otsu in fallback
         if self.presence_weights_path is not None:
             # Lazy-load inside subprocess to avoid pickling MPS/CUDA tensors across
             # the multiprocessing boundary.
@@ -489,7 +491,7 @@ class AdaptivePresenceSampler:
                 scores.extend(self._presence_classifier.score_batch(chunk_frames))
             for record, score in zip(records, scores):
                 record.presence_score = score
-            active_flags = [s >= 0.5 for s in scores]
+            active_flags = [s >= self.presence_threshold for s in scores]
         else:
             # Fallback: existing composite z-score path
             scores = self._score_records(records)

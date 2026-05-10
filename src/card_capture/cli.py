@@ -23,6 +23,11 @@ def build_parser() -> argparse.ArgumentParser:
     process.add_argument("--output-dir", type=Path, default=Path("card_capture_output"))
     process.add_argument("--db", type=Path, default=Path("card_capture_output/cards.sqlite"))
     process.add_argument("--config", type=Path, default=Path("card_capture_config.json"))
+    process.add_argument(
+        "--presence-threshold", type=float, default=None,
+        help="Classifier confidence threshold for card presence (0–1). Default: 0.5. "
+             "Raise to reduce phantoms; lower to increase recall.",
+    )
 
     review = subparsers.add_parser("review", help="Start the local review UI")
     review.add_argument("--db", type=Path, default=Path("card_capture_output/cards.sqlite"))
@@ -39,6 +44,10 @@ def build_parser() -> argparse.ArgumentParser:
     harness_run.add_argument("--reports-dir", type=Path, default=Path("reports"))
     harness_run.add_argument("--baseline", type=Path, default=None,
                               help="Optional baseline JSON report to compute deltas against")
+    harness_run.add_argument(
+        "--presence-threshold", type=float, default=None,
+        help="Classifier confidence threshold for card presence (0–1). Default: 0.5.",
+    )
 
     harness_compare = harness_sub.add_parser("compare", help="Compare two existing reports")
     harness_compare.add_argument("baseline", type=Path)
@@ -109,11 +118,13 @@ def _run_process(args: argparse.Namespace) -> int:
             device=config.device,
         )
         weights = Path("models/presence_classifier.pt")
+        presence_threshold = getattr(args, "presence_threshold", None) or 0.5
         sampler = AdaptivePresenceSampler(
             video_path=args.video_path,
             reader_backend=config.reader_backend,
             device=config.device,
             presence_weights_path=weights if weights.exists() else None,
+            presence_threshold=presence_threshold,
         )
 
     processor = VideoProcessor(storage=storage, sampler=sampler, detector=detector)
@@ -242,6 +253,7 @@ def _run_harness_run(args: argparse.Namespace) -> int:
         output_dir=args.output_dir,
         git_sha=sha,
         db_path=args.db,
+        presence_threshold=getattr(args, "presence_threshold", None) or 0.5,
     )
     report = run_corpus(cfg)
 

@@ -24,7 +24,7 @@ def test_run_corpus_returns_aggregate_report(tmp_path, monkeypatch):
     from tests.regression import harness as harness_mod
     from tests.regression.pipeline_runner import HarnessInstance
 
-    def fake_runner(video_path, db_path, output_dir):
+    def fake_runner(video_path, db_path, output_dir, presence_threshold=0.5):
         return [
             HarnessInstance(
                 instance_id=10, video_id=1, session_id=1, angle="Front",
