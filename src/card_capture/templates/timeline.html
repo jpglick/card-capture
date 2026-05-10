@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Pipeline Timeline</title>
+    <style>
+      body { font-family: system-ui, -apple-system, sans-serif; margin: 0; background: #f0f2f5; color: #1d1d1b; }
+      header { display: flex; justify-content: space-between; align-items: center; padding: 16px 24px; background: white; border-bottom: 1px solid #ddd; position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+      h1 { margin: 0; font-size: 1.5rem; }
+      nav a { margin-right: 16px; color: #245; text-decoration: none; font-weight: 600; }
+      nav a:hover { text-decoration: underline; }
+      main { max-width: 1000px; margin: 32px auto; padding: 0 16px; }
+      
+      .timeline { position: relative; border-left: 3px solid #cbd5e1; padding-left: 32px; margin-left: 16px; }
+      
+      .timeline-item { position: relative; margin-bottom: 32px; }
+      .timeline-item::before {
+        content: '';
+        position: absolute;
+        left: -41px;
+        top: 0;
+        width: 12px;
+        height: 12px;
+        background: #fff;
+        border: 3px solid #3b82f6;
+        border-radius: 50%;
+      }
+      
+      .timeline-time { font-size: 0.875rem; color: #64748b; font-weight: 600; margin-bottom: 4px; }
+      
+      /* Event specific */
+      .item-event::before { border-color: #f59e0b; background: #fef3c7; }
+      .event-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px 16px; display: inline-block; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+      .event-title { font-weight: bold; color: #b45309; }
+      
+      /* Session Header specific */
+      .item-session-reset::before { border-color: #ef4444; width: 16px; height: 16px; left: -43px; }
+      .session-reset-card { background: #fee2e2; border: 1px solid #fca5a5; border-radius: 8px; padding: 12px 24px; display: inline-block; color: #991b1b; font-weight: bold; box-shadow: 0 2px 4px rgba(0,0,0,0.05); margin-top: 16px;}
+      
+      /* Instance specific */
+      .item-instance::before { border-color: #10b981; }
+      .instance-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; display: flex; gap: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); transition: transform 0.1s; }
+      .instance-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+      .instance-image { width: 120px; height: 168px; background: #f8fafc; border-radius: 8px; object-fit: contain; flex-shrink: 0; border: 1px solid #e2e8f0; }
+      .instance-details { display: flex; flex-direction: column; justify-content: center; }
+      
+      .badge-group { display: flex; gap: 8px; margin-bottom: 8px; }
+      .badge { padding: 4px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: bold; text-transform: uppercase; }
+      .badge-session { background: #e0e7ff; color: #3730a3; }
+      .badge-angle { background: #f3e8ff; color: #4338ca; }
+      .badge-dup { background: #fce7f3; color: #a21caf; border: 1px solid #fbcfe8; }
+      
+      .stat-grid { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 0.875rem; color: #475569; margin-top: auto; }
+      .stat-label { font-weight: 600; color: #1e293b; }
+      
+      .clear-filter { font-size: 0.875rem; color: #3b82f6; text-decoration: none; margin-left: 8px; }
+      .clear-filter:hover { text-decoration: underline; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Pipeline Timeline</h1>
+      <nav>
+        <a href="/">Review UI</a>
+        <a href="/timeline">Timeline</a>
+        <a href="/setup">Setup</a>
+      </nav>
+    </header>
+    <main>
+      {% if video_id %}
+      <div style="margin-bottom: 24px; padding: 12px 16px; background: #e0e7ff; border-radius: 8px; color: #3730a3; font-weight: 600;">
+        Viewing timeline for Video #{{ video_id }}
+        <a href="/timeline" class="clear-filter">(Clear Filter)</a>
+      </div>
+      {% endif %}
+      
+      <div class="timeline">
+        {% set all_items = [] %}
+        {% for event in events %}
+          {% set _ = all_items.append({'type': 'event', 'time': event.timestamp_ms, 'data': event}) %}
+        {% endfor %}
+        {% for instance in instances %}
+          {% set _ = all_items.append({'type': 'instance', 'time': instance.start_time if instance.start_time else 0, 'data': instance}) %}
+        {% endfor %}
+        
+        {% for item in all_items|sort(attribute='time') %}
+          {% if item.type == 'event' %}
+            {% if item.data.event_type == 'session_reset' %}
+              <div class="timeline-item item-session-reset">
+                <div class="timeline-time">{{ "%.2f"|format(item.time / 1000) }}s (Frame {{ item.data.frame_index }})</div>
+                <div class="session-reset-card">
+                  ⟳ Session Reset (Gap: {{ item.data.data.gap_frames }} frames)
+                </div>
+              </div>
+            {% else %}
+              <div class="timeline-item item-event">
+                <div class="timeline-time">{{ "%.2f"|format(item.time / 1000) }}s (Frame {{ item.data.frame_index }})</div>
+                <div class="event-card">
+                  <div class="event-title">{{ item.data.event_type }}</div>
+                  <div style="font-size: 0.875rem; color: #64748b; margin-top: 4px;">{{ item.data.data | tojson }}</div>
+                </div>
+              </div>
+            {% endif %}
+          {% else %}
+            <div class="timeline-item item-instance">
+              <div class="timeline-time">{{ "%.2f"|format(item.time / 1000) }}s - {{ "%.2f"|format(item.data.end_time / 1000) }}s</div>
+              <div class="instance-card">
+                {% if item.data.fused_image_path %}
+                  <img class="instance-image" src="/fused_images/{{ item.data.instance_id }}" alt="Fused Image">
+                {% elif item.data.first_view_id %}
+                  <img class="instance-image" src="/card_views/{{ item.data.first_view_id }}" alt="Card View">
+                {% else %}
+                  <div class="instance-image" style="display:flex; align-items:center; justify-content:center; color:#94a3b8; font-size:0.875rem;">No Image</div>
+                {% endif %}
+                
+                <div class="instance-details">
+                  <div class="badge-group">
+                    <span class="badge badge-session">Session {{ item.data.session_id }}</span>
+                    <span class="badge badge-angle">{{ item.data.angle }}</span>
+                    {% if item.data.is_duplicate_of %}
+                      <span class="badge badge-dup">Duplicate of #{{ item.data.is_duplicate_of }}</span>
+                    {% endif %}
+                  </div>
+                  
+                  <div class="stat-grid">
+                    <div class="stat-label">Instance ID:</div><div>#{{ item.data.instance_id }}</div>
+                    <div class="stat-label">Video ID:</div><div>{{ item.data.video_id }}</div>
+                    <div class="stat-label">Detections:</div><div>{{ item.data.detection_count }}</div>
+                    <div class="stat-label">Duration:</div><div>{{ item.data.end_time - item.time }} ms</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          {% endif %}
+        {% endfor %}
+      </div>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Card Capture — Setup</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 24px; background: #f7f7f4; color: #1d1d1b; }
+      header { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+      nav a { margin-right: 12px; color: #245; text-decoration: none; }
+      nav a:hover { text-decoration: underline; }
+      h1 { margin: 0 0 4px; }
+      .subtitle { color: #666; margin: 0 0 32px; font-size: 15px; }
+
+      .checklist { list-style: none; padding: 0; margin: 0; max-width: 720px; }
+      .checklist li { background: white; border: 1px solid #ddd; border-radius: 8px; padding: 18px 20px; margin-bottom: 16px; }
+      .checklist li.done { border-left: 4px solid #22c55e; }
+      .checklist li.todo { border-left: 4px solid #e2e8f0; }
+
+      .step-header { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+      .step-num { font-size: 13px; font-weight: 700; color: #888; width: 24px; }
+      .step-title { font-size: 16px; font-weight: 700; flex: 1; }
+      .badge-done { background: #dcfce7; color: #15803d; padding: 3px 10px; border-radius: 12px; font-size: 13px; font-weight: 600; white-space: nowrap; }
+      .badge-todo { background: #f1f5f9; color: #64748b; padding: 3px 10px; border-radius: 12px; font-size: 13px; font-weight: 600; white-space: nowrap; }
+
+      .step-body { color: #444; font-size: 14px; line-height: 1.6; }
+      .step-body p { margin: 6px 0 0; }
+      code { background: #f0f0ed; padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+      .links { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 8px; }
+      .links a { color: #245; font-size: 13px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Card Capture</h1>
+      <nav>
+        <a href="/">Review UI</a>
+        <a href="/timeline">Timeline</a>
+        <a href="/setup"><strong>Setup</strong></a>
+      </nav>
+    </header>
+
+    <h2 style="margin-top: 28px;">Bootstrap checklist</h2>
+    <p class="subtitle">Complete these steps once before the regression harness is useful.</p>
+
+    <ul class="checklist">
+
+      <!-- Step 1: Process a video -->
+      <li class="{% if video_count > 0 %}done{% else %}todo{% endif %}">
+        <div class="step-header">
+          <span class="step-num">1</span>
+          <span class="step-title">Process at least one video</span>
+          {% if video_count > 0 %}
+            <span class="badge-done">✓ {{ video_count }} video{{ "s" if video_count != 1 else "" }}</span>
+          {% else %}
+            <span class="badge-todo">Not done</span>
+          {% endif %}
+        </div>
+        <div class="step-body">
+          <p>Run the pipeline on a video file to populate the database with card instances.</p>
+          <p><code>card-capture process &lt;video.mp4&gt; --output-dir card_capture_output</code></p>
+          {% if video_count > 0 %}
+          <div class="links">
+            {% for v in videos %}<a href="/label/{{ v.id }}">#{{ v.id }}: {{ v.source_path | replace("\\", "/") | split("/") | last }}</a>{% endfor %}
+          </div>
+          {% endif %}
+        </div>
+      </li>
+
+      <!-- Step 2: Label corpus -->
+      <li class="{% if truth_count > 0 %}done{% else %}todo{% endif %}">
+        <div class="step-header">
+          <span class="step-num">2</span>
+          <span class="step-title">Label the golden corpus</span>
+          {% if truth_count > 0 %}
+            <span class="badge-done">✓ {{ truth_count }} labeled</span>
+          {% else %}
+            <span class="badge-todo">0 / {{ video_count }} labeled</span>
+          {% endif %}
+        </div>
+        <div class="step-body">
+          <p>For each processed video, open its labeling page. Mark each detected card instance as Front, Back, or phantom. Add a <code>card_id</code> and optional <code>physical_card_key</code> (for cross-video dedup ground truth). Use the "Add missing card" section for any cards the pipeline missed.</p>
+          <p>Then move the video file into <code>tests/fixtures/golden_corpus/&lt;stem&gt;/&lt;stem&gt;.mp4</code> so the harness can find it.</p>
+          {% if video_count > 0 %}
+          <div class="links">
+            {% for v in videos %}
+            <a href="/label/{{ v.id }}">Label video #{{ v.id }}</a>
+            {% endfor %}
+          </div>
+          {% endif %}
+        </div>
+      </li>
+
+      <!-- Step 3: Run harness -->
+      <li class="{% if any_report %}done{% else %}todo{% endif %}">
+        <div class="step-header">
+          <span class="step-num">3</span>
+          <span class="step-title">Run the regression harness</span>
+          {% if any_report %}
+            <span class="badge-done">✓ Report exists</span>
+          {% else %}
+            <span class="badge-todo">Not run yet</span>
+          {% endif %}
+        </div>
+        <div class="step-body">
+          <p>Run the harness against your labeled corpus to generate the first metrics report.</p>
+          <p><code>card-capture harness run</code> &nbsp;or&nbsp; <code>make harness</code></p>
+          <p>This writes a JSON + Markdown report to <code>reports/&lt;git-sha&gt;.json</code>.</p>
+        </div>
+      </li>
+
+      <!-- Step 4: Capture baseline -->
+      <li class="{% if has_baseline %}done{% else %}todo{% endif %}">
+        <div class="step-header">
+          <span class="step-num">4</span>
+          <span class="step-title">Capture the V3 baseline</span>
+          {% if has_baseline %}
+            <span class="badge-done">✓ baseline_v3.json exists</span>
+          {% else %}
+            <span class="badge-todo">Not captured</span>
+          {% endif %}
+        </div>
+        <div class="step-body">
+          <p>Rename the report from step 3 as the permanent baseline. Every Phase A–F change will compare against this.</p>
+          <p><code>mv reports/&lt;sha&gt;.json reports/baseline_v3.json</code> &nbsp;or&nbsp; <code>make baseline</code></p>
+          <p>Once this exists, run <code>card-capture harness run --baseline reports/baseline_v3.json</code> after any pipeline change to see deltas.</p>
+        </div>
+      </li>
+
+    </ul>
+  </body>
+</html>

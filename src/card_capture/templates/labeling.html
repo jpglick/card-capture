@@ -5,6 +5,9 @@
   <title>Label video {{ video_id }}</title>
   <style>
     body { font-family: system-ui, sans-serif; margin: 1rem; }
+    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
+    nav a { margin-right: 12px; color: #245; text-decoration: none; }
+    nav a:hover { text-decoration: underline; }
     table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
     th, td { border: 1px solid #ccc; padding: 0.4rem 0.6rem; font-size: 14px; }
     th { background: #f4f4f4; text-align: left; }
@@ -15,7 +18,14 @@
   </style>
 </head>
 <body>
-  <h1>Label video {{ video_id }}</h1>
+  <header>
+    <h1 style="margin:0">Label video {{ video_id }}</h1>
+    <nav>
+      <a href="/">Review UI</a>
+      <a href="/timeline">Timeline</a>
+      <a href="/setup">Setup</a>
+    </nav>
+  </header>
   <p><strong>Source:</strong> {{ video_path }}</p>
   <p><strong>Truth file:</strong> {{ truth_path }}</p>
 

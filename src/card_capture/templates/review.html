@@ -23,6 +23,10 @@
     <header>
       <h1>Card Capture Review</h1>
       <nav>
+        <a href="/">Review UI</a>
+        <a href="/timeline">Timeline</a>
+        <a href="/setup">Setup</a>
+        <span style="margin: 0 10px;">|</span>
         <a href="/?state=pending">Pending</a>
         <a href="/?state=accepted">Accepted</a>
         <a href="/?state=rejected">Rejected</a>
@@ -47,7 +51,6 @@
           <dt>Score</dt><dd>{{ "%.3f"|format(card.final_score) }}</dd>
           <dt>State</dt><dd>{{ card.review_state }}</dd>
           <dt>Video</dt><dd>{{ card.source_path }}</dd>
-          <dt>Time</dt><dd>{{ card.timestamp_ms }} ms</dd>
         </dl>
         <form method="post" action="/cards/{{ card.id }}/decision">
           <input type="text" name="notes" placeholder="Notes">
@@ -59,20 +62,5 @@
       <p>No cards match this filter.</p>
       {% endfor %}
     </main>
-    
-    {% if events %}
-    <section style="margin-top: 40px; padding: 20px; background: #eee; border-radius: 8px;">
-      <h2>Pipeline Events Timeline</h2>
-      <ul style="list-style: none; padding: 0;">
-        {% for event in events %}
-        <li style="margin-bottom: 8px; padding: 8px; background: white; border-left: 4px solid #245;">
-          <strong>{{ event.event_type }}</strong> at {{ event.timestamp_ms }} ms (Frame {{ event.frame_index }})
-          <br>
-          <small>{{ event.data|tojson }}</small>
-        </li>
-        {% endfor %}
-      </ul>
-    </section>
-    {% endif %}
   </body>
 </html>
