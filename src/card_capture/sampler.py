@@ -12,6 +12,7 @@ import torch
 
 from .models import FrameSample
 from .ingestion import _resolve_reader_backend
+from .presence.classifier import PresenceClassifier
 from .gpu_utils import (
     compute_variance_gpu,
     compute_sharpness_gpu,
@@ -286,6 +287,7 @@ class AdaptivePresenceSampler:
         max_candidates_per_window: int = 48,
         empty_pixel_threshold: float = 8.0,
         sobel_threshold: float = 50.0,
+        presence_classifier: Optional[PresenceClassifier] = None,
     ):
         self.video_path = str(video_path) if video_path is not None else None
         self.reader_backend = _resolve_reader_backend(reader_backend)
@@ -300,6 +302,7 @@ class AdaptivePresenceSampler:
         )
         self.empty_pixel_threshold = empty_pixel_threshold
         self.sobel_threshold = sobel_threshold
+        self.presence_classifier = presence_classifier
         self._scan_frames: list[_AdaptiveScanFrame] = []
         self.last_scan_frame_count = 0
         self.last_presence_window_count = 0
@@ -468,26 +471,32 @@ class AdaptivePresenceSampler:
             self.last_inter_window_gaps_frames = []
             return []
 
-        scores = self._score_records(records)
-        for record, score in zip(records, scores):
-            record.presence_score = score
-
-        threshold = self._otsu_threshold(scores)
-        
-        # Robust presence check:
-        # A frame is "active" if its presence score > threshold OR
-        # if it has very high edge density/sharpness (regardless of motion).
-        # This handles the "first card held still" case.
-        edge_vals = np.array([r.metrics["edge_density"] for r in records])
-        edge_median = float(np.median(edge_vals))
-        edge_mad = float(np.median(np.abs(edge_vals - edge_median)))
-        edge_threshold = edge_median + (2.5 * edge_mad * 1.4826) if edge_mad > 1e-6 else float('inf')
-        
-        active_flags = []
-        for idx, score in enumerate(scores):
-            is_otsu_active = score > threshold
-            is_feature_active = records[idx].metrics["edge_density"] > edge_threshold
-            active_flags.append(is_otsu_active or is_feature_active)
+        if self.presence_classifier is not None:
+            # Use the visual classifier on each scan-resolution proxy frame.
+            # Chunk to bound peak memory (sampler can hold thousands of frames).
+            scores: list[float] = []
+            chunk_size = 32
+            for start in range(0, len(records), chunk_size):
+                chunk_frames = [r.image for r in records[start:start + chunk_size]]
+                scores.extend(self.presence_classifier.score_batch(chunk_frames))
+            for record, score in zip(records, scores):
+                record.presence_score = score
+            active_flags = [s >= 0.5 for s in scores]
+        else:
+            # Fallback: existing composite z-score path
+            scores = self._score_records(records)
+            for record, score in zip(records, scores):
+                record.presence_score = score
+            threshold = self._otsu_threshold(scores)
+            edge_vals = np.array([r.metrics["edge_density"] for r in records])
+            edge_median = float(np.median(edge_vals))
+            edge_mad = float(np.median(np.abs(edge_vals - edge_median)))
+            edge_threshold = edge_median + (2.5 * edge_mad * 1.4826) if edge_mad > 1e-6 else float('inf')
+            active_flags = []
+            for idx, score in enumerate(scores):
+                is_otsu_active = score > threshold
+                is_feature_active = records[idx].metrics["edge_density"] > edge_threshold
+                active_flags.append(is_otsu_active or is_feature_active)
         windows: list[PresenceWindow] = []
 
         start_idx: Optional[int] = None
