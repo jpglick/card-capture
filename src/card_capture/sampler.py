@@ -472,6 +472,7 @@ class AdaptivePresenceSampler:
             self.last_inter_window_gaps_frames = []
             return []
 
+        threshold = 0.5  # default (classifier path); overwritten by Otsu in fallback
         if self.presence_weights_path is not None:
             # Lazy-load inside subprocess to avoid pickling MPS/CUDA tensors across
             # the multiprocessing boundary.

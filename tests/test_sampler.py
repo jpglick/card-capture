@@ -572,3 +572,85 @@ class TestAdaptivePresenceSampler:
         # Frames: 30, 33, ..., 87.
         assert min(frame_indices) >= 30
         assert max(frame_indices) <= 90
+
+
+# ---------------------------------------------------------------------------
+# AdaptivePresenceSampler — classifier path tests
+# ---------------------------------------------------------------------------
+
+class _FakeClassifier:
+    """Stub that scores any frame as 1.0 (card present) for N calls, then 0.0."""
+    def __init__(self, *, always_positive: bool = True):
+        self.always_positive = always_positive
+
+    def score_batch(self, frames):
+        return [1.0 if self.always_positive else 0.0] * len(frames)
+
+
+class TestAdaptivePresenceSamplerClassifierPath:
+
+    def _make_sampler(self, tmp_path, *, colored: bool = True):
+        frames = gray_frames(5, 128) + (colored_frames(10) if colored else gray_frames(10, 128)) + gray_frames(5, 128)
+        path = make_video(tmp_path, frames, fps=30.0)
+        return AdaptivePresenceSampler(
+            video_path=str(path),
+            scan_fps=10.0,
+            scan_width=160,
+            device="cpu",
+            min_presence_frames=2,
+        ), path
+
+    def test_sampler_is_picklable_with_weights_path(self, tmp_path):
+        """Sampler storing a weights_path (not a live model) must survive pickle round-trip."""
+        import pickle
+        sampler, _ = self._make_sampler(tmp_path)
+        sampler.presence_weights_path = Path("models/presence_classifier.pt")
+        # Should not raise — no live tensors to pickle
+        data = pickle.dumps(sampler)
+        restored = pickle.loads(data)
+        assert restored.presence_weights_path == sampler.presence_weights_path
+
+    def test_classifier_not_instantiated_at_init(self, tmp_path):
+        """PresenceClassifier must be lazily created, not at __init__ time."""
+        sampler, _ = self._make_sampler(tmp_path)
+        sampler.presence_weights_path = Path("models/presence_classifier.pt")
+        assert sampler._presence_classifier is None
+
+    def test_build_windows_with_classifier_sets_score_threshold(self, tmp_path):
+        """When classifier path is taken, last_score_threshold must be 0.5 (not UnboundLocalError)."""
+        sampler, _ = self._make_sampler(tmp_path)
+        sampler._scan_frames = sampler._scan_video(sampler.video_path)
+        sampler._presence_classifier = _FakeClassifier(always_positive=True)
+        sampler.presence_weights_path = Path("fake")  # truthy so classifier branch is taken
+        windows = sampler._build_windows(sampler._scan_frames)
+        # Must not raise; threshold must equal the classifier fixed value
+        assert sampler.last_score_threshold == 0.5
+
+    def test_build_windows_classifier_positive_produces_windows(self, tmp_path):
+        """Classifier scoring all frames 1.0 should produce at least one presence window."""
+        sampler, _ = self._make_sampler(tmp_path)
+        sampler._scan_frames = sampler._scan_video(sampler.video_path)
+        sampler._presence_classifier = _FakeClassifier(always_positive=True)
+        sampler.presence_weights_path = Path("fake")
+        windows = sampler._build_windows(sampler._scan_frames)
+        assert len(windows) > 0
+
+    def test_build_windows_classifier_all_negative_produces_no_presence_windows(self, tmp_path):
+        """Classifier scoring all frames 0.0 should produce no adaptive_presence windows.
+        The sampler may still emit an adaptive_fallback window — that's expected behaviour."""
+        sampler, _ = self._make_sampler(tmp_path)
+        sampler._scan_frames = sampler._scan_video(sampler.video_path)
+        sampler._presence_classifier = _FakeClassifier(always_positive=False)
+        sampler.presence_weights_path = Path("fake")
+        windows = sampler._build_windows(sampler._scan_frames)
+        presence_windows = [w for w in windows if "adaptive_presence" in w.detection_methods]
+        assert len(presence_windows) == 0
+
+    def test_fallback_path_still_works_without_weights(self, tmp_path):
+        """When presence_weights_path is None, Otsu fallback runs without error."""
+        sampler, _ = self._make_sampler(tmp_path)
+        sampler._scan_frames = sampler._scan_video(sampler.video_path)
+        assert sampler.presence_weights_path is None
+        windows = sampler._build_windows(sampler._scan_frames)
+        # Otsu path: result is a list (possibly empty on gray-only video)
+        assert isinstance(windows, list)
