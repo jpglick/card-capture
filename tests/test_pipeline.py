@@ -363,6 +363,22 @@ def test_resolve_session_tracks_merges_visually_identical_clusters():
     assert prepared[0].angle == "Front"
     assert prepared[1].angle == "Back"
 
+def test_pipeline_processing_options_has_tracker_backend():
+    from card_capture.pipeline import ProcessingOptions
+    from pathlib import Path
+    opts = ProcessingOptions(output_dir=Path("/tmp"))
+    assert opts.tracker_backend == "botsort"
+    assert opts.centroid_jump_ratio == 0.30
+    assert opts.centroid_jump_frames == 3
+
+
+def test_pipeline_processing_options_accepts_bytetrack():
+    from card_capture.pipeline import ProcessingOptions
+    from pathlib import Path
+    opts = ProcessingOptions(output_dir=Path("/tmp"), tracker_backend="bytetrack")
+    assert opts.tracker_backend == "bytetrack"
+
+
 def test_pyproject_declares_pipeline_v21_runtime_dependencies():
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     pyproject = pyproject_path.read_text(encoding="utf-8")

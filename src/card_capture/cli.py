@@ -183,6 +183,9 @@ def _run_process(args: argparse.Namespace) -> int:
             background_threshold=config.background_threshold,
             null_patience_frames=config.null_patience_frames,
             rotate_180=config.rotate_180,
+            tracker_backend=config.tracker_backend,
+            centroid_jump_ratio=config.centroid_jump_ratio,
+            centroid_jump_frames=config.centroid_jump_frames,
         ),
         debug_config=config.debug
     )

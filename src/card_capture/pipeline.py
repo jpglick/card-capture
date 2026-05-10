@@ -114,6 +114,9 @@ class ProcessingOptions:
     kornia_device: str = "auto"
     triage_keep_percentile: float = 0.05
     rotate_180: bool = True
+    tracker_backend: str = "botsort"
+    centroid_jump_ratio: float = 0.30
+    centroid_jump_frames: int = 3
 
 
 
@@ -244,10 +247,41 @@ class VideoProcessor:
         # so detections that briefly disappear within a session are re-associated rather
         # than spawning a new track.
         lost_track_buffer = max(options.null_patience_frames * 2, effective_session_gap_frames // 2)
-        self.tracker = ByteTrackAdapter(
-            min_track_length=adaptive_min_track_length,
-            lost_track_buffer=lost_track_buffer,
+
+        from .tracking import ByteTrackAdapter, BoTSORTAdapter, CentroidJumpDetector
+
+        if options.tracker_backend == "botsort":
+            try:
+                self.tracker = BoTSORTAdapter(
+                    min_track_length=adaptive_min_track_length,
+                    track_activation_threshold=tracker_t_high,
+                    lost_track_buffer=lost_track_buffer,
+                    minimum_matching_threshold=tracker_t_low,
+                )
+            except ImportError:
+                # boxmot not installed — fall back to ByteTrack with a warning
+                import warnings
+                warnings.warn(
+                    "boxmot not installed, falling back to ByteTrack. "
+                    "Install with: pip install 'card-capture[pipeline_v21]'",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                self.tracker = ByteTrackAdapter(
+                    min_track_length=adaptive_min_track_length,
+                    lost_track_buffer=lost_track_buffer,
+                )
+        else:
+            self.tracker = ByteTrackAdapter(
+                min_track_length=adaptive_min_track_length,
+                lost_track_buffer=lost_track_buffer,
+            )
+
+        centroid_detector = CentroidJumpDetector(
+            jump_ratio=options.centroid_jump_ratio,
+            jump_within_frames=options.centroid_jump_frames,
         )
+
         by_frame: dict[int, list[ScoredCandidate]] = {}
         for candidate in candidates:
             key = -1 if candidate.frame_index is None else int(candidate.frame_index)
@@ -256,7 +290,7 @@ class VideoProcessor:
         current_session_id = 0
         frame_to_session: dict[int, int] = {}
         last_frame_idx = -1
-        
+
         # We rely purely on the AdaptivePresenceSampler's temporal gaps to define sessions.
         # The sampler omits frames where the workspace is empty.
         # If the gap between two accepted frames is large, a physical swap occurred.
@@ -275,7 +309,49 @@ class VideoProcessor:
                 print(f"[Stage: Tracking] | Session: {current_session_id} | Action: Session Reset (Gap: {frame_index - last_frame_idx} frames)")
                 self.session_manager.active_session_id = None
                 self.tracker.reset()
+                centroid_detector.reset()
             last_frame_idx = frame_index
+
+            # --- Centroid jump split ---
+            primary_bbox = None
+            frame_candidates_for_centroid = by_frame.get(frame_index, [])
+            if frame_candidates_for_centroid:
+                best = max(frame_candidates_for_centroid, key=lambda c: c.score.total)
+                if best.corners:
+                    from .tracking.bytetrack_adapter import _xyxy_from_corners
+                    primary_bbox = _xyxy_from_corners(best.corners)
+            # frame_width: use a reasonable default; exact value from sampler telemetry if available
+            frame_width = getattr(options, '_frame_width_hint', 1280)
+            if centroid_detector.update(primary_bbox, frame_width):
+                self.tracker.finalize()
+                self.storage.add_pipeline_event(
+                    video_id=video_id,
+                    frame_index=frame_index,
+                    timestamp_ms=timestamp_ms,
+                    event_type="session_reset",
+                    data={"reason": "centroid_jump"}
+                )
+                self.tracker.reset()
+                centroid_detector.reset()
+                self.session_manager.active_session_id = None
+                current_session_id += 1
+
+            # --- ReID split (BoT-SORT pending_splits) ---
+            if hasattr(self.tracker, "pending_splits") and frame_index in self.tracker.pending_splits:
+                self.tracker.pending_splits = [
+                    fi for fi in self.tracker.pending_splits if fi != frame_index
+                ]
+                self.tracker.finalize()
+                self.storage.add_pipeline_event(
+                    video_id=video_id,
+                    frame_index=frame_index,
+                    timestamp_ms=timestamp_ms,
+                    event_type="session_reset",
+                    data={"reason": "reid_shift"}
+                )
+                self.tracker.reset()
+                self.session_manager.active_session_id = None
+                current_session_id += 1
 
             frame_candidates = by_frame.get(frame_index, [])
 
