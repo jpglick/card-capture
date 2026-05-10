@@ -238,7 +238,10 @@ def create_app(db_path: Path):
             request, "setup.html",
             {
                 "video_count": video_count,
-                "videos": [dict(r) for r in videos],
+                "videos": [
+                    {"id": r["id"], "name": Path(r["source_path"]).name}
+                    for r in videos
+                ],
                 "truth_count": truth_count,
                 "any_report": any_report,
                 "has_baseline": has_baseline,
