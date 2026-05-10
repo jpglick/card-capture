@@ -55,6 +55,11 @@ class _AdaptiveScanFrame:
     presence_score: float = 0.0
     delta_score: float = 0.0
 
+    @property
+    def sobel_score(self) -> float:
+        """Alias for metrics['edge_density'], used by valley-split logic (matches _ScanFrame API)."""
+        return self.metrics.get("edge_density", 0.0)
+
 
 @dataclass
 class _ScanFrame:
@@ -697,7 +702,7 @@ class AdaptivePresenceSampler:
 
     def _compute_valley_splits(self, scan_frames: list[_AdaptiveScanFrame]) -> list[int]:
         from .valley_splits import find_valley_splits
-        sobel_scores = [r.metrics.get("edge_density", 0.0) for r in scan_frames]
+        sobel_scores = [r.sobel_score for r in scan_frames]
         delta_scores = [r.delta_score for r in scan_frames]
         frame_indices = [r.frame_index for r in scan_frames]
         return find_valley_splits(

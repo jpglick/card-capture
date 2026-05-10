@@ -18,10 +18,11 @@ def test_adaptive_sampler_accepts_delta_spike_ratio():
 
 
 def test_scan_frame_has_delta_score_field():
-    """_ScanFrame must have a delta_score attribute."""
+    """_ScanFrame must have sobel_score and delta_score attributes."""
     from card_capture.sampler import _ScanFrame
     frame = _ScanFrame(frame_index=0, timestamp_ms=0.0, sobel_score=0.5, delta_score=0.0)
     assert frame.delta_score == 0.0
+    assert frame.sobel_score == 0.5
 
 
 def test_scan_frame_delta_score_computed_between_frames():
