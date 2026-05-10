@@ -12,7 +12,7 @@ import torch
 
 from .models import FrameSample
 from .ingestion import _resolve_reader_backend
-from .presence.classifier import PresenceClassifier
+from .presence.classifier import PresenceClassifier as _PresenceClassifier
 from .gpu_utils import (
     compute_variance_gpu,
     compute_sharpness_gpu,
@@ -287,7 +287,7 @@ class AdaptivePresenceSampler:
         max_candidates_per_window: int = 48,
         empty_pixel_threshold: float = 8.0,
         sobel_threshold: float = 50.0,
-        presence_classifier: Optional[PresenceClassifier] = None,
+        presence_weights_path: Optional[Path] = None,
     ):
         self.video_path = str(video_path) if video_path is not None else None
         self.reader_backend = _resolve_reader_backend(reader_backend)
@@ -302,7 +302,8 @@ class AdaptivePresenceSampler:
         )
         self.empty_pixel_threshold = empty_pixel_threshold
         self.sobel_threshold = sobel_threshold
-        self.presence_classifier = presence_classifier
+        self.presence_weights_path = presence_weights_path
+        self._presence_classifier: Optional[_PresenceClassifier] = None
         self._scan_frames: list[_AdaptiveScanFrame] = []
         self.last_scan_frame_count = 0
         self.last_presence_window_count = 0
@@ -471,14 +472,20 @@ class AdaptivePresenceSampler:
             self.last_inter_window_gaps_frames = []
             return []
 
-        if self.presence_classifier is not None:
+        if self.presence_weights_path is not None:
+            # Lazy-load inside subprocess to avoid pickling MPS/CUDA tensors across
+            # the multiprocessing boundary.
+            if self._presence_classifier is None:
+                self._presence_classifier = _PresenceClassifier(
+                    weights_path=self.presence_weights_path, device=self.device
+                )
             # Use the visual classifier on each scan-resolution proxy frame.
             # Chunk to bound peak memory (sampler can hold thousands of frames).
             scores: list[float] = []
             chunk_size = 32
             for start in range(0, len(records), chunk_size):
                 chunk_frames = [r.image for r in records[start:start + chunk_size]]
-                scores.extend(self.presence_classifier.score_batch(chunk_frames))
+                scores.extend(self._presence_classifier.score_batch(chunk_frames))
             for record, score in zip(records, scores):
                 record.presence_score = score
             active_flags = [s >= 0.5 for s in scores]

@@ -13,7 +13,6 @@ from .pipeline import ProcessingOptions, VideoProcessor
 from .sampler import AdaptivePresenceSampler, SyntheticSampler
 from .storage import Storage
 from .config import load_config, save_config
-from .presence.classifier import PresenceClassifier
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="card-capture")
@@ -110,12 +109,11 @@ def _run_process(args: argparse.Namespace) -> int:
             device=config.device,
         )
         weights = Path("models/presence_classifier.pt")
-        presence_clf = PresenceClassifier(weights_path=weights, device=config.device) if weights.exists() else None
         sampler = AdaptivePresenceSampler(
             video_path=args.video_path,
             reader_backend=config.reader_backend,
             device=config.device,
-            presence_classifier=presence_clf,
+            presence_weights_path=weights if weights.exists() else None,
         )
 
     processor = VideoProcessor(storage=storage, sampler=sampler, detector=detector)
