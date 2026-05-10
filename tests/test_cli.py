@@ -264,3 +264,31 @@ def test_pipeline_config_has_new_fields():
     assert cfg.centroid_jump_ratio == 0.30
     assert cfg.centroid_jump_frames == 3
     assert cfg.reid_distance_threshold == 0.6
+
+
+def test_sampler_sessions_diagnostic_output_contains_valley_splits(capsys, tmp_path):
+    """_run_sampler_sessions output must mention valley_splits."""
+    from card_capture.cli import _run_sampler_sessions
+    import argparse
+    from unittest.mock import patch, MagicMock
+
+    mock_sampler = MagicMock()
+    mock_sampler._scan_video.return_value = []
+    mock_sampler._build_windows.return_value = []
+    mock_sampler._last_source_fps = 30.0
+    mock_sampler.last_valley_splits = [15, 42]  # two valley splits
+    mock_sampler.last_scan_frame_count = 90     # fast scan frames
+
+    with patch("card_capture.cli.AdaptivePresenceSampler", return_value=mock_sampler):
+        args = argparse.Namespace(
+            video_path=tmp_path / "fake.mov",
+            config=tmp_path / "card_capture_config.json",
+            expected=None,
+        )
+        # Create a fake video file so the path.exists() check passes
+        (tmp_path / "fake.mov").touch()
+        _run_sampler_sessions(args)
+
+    out = capsys.readouterr().out
+    assert "valley_splits" in out or "valley splits" in out.lower()
+    assert "fast_scan" in out or "scan frames" in out.lower()
