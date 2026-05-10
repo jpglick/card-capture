@@ -15,10 +15,14 @@ class FrameReader(Protocol):
         ...
 
 
+import warnings
+
+
 def _open_capture(path: "str | Path") -> cv2.VideoCapture:
     """Open a VideoCapture with VideoToolbox hardware acceleration on macOS.
 
-    Falls back to software decode if the hardware-accelerated open fails.
+    Falls back to software decode if the hardware-accelerated open fails,
+    and emits a warning so the performance regression is visible.
     """
     cap = cv2.VideoCapture(
         str(path),
@@ -28,6 +32,12 @@ def _open_capture(path: "str | Path") -> cv2.VideoCapture:
     if cap.isOpened():
         return cap
     cap.release()
+    warnings.warn(
+        f"Hardware-accelerated video decode (VideoToolbox) unavailable for "
+        f"{path!r}; falling back to software decode. Performance will be reduced.",
+        RuntimeWarning,
+        stacklevel=2,
+    )
     return cv2.VideoCapture(str(path))
 
 
