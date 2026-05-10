@@ -18,6 +18,9 @@ def _build_model() -> nn.Module:
 
 
 def _resolve_device(prefer: str = "auto") -> torch.device:
+    _VALID = {"auto", "cpu", "mps", "cuda"}
+    if prefer not in _VALID:
+        raise ValueError(f"Invalid device {prefer!r}. Must be one of {_VALID}")
     if prefer == "cpu":
         return torch.device("cpu")
     if prefer == "mps":
