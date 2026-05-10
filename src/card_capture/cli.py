@@ -220,6 +220,12 @@ def _run_harness(args: argparse.Namespace) -> int:
 def _run_harness_run(args: argparse.Namespace) -> int:
     import json
     import subprocess
+    import sys
+    from pathlib import Path as _P
+    # Ensure project root is on sys.path so `tests` package is importable from the CLI
+    _project_root = str(_P(__file__).parent.parent.parent)
+    if _project_root not in sys.path:
+        sys.path.insert(0, _project_root)
     from tests.regression.harness import HarnessConfig, run_corpus
     from tests.regression.report import write_json_report, write_markdown_report, AggregateReport
     from tests.regression.metrics import VideoMetrics
