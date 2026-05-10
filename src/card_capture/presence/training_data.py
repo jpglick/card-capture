@@ -98,7 +98,7 @@ def export_dataset(
         if frame is None:
             continue
         corners_list = _json.loads(row["corners_json"]) if row["corners_json"] else []
-        if not corners_list:
+        if not corners_list or not corners_list[0]:
             continue
         corners_per_card = [corners_list] if isinstance(corners_list[0][0], (int, float)) else corners_list
         for crop in mine_positive_crops(frame, corners_per_card, target_size=target_size):
