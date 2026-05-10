@@ -88,11 +88,11 @@ class ByteTrackAdapter:
             confidence=np.array(confidences, dtype=np.float32),
             class_id=np.zeros(len(boxes), dtype=int),
         )
-        tracked = self._tracker.update_with_detections(det)
+        self._tracker.update_with_detections(det)
 
         out: List[_AdaptedDetection] = []
-        for i, track_id in enumerate(tracked.tracker_id):
-            if track_id is None:
+        for i, track_id in enumerate(det.tracker_id):
+            if track_id is None or int(track_id) == -1:
                 continue
             tid = int(track_id)
             cand = valid_candidates[i]

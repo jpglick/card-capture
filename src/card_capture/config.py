@@ -25,9 +25,9 @@ class PipelineConfig:
     telemetry_scope: str = "canonical"
     triage_keep_percentile: float = 0.05
     background_frames: int = 30
-    null_patience_frames: int = 20
+    null_patience_frames: int = 6
     background_threshold: float = 15.0
-    rotate_180: bool = True
+    rotate_180: bool = False
     debug: DebugConfig = field(default_factory=DebugConfig)
 
 def load_config(path: Path) -> PipelineConfig:

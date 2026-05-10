@@ -53,7 +53,17 @@ def test_adapter_finalize_returns_track_states():
 
 
 def test_adapter_skips_candidates_without_corners():
-    """Regression: index mismatch when some candidates lack corners."""
+    """Regression: index mismatch when some candidates lack corners.
+    
+    ByteTrack only tracks detections that pass confidence threshold.
+    When some detections are skipped:
+    - valid_candidates is smaller than raw input
+    - ByteTrack.update_with_detections() sets tracker_id in-place on det (which is valid_candidates size)
+    - We iterate det.tracker_id to match original indices correctly.
+    
+    This test verifies the fix: don't iterate over the filtered output; 
+    iterate over the original-indexed det.tracker_id instead.
+    """
     adapter = ByteTrackAdapter()
     cand_no_corners = ScoredCandidate(
         detection_id=99,

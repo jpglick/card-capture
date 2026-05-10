@@ -144,25 +144,26 @@ class HysteresisTracker:
         self.association_events.append(event)
 
     def detect_flip(self, track: TrackState, candidate: ScoredCandidate) -> bool:
-        if not candidate.corners or len(track.candidates) < 5:
+        if not candidate.corners or len(track.candidates) < 4:
             return False
 
-        # Look at the last 5 frames for a drop in area
-        recent = track.candidates[-5:]
+        # Look at the last 4 frames for a change in area
+        recent = track.candidates[-4:]
         areas = [_get_polygon_area(c.corners) for c in recent if c.corners]
-        if len(areas) < 5:
+        if not areas:
             return False
             
         # Find the maximum area in this recent window
         max_area = max(areas)
-        current_area = areas[-1]
+        current_area = _get_polygon_area(candidate.corners)
         
-        # Check if current area is significantly smaller than the max area
+        # Check if current area is significantly different from the max area
         if max_area > 0:
             area_drop = (max_area - current_area) / max_area
-            # A 30% drop from the local max indicates a potential flip
-            if area_drop > 0.30:
-                print(f"[Stage: Tracking] | Action: Flip Detected (Max Area: {max_area:.1f}, Drop: {area_drop:.1%})")
+            # A 30% drop from the local max indicates a potential flip or occlusion
+            # A 50% increase indicates we might have locked onto a larger background object
+            if area_drop > 0.30 or area_drop < -0.50:
+                print(f"[Stage: Tracking] | Action: Shape Change Detected (Max Area: {max_area:.1f}, New Area: {current_area:.1f}, Drop: {area_drop:.1%})")
                 return True
             
         return False

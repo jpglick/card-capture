@@ -1,0 +1,34 @@
+{
+  "git_sha": "ab6b6893",
+  "aggregates": {
+    "recall": 0.8333333333333334,
+    "phantom_rate": 0.4444444444444444,
+    "fb_accuracy": 1.0
+  },
+  "per_video": [
+    {
+      "video_id": "video_1",
+      "expected_cards": 6,
+      "detected_cards": 5,
+      "recall": 0.8333333333333334,
+      "phantom_count": 4,
+      "pipeline_output_count": 9,
+      "phantom_rate": 0.4444444444444444,
+      "fb_correct": 5,
+      "fb_total": 5,
+      "fb_accuracy": 1.0,
+      "id_switches": 0,
+      "sharpness_mean": 0.0,
+      "wall_clock_s": 144.335428458,
+      "peak_memory_mb": 4206.234375
+    }
+  ],
+  "dedup": {
+    "true_positives": 0,
+    "false_positives": 5,
+    "false_negatives": 0,
+    "precision": 0.0,
+    "recall": 1.0,
+    "f1": 0.0
+  }
+}

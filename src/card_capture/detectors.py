@@ -209,17 +209,19 @@ class CardcaptorUltralyticsDetector:
         detect_images: list[np.ndarray] = []
         scale_factors: list[tuple[float, float, int, int]] = []
         for frame in frames:
-            original_h, original_w = frame.image.shape[:2]
-            if original_w > self.detection_width:
+            packet_h, packet_w = frame.image.shape[:2]
+            if packet_w > self.detection_width:
                 scaled_w = self.detection_width
-                scaled_h = max(1, int(round(original_h * self.detection_width / original_w)))
+                scaled_h = max(1, int(round(packet_h * self.detection_width / packet_w)))
                 detect_image = cv2.resize(frame.image, (scaled_w, scaled_h))
-                scale_x = original_w / scaled_w
-                scale_y = original_h / scaled_h
             else:
                 detect_image = frame.image
-                scale_x = 1.0
-                scale_y = 1.0
+                scaled_w = packet_w
+                scaled_h = packet_h
+                
+            scale_x = frame.width / scaled_w
+            scale_y = frame.height / scaled_h
+            
             detect_images.append(detect_image)
             scale_factors.append((scale_x, scale_y, frame.width, frame.height))
 

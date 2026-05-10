@@ -8,6 +8,7 @@ src/card_capture/cropper.py
 src/card_capture/deduplicator.py
 src/card_capture/detectors.py
 src/card_capture/fuser.py
+src/card_capture/gpu_refinement.py
 src/card_capture/gpu_utils.py
 src/card_capture/ingestion.py
 src/card_capture/models.py
@@ -17,13 +18,17 @@ src/card_capture/sampler.py
 src/card_capture/scoring.py
 src/card_capture/selector.py
 src/card_capture/storage.py
+src/card_capture/timeline_data.py
 src/card_capture.egg-info/PKG-INFO
 src/card_capture.egg-info/SOURCES.txt
 src/card_capture.egg-info/dependency_links.txt
 src/card_capture.egg-info/entry_points.txt
 src/card_capture.egg-info/requires.txt
 src/card_capture.egg-info/top_level.txt
+src/card_capture/templates/labeling.html
 src/card_capture/templates/review.html
+src/card_capture/templates/setup.html
+src/card_capture/templates/timeline.html
 tests/test_cli.py
 tests/test_cropper.py
 tests/test_detectors.py
