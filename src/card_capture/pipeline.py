@@ -350,6 +350,7 @@ class VideoProcessor:
                     data={"reason": "reid_shift"}
                 )
                 self.tracker.reset()
+                centroid_detector.reset()
                 self.session_manager.active_session_id = None
                 current_session_id += 1
 
