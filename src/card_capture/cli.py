@@ -65,6 +65,20 @@ def build_parser() -> argparse.ArgumentParser:
     ds_export.add_argument("--video-id", type=int, default=None,
                            help="Limit to one video ID; default exports all videos")
 
+    # sampler subcommand
+    sampler_p = subparsers.add_parser("sampler", help="Sampler diagnostic utilities")
+    sampler_sub = sampler_p.add_subparsers(dest="sampler_command", required=True)
+    sampler_sessions = sampler_sub.add_parser(
+        "sessions",
+        help="Scan a video and report how many sessions the tracker would create",
+    )
+    sampler_sessions.add_argument("video_path", type=Path)
+    sampler_sessions.add_argument("--config", type=Path, default=Path("card_capture_config.json"))
+    sampler_sessions.add_argument(
+        "--expected", type=int, default=None,
+        help="Expected number of unique cards; shown in summary for comparison",
+    )
+
     # train subcommand
     train_p = subparsers.add_parser("train", help="Model training utilities")
     train_sub = train_p.add_subparsers(dest="train_command", required=True)
@@ -89,6 +103,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _run_harness(args)
     if args.command == "dataset":
         return _run_dataset(args)
+    if args.command == "sampler":
+        return _run_sampler(args)
     if args.command == "train":
         return _run_train(args)
     parser.error("unknown command")
@@ -334,6 +350,98 @@ def _run_dataset(args: argparse.Namespace) -> int:
     print(f"\nTotal: {total_pos} positives, {total_neg} negatives → {args.out_dir}")
     if total_pos < 200:
         print("⚠  Fewer than 200 positives. Consider processing more videos before training.")
+    return 0
+
+
+
+def _run_sampler(args: argparse.Namespace) -> int:
+    if args.sampler_command == "sessions":
+        return _run_sampler_sessions(args)
+    return 2
+
+
+def _run_sampler_sessions(args: argparse.Namespace) -> int:
+    """Scan a video with AdaptivePresenceSampler and report session split points.
+
+    This runs only the scan + window-build phases (no ML inference, no frame
+    decoding) so it completes in ~35 s instead of the full pipeline's 2+ min.
+    """
+    from .adaptive_gap import compute_session_gap_frames
+    from .config import load_config
+
+    config = load_config(args.config)
+    video_path = args.video_path.resolve()
+    if not video_path.exists():
+        print(f"Video not found: {video_path}", file=sys.stderr)
+        return 1
+
+    weights_path = Path("models/presence_classifier.pt")
+    sampler = AdaptivePresenceSampler(
+        presence_weights_path=weights_path if weights_path.exists() else None,
+        presence_threshold=0.5,
+    )
+
+    print(f"Scanning {video_path.name} …")
+    import time
+    t0 = time.time()
+    scan_frames = sampler._scan_video(video_path)
+    sampler._scan_frames = scan_frames
+    windows = sampler._build_windows(scan_frames)
+    elapsed = time.time() - t0
+    print(f"Scan + window build: {elapsed:.1f}s | {len(scan_frames)} scan frames | {len(windows)} presence windows")
+
+    if not windows:
+        print("No presence windows found — nothing would be tracked.")
+        return 0
+
+    # Compute inter-window gaps (same logic as pipeline.py)
+    inter_window_gaps: list[int] = []
+    for i in range(1, len(windows)):
+        gap = windows[i].start_frame - windows[i - 1].end_frame
+        if gap > 0:
+            inter_window_gaps.append(gap)
+
+    fps = getattr(sampler, "_last_source_fps", None) or 30.0
+    gap_dist = compute_session_gap_frames(inter_window_gaps, fps=fps)
+    effective_gap = gap_dist.recommended_gap_frames
+    null_patience = config.null_patience_frames
+    print(
+        f"\nGap stats  p50={gap_dist.p50_frames}f  p95={gap_dist.p95_frames}f  "
+        f"recommended={effective_gap}f ({effective_gap/fps:.1f}s)  "
+        f"null_patience={null_patience}f (was capping to {min(null_patience, effective_gap)}f before fix)"
+    )
+
+    # Simulate session boundaries
+    sessions: list[list[object]] = []
+    current_session: list[object] = []
+    for i, w in enumerate(windows):
+        if i == 0:
+            current_session.append(w)
+            continue
+        gap = w.start_frame - windows[i - 1].end_frame
+        if gap > effective_gap:
+            sessions.append(current_session)
+            current_session = [w]
+        else:
+            current_session.append(w)
+    if current_session:
+        sessions.append(current_session)
+
+    print(f"\nSessions predicted: {len(sessions)}")
+    for idx, sess in enumerate(sessions, 1):
+        first = sess[0]
+        last = sess[-1]
+        print(
+            f"  Session {idx}: windows={len(sess)}  "
+            f"frames {first.start_frame}–{last.end_frame}  "
+            f"({first.start_frame/fps:.1f}s – {last.end_frame/fps:.1f}s)"
+        )
+
+    if args.expected is not None:
+        diff = len(sessions) - args.expected
+        status = "✅ matches" if diff == 0 else (f"⚠️  +{diff} extra" if diff > 0 else f"⚠️  {diff} missing")
+        print(f"\nExpected {args.expected} unique cards → {status}")
+
     return 0
 
 
