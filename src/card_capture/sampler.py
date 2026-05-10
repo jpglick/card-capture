@@ -307,6 +307,7 @@ class AdaptivePresenceSampler:
         self.last_score_threshold: float = 0.0
         self.last_fallback_used = False
         self.last_inter_window_gaps_frames: list[int] = []
+        self.last_source_fps: float = 30.0
 
     @staticmethod
     def _robust_zscores(values: list[float]) -> list[float]:
@@ -415,6 +416,9 @@ class AdaptivePresenceSampler:
             effective_batch_size = 8
 
         raw_samples = sampler.sample(video_path, self.scan_fps)
+        cap = cv2.VideoCapture(str(video_path))
+        self.last_source_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        cap.release()
         records: list[_AdaptiveScanFrame] = []
         previous_gray: Optional[np.ndarray] = None
         batch_samples: list[FrameSample] = []

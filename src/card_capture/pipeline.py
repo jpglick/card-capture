@@ -217,7 +217,7 @@ class VideoProcessor:
         print(f"[Stage: ML Inference] | {t_ml:.2f}s | Detections: {len(detection_rows)}")
 
         inter_window_gaps = stats.sampler_telemetry.get("last_inter_window_gaps_frames") or []
-        video_fps = getattr(self.sampler, "scan_fps", 30.0)
+        video_fps = stats.sampler_telemetry.get("last_source_fps", 30.0)
         gap_dist = compute_session_gap_frames(
             inter_window_gaps,
             fps=video_fps,
@@ -1107,6 +1107,7 @@ def _producer_main(
             "last_score_threshold",
             "last_fallback_used",
             "last_inter_window_gaps_frames",
+            "last_source_fps",
         ):
             value = getattr(sampler, attr, None)
             if value is not None:
