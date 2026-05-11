@@ -221,6 +221,7 @@ class VideoProcessor:
 
         inter_window_gaps = stats.sampler_telemetry.get("last_inter_window_gaps_frames") or []
         video_fps = stats.sampler_telemetry.get("last_source_fps", 30.0)
+        valley_split_frames: set[int] = set(stats.sampler_telemetry.get("last_valley_splits") or [])
         gap_dist = compute_session_gap_frames(
             inter_window_gaps,
             fps=video_fps,
@@ -298,21 +299,24 @@ class VideoProcessor:
         tracker_events: list[dict] = []
         _tracked_instance_ids: set[str] = set()
         for frame_index, timestamp_ms, _ in stats.accepted_frame_presence:
-            if last_frame_idx != -1 and (frame_index - last_frame_idx) > effective_session_gap_frames:
-                self.tracker.finalize()
-                # ByteTrackAdapter does not have record_reset_event; events are logged via storage below
-                self.storage.add_pipeline_event(
-                    video_id=video_id,
-                    frame_index=frame_index,
-                    timestamp_ms=timestamp_ms,
-                    event_type="session_reset",
-                    data={"reason": "sampled_frame_gap", "gap_frames": frame_index - last_frame_idx}
-                )
-                print(f"[Stage: Tracking] | Session: {current_session_id} | Action: Session Reset (Gap: {frame_index - last_frame_idx} frames)")
-                self.session_manager.active_session_id = None
-                self.tracker.reset()
-                centroid_detector.reset()
-                _tracked_instance_ids.clear()
+            if last_frame_idx != -1:
+                gap = frame_index - last_frame_idx
+                valley_in_gap = any(last_frame_idx < vs <= frame_index for vs in valley_split_frames)
+                if gap > effective_session_gap_frames or valley_in_gap:
+                    reason = "sampled_frame_gap" if gap > effective_session_gap_frames else "valley_split"
+                    self.tracker.finalize()
+                    self.storage.add_pipeline_event(
+                        video_id=video_id,
+                        frame_index=frame_index,
+                        timestamp_ms=timestamp_ms,
+                        event_type="session_reset",
+                        data={"reason": reason, "gap_frames": gap}
+                    )
+                    print(f"[Stage: Tracking] | Session: {current_session_id} | Action: Session Reset ({reason}, gap={gap}f)")
+                    self.session_manager.active_session_id = None
+                    self.tracker.reset()
+                    centroid_detector.reset()
+                    _tracked_instance_ids.clear()
             last_frame_idx = frame_index
 
             # --- Centroid jump split ---
@@ -1209,6 +1213,7 @@ def _producer_main(
             "last_fallback_used",
             "last_inter_window_gaps_frames",
             "last_source_fps",
+            "last_valley_splits",
         ):
             value = getattr(sampler, attr, None)
             if value is not None:
