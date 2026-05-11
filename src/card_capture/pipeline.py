@@ -37,6 +37,9 @@ from .adaptive_gap import compute_session_gap_frames
 from .presence.background_novelty import BackgroundModel
 from .analysis.hard_case_capture import is_hard_case, capture_hard_case
 from .calibration.per_video_adaptive import AdaptiveThresholdComputer
+from .ecc_registration import register_frames_via_ecc
+from .fusion.foil_detection import detect_foil_card
+from .fusion.median_fusion import glare_rejection_fusion
 
 _SENTINEL = "__card_capture_queue_sentinel__"
 _QUEUE_POLL_INTERVAL_SECONDS = 0.1
@@ -700,6 +703,15 @@ class VideoProcessor:
             }
             best_canonical = max(canonical_entries, key=lambda e: e["candidate"].score.total)
             phash = best_canonical["visual_hash"]
+
+            # Stage 9: Foil-aware fusion of canonical frames
+            # Extract normalized frames from canonical entries for fusion
+            canonical_frames = [entry["normalized"] for entry in canonical_entries]
+            fused_canonical = _fuse_canonical_frames_with_foil_awareness(
+                canonical_frames,
+                foil_threshold=50.0,
+                use_ecc_registration=True
+            )
             candidate_hashes: list[str] = []
             for entry in canonical_entries:
                 h = str(entry["visual_hash"])
@@ -1456,6 +1468,51 @@ def _prune_empty_workspace_tracks(
             print(f"[Stage: NoveltyPrune] | dropped track {pt.track.instance_id} "
                   f"(median quad novelty={median:.3f} < {effective_threshold})")
     return kept
+
+
+def _fuse_canonical_frames_with_foil_awareness(
+    frames: list[np.ndarray],
+    foil_threshold: float = 50.0,
+    use_ecc_registration: bool = True,
+) -> Optional[np.ndarray]:
+    """Fuse canonical frames using foil detection to choose fusion strategy.
+
+    Algorithm:
+    1. Return None if no frames provided
+    2. If use_ecc_registration and len(frames) > 1: align frames via ECC
+    3. Detect if track is foil: is_foil = detect_foil_card(frames, threshold)
+    4. If foil: use glare_rejection_fusion (preserves shimmer)
+    5. Else: use standard median fusion
+    6. Return fused frame (uint8 BGR)
+
+    Args:
+        frames: List of aligned canonical frames (typically 4), each uint8 BGR
+        foil_threshold: Laplacian variance threshold for foil detection (default 50.0)
+        use_ecc_registration: Whether to register frames before fusion (default True)
+
+    Returns:
+        Fused uint8 BGR frame, or None if frames is empty
+    """
+    if not frames:
+        return None
+
+    # Register frames if requested and multiple frames provided
+    working_frames = frames
+    if use_ecc_registration and len(frames) > 1:
+        working_frames = register_frames_via_ecc(frames, reference_index=0)
+
+    # Detect if this is a foil card
+    is_foil = detect_foil_card(working_frames, threshold=foil_threshold)
+
+    # Choose fusion strategy based on foil detection
+    if is_foil:
+        # Use glare-rejection fusion for foil cards (preserves holographic shimmer)
+        fused = glare_rejection_fusion(working_frames)
+    else:
+        # Use standard median fusion for regular cards
+        fused = np.median(np.stack(working_frames, axis=0), axis=0).astype(np.uint8)
+
+    return fused
 
 
 def _select_canonical_entries(frame_entries: list[dict], deduplicator: VisualDeduplicator) -> list[dict]:

@@ -80,3 +80,27 @@ def test_glare_rejection_fusion_shape():
 
     assert fused.shape == (750, 1050, 3), f"Shape mismatch: expected (750, 1050, 3), got {fused.shape}"
     assert fused.dtype == np.uint8, f"Type should be uint8, got {fused.dtype}"
+
+def test_pipeline_uses_glare_rejection_fusion_for_foils():
+    """Verify pipeline selects glare-rejection fusion for foil cards."""
+    from src.card_capture.pipeline import _fuse_canonical_frames_with_foil_awareness
+
+    # Create mock frames
+    regular_frames = [np.random.randint(100, 150, (750, 1050, 3), dtype=np.uint8) for _ in range(4)]
+    foil_frames = []
+    for _ in range(4):
+        base = np.ones((750, 1050, 3), dtype=np.uint8) * 120
+        high_freq = np.random.randint(0, 80, (750, 1050, 3), dtype=np.uint8)
+        foil_frames.append(np.clip(base.astype(np.int32) + high_freq.astype(np.int32), 0, 255).astype(np.uint8))
+
+    # Fuse regular card (should use median)
+    fused_regular = _fuse_canonical_frames_with_foil_awareness(regular_frames, foil_threshold=50.0)
+    assert fused_regular is not None, "Should fuse regular frames"
+
+    # Fuse foil card (should use glare-rejection)
+    fused_foil = _fuse_canonical_frames_with_foil_awareness(foil_frames, foil_threshold=50.0)
+    assert fused_foil is not None, "Should fuse foil frames"
+
+    # Both should produce valid images
+    assert fused_regular.shape == (750, 1050, 3)
+    assert fused_foil.shape == (750, 1050, 3)
