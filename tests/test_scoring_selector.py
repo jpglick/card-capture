@@ -86,11 +86,12 @@ def test_quality_scorer_complexity_rewards_textured_image():
 
 
 def test_quality_scorer_has_six_components():
-    """Score components dict must contain all six keys after the rebalance."""
+    """Score components dict must contain all seven keys after the rebalance.
+    v4.1 adds border_purity to penalize occluded crops."""
     image = np.full((88, 63, 3), 128, dtype=np.uint8)
     scorer = QualityScorer(target_pixels=88 * 63)
     score = scorer.score(image, detection_confidence=1.0)
 
     assert set(score.components.keys()) == {
-        "sharpness", "glare", "aspect_ratio", "size", "complexity", "confidence"
+        "sharpness", "glare", "aspect_ratio", "size", "complexity", "border_purity", "confidence"
     }

@@ -37,14 +37,22 @@ class QualityScorer:
         # Grayscale std-dev rewards textured fronts over plain backs
         complexity = _clamp(float(gray.std()) / 80.0)
 
+        # Border purity: the outer ~3% ring should be relatively uniform (real
+        # cards have a clean border). A noisy border ring signals a hand/finger
+        # intruding into the rectified crop. We compare the border ring's
+        # std-dev to the interior std-dev; a clean border has ring_std much
+        # lower than interior_std, an occluded one does not.
+        border_purity = _border_purity_score(gray)
+
         confidence = _clamp(float(detection_confidence))
 
         total = (
-            sharpness * 0.30
-            + glare * 0.20
-            + aspect_ratio * 0.20
-            + size * 0.15
+            sharpness * 0.25
+            + glare * 0.15
+            + aspect_ratio * 0.15
+            + size * 0.10
             + complexity * 0.10
+            + border_purity * 0.20
             + confidence * 0.05
         )
         components = {
@@ -53,6 +61,31 @@ class QualityScorer:
             "aspect_ratio": round(aspect_ratio, 6),
             "size": round(size, 6),
             "complexity": round(complexity, 6),
+            "border_purity": round(border_purity, 6),
             "confidence": round(confidence, 6),
         }
         return QualityScore(total=round(total, 6), components=components)
+
+
+def _border_purity_score(gray: np.ndarray) -> float:
+    """Return [0, 1] where 1 = clean uniform border, 0 = noisy / occluded border.
+
+    Strategy: compare std-dev of the outer ~3% ring to std-dev of the inner
+    region. On a real card the border is a near-uniform white edge so ring
+    std-dev is small; if a finger or other texture has intruded, ring std-dev
+    spikes. Returns `1 - clamp(ring_std / max(interior_std, eps))`."""
+    h, w = gray.shape[:2]
+    bw = max(2, int(round(min(h, w) * 0.03)))
+    if h <= 2 * bw or w <= 2 * bw:
+        return 0.5  # crop too small to evaluate; neutral
+    ring_mask = np.ones((h, w), dtype=bool)
+    ring_mask[bw:h - bw, bw:w - bw] = False
+    ring_vals = gray[ring_mask]
+    interior_vals = gray[bw:h - bw, bw:w - bw].ravel()
+    if ring_vals.size == 0 or interior_vals.size == 0:
+        return 0.5
+    ring_std = float(ring_vals.std())
+    interior_std = float(interior_vals.std()) + 1e-3
+    # Clean cards: ring_std ≪ interior_std. Occluded: ring_std comparable or larger.
+    ratio = ring_std / interior_std
+    return _clamp(1.0 - min(1.0, ratio))
