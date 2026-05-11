@@ -104,3 +104,82 @@ class TestEmbeddingDistance:
 
         # Just verify it doesn't crash and returns a number
         assert isinstance(distance, (float, np.floating)), "Should return a float"
+
+
+class TestCrossVideoDedup:
+    """Test cross-video deduplication via embeddings and pHash."""
+
+    def test_cross_video_dedup_via_embeddings(self):
+        """Same card across videos detected via embedding distance.
+
+        Scenario: Two videos with the same physical card.
+        - pHash match (Hamming ≤ 22) → candidates
+        - Embeddings available and similar (distance < 0.5) → confirm same card
+        """
+        from card_capture.pipeline import _is_reid_duplicate
+        from card_capture.deduplicator import VisualDeduplicator
+
+        deduplicator = VisualDeduplicator()
+
+        # Create embeddings for the same physical card (low distance)
+        emb_card_video1 = np.array([1.0, 0.2, 0.1, 0.3, 0.4], dtype=np.float32)
+        emb_card_video2 = np.array([0.98, 0.21, 0.09, 0.31, 0.41], dtype=np.float32)
+
+        # Normalize
+        emb_card_video1 = emb_card_video1 / np.linalg.norm(emb_card_video1)
+        emb_card_video2 = emb_card_video2 / np.linalg.norm(emb_card_video2)
+
+        # Create a simple test image for pHash (both will have similar hashes)
+        test_img = np.ones((100, 100, 3), dtype=np.uint8) * 128
+        phash_1 = deduplicator.compute_phash(test_img)
+        phash_2 = deduplicator.compute_phash(test_img)
+
+        # Same image → identical pHash → Hamming distance = 0
+        ham_dist = deduplicator.hamming_distance(phash_1, phash_2)
+        assert ham_dist <= 22, "pHash should pass pre-filter"
+
+        # Call _is_reid_duplicate with embeddings
+        is_duplicate = _is_reid_duplicate(
+            phash_1,
+            phash_2,
+            emb_card_video1,
+            emb_card_video2,
+            deduplicator,
+        )
+
+        assert is_duplicate is True, "Same card with low embedding distance should be detected as duplicate"
+
+    def test_cross_video_dedup_avoids_false_positives(self):
+        """Different cards not deduped even with pHash collision.
+
+        Scenario: Two videos with different physical cards.
+        - pHash collision (could match) → candidates
+        - Embeddings available but dissimilar (distance > 0.5) → NOT same card
+        """
+        from card_capture.pipeline import _is_reid_duplicate
+        from card_capture.deduplicator import VisualDeduplicator
+
+        deduplicator = VisualDeduplicator()
+
+        # Create embeddings for different physical cards (high distance)
+        emb_card_a = np.array([1.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        emb_card_b = np.array([0.0, 1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+
+        # Normalize
+        emb_card_a = emb_card_a / np.linalg.norm(emb_card_a)
+        emb_card_b = emb_card_b / np.linalg.norm(emb_card_b)
+
+        # Create a simple test image for pHash (same → collision)
+        test_img = np.ones((100, 100, 3), dtype=np.uint8) * 128
+        phash = deduplicator.compute_phash(test_img)
+
+        # Call _is_reid_duplicate with different embeddings
+        is_duplicate = _is_reid_duplicate(
+            phash,
+            phash,
+            emb_card_a,
+            emb_card_b,
+            deduplicator,
+        )
+
+        assert is_duplicate is False, "Different cards with high embedding distance should NOT be marked as duplicate"

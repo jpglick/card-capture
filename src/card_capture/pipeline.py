@@ -1018,6 +1018,51 @@ def _compute_quality_weighted_score(prepared: _PreparedTrack, max_length: int) -
     return 0.3 * norm_length + 0.7 * mean_quality
 
 
+def _is_reid_duplicate(
+    phash_1: str,
+    phash_2: str,
+    embedding_1: Optional[np.ndarray],
+    embedding_2: Optional[np.ndarray],
+    deduplicator: VisualDeduplicator,
+) -> bool:
+    """Determine if two canonicals represent the same card across videos (cross-video dedup).
+
+    Uses a two-stage approach:
+    1. **pHash pre-filter (broad candidates, fast):** Hamming distance > 22 → definitely not same card.
+    2. **Embeddings as deciding metric (discriminative, view-invariant):**
+       - If embeddings available: use cosine distance < 0.5 for same-card classification.
+       - If embeddings unavailable: use stricter pHash threshold (≤15) for backward compat.
+
+    Args:
+        phash_1: pHash of first canonical (hex string).
+        phash_2: pHash of second canonical (hex string).
+        embedding_1: OSNet embedding of first canonical (shape [256,]) or None.
+        embedding_2: OSNet embedding of second canonical (shape [256,]) or None.
+        deduplicator: VisualDeduplicator instance for pHash distance computation.
+
+    Returns:
+        True if same card (duplicate), False otherwise.
+
+    Wave 3: Cross-video dedup via embedding distance, replacing pHash-only logic.
+    Backward compatible: falls back to stricter pHash threshold if embeddings unavailable.
+    """
+    from .identity.embedding_distance import embedding_same_card_score
+
+    # Stage 1: pHash pre-filter (broad candidates)
+    ham = deduplicator.hamming_distance(phash_1, phash_2)
+    if ham > 22:
+        # Hamming distance too large → definitely not same card
+        return False
+
+    # Stage 2: pHash is close or identical; use embeddings to decide
+    if embedding_1 is not None and embedding_2 is not None:
+        # Embeddings available: use cosine distance < 0.5 as deciding metric
+        return embedding_same_card_score(embedding_1, embedding_2, threshold=0.5)
+    else:
+        # Embeddings unavailable: fall back to stricter pHash threshold for backward compat
+        return ham <= 15
+
+
 def _resolve_session_tracks(
     prepared_tracks: list[_PreparedTrack],
     deduplicator: VisualDeduplicator,
