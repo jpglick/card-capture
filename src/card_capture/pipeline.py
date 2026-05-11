@@ -126,6 +126,7 @@ class NullStateDetector:
         self.frames = frames
         self.threshold = threshold
         self.background_model = None
+        self._bg_model_u8 = None
         self.frame_count = 0
 
     def warmup_batch(self, frames: list[np.ndarray]) -> None:
@@ -140,6 +141,10 @@ class NullStateDetector:
                     (self.background_model * self.frame_count + gray) / (self.frame_count + 1)
                 )
                 self.frame_count += 1
+        
+        if self.background_model is not None:
+            self._bg_model_u8 = self.background_model.astype(np.uint8)
+            self.frame_count = self.frames # FORCE ACTIVE
 
     def is_workspace_empty(self, frame: np.ndarray) -> bool:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
@@ -153,7 +158,10 @@ class NullStateDetector:
             self.frame_count += 1
             return False # Return False during warmup so we don't accidentally trigger resets
         
-        diff = cv2.absdiff(gray, self.background_model.astype(np.uint8))
+        if self._bg_model_u8 is None:
+             self._bg_model_u8 = self.background_model.astype(np.uint8)
+
+        diff = cv2.absdiff(gray, self._bg_model_u8)
         return float(np.mean(diff)) < self.threshold
 
 
@@ -985,7 +993,7 @@ def _run_pipeline_workers(
     detection_queue = ctx.Queue(maxsize=options.queue_size)
     error_queue = ctx.Queue(maxsize=8)
     stats_queue = ctx.Queue(maxsize=1)
-    background_proxies = getattr(sampler, "background_proxies", [])
+
     producer = ctx.Process(
         target=_producer_main,
         args=(
@@ -997,7 +1005,6 @@ def _run_pipeline_workers(
             options.empty_pixel_threshold,
             options.background_frames,
             options.background_threshold,
-            background_proxies,
             options.triage_keep_percentile,
             frame_queue,
             stats_queue,
@@ -1159,7 +1166,6 @@ def _producer_main(
     empty_pixel_threshold: float,
     background_frames: int,
     background_threshold: float,
-    background_proxies: list[np.ndarray],
     triage_keep_percentile: float,
     frame_queue,
     stats_queue,
@@ -1174,53 +1180,65 @@ def _producer_main(
         blur_threshold=blur_threshold,
     )
     null_detector = NullStateDetector(frames=background_frames, threshold=background_threshold)
-    if background_proxies:
-        null_detector.warmup_batch(background_proxies)
 
     try:
-        for frame in sampler.sample(Path(video_path), 0.0):
-            timer = PipelineTimer()
-            frame_count += 1
+        frames_iter = sampler.sample(Path(video_path), 0.0)
+        
+        # Manually trigger first iteration to ensure Pass 1 (Scan) runs in child process
+        # and populates background_proxies.
+        try:
+            first_frame = next(frames_iter)
             
-            # Workspace empty check (background subtraction)
-            is_empty = null_detector.is_workspace_empty(frame.image)
-            if is_empty:
-                continue
+            proxies = getattr(sampler, "background_proxies", [])
+            if proxies:
+                null_detector.warmup_batch(proxies)
 
-            accepted, metrics = triage.evaluate(frame.image)
-            timer.record("t_ingest")
+            # Process all frames from the iterator
+            import itertools
+            for frame in itertools.chain([first_frame], frames_iter):
+                timer = PipelineTimer()
+                frame_count += 1
+                
+                # Workspace empty check (background subtraction)
+                if null_detector.is_workspace_empty(frame.image):
+                    continue
 
-            if not accepted:
-                continue
+                accepted, metrics = triage.evaluate(frame.image)
+                timer.record("t_ingest")
 
-            accepted_frame_presence.append((frame.frame_index, frame.timestamp_ms, False))
-            accepted_frame_count += 1
-            t_ingest = timer.timings.get("t_ingest", 0.0)
-            t_io = 0.0
+                if not accepted:
+                    continue
 
-            # Resize to proxy for detection queue
-            h, w = frame.image.shape[:2]
-            scale = 640 / w
-            proxy_h = int(round(h * scale))
-            proxy_image = cv2.resize(frame.image, (640, proxy_h))
+                accepted_frame_presence.append((frame.frame_index, frame.timestamp_ms, False))
+                accepted_frame_count += 1
+                t_ingest = timer.timings.get("t_ingest", 0.0)
+                t_io = 0.0
 
-            _put_or_fail(
-                frame_queue,
-                _FrameEnvelope(
-                    frame_packet=FramePacket(
-                        frame_index=frame.frame_index,
-                        timestamp_ms=frame.timestamp_ms,
-                        image=proxy_image,
-                        width=frame.width,
-                        height=frame.height,
-                        triage_metrics={**metrics, "workspace_empty": 0.0},
-                        telemetry=PerformanceTelemetry(
-                            t_ingest=t_ingest,
-                            t_io=t_io,
+                # Resize to proxy for detection queue
+                h, w = frame.image.shape[:2]
+                scale = 640 / w
+                proxy_h = int(round(h * scale))
+                proxy_image = cv2.resize(frame.image, (640, proxy_h))
+
+                _put_or_fail(
+                    frame_queue,
+                    _FrameEnvelope(
+                        frame_packet=FramePacket(
+                            frame_index=frame.frame_index,
+                            timestamp_ms=frame.timestamp_ms,
+                            image=proxy_image,
+                            width=frame.width,
+                            height=frame.height,
+                            triage_metrics={**metrics, "workspace_empty": 0.0},
+                            telemetry=PerformanceTelemetry(
+                                t_ingest=t_ingest,
+                                t_io=t_io,
+                            ),
                         ),
                     ),
-                ),
-            )
+                )
+        except StopIteration:
+            pass
     except Exception as exc:
         _put_with_retry(
             error_queue,
