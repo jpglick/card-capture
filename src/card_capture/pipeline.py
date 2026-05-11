@@ -1129,6 +1129,7 @@ def _is_reid_duplicate(
 def _resolve_session_tracks(
     prepared_tracks: list[_PreparedTrack],
     deduplicator: VisualDeduplicator,
+    context: Optional[PipelineContext] = None,
 ) -> None:
     """For each session, label tracks using side_score (textiness) as primary sort.
 
@@ -1143,6 +1144,9 @@ def _resolve_session_tracks(
     Quality-weighted tie-breaker: When side_score is similar, composite score
     (0.6·normalized_length + 0.4·mean_quality_score) is used to prefer sharp
     short tracks over blurry long tracks.
+
+    If context is provided, records observed Hamming distances within tracks for
+    adaptive threshold computation.
     """
     from .identity.embedding_distance import embedding_same_card_score
 
@@ -1172,6 +1176,7 @@ def _resolve_session_tracks(
 
         for other_index, other_prepared in session_tracks[1:]:
             same_card = False
+            hamming_distance = None
 
             # Try embedding-based same-card detection (Wave 1/3)
             if (first_prepared.embedding is not None and
@@ -1187,8 +1192,12 @@ def _resolve_session_tracks(
                 first_hash = _track_representative_hash(first_prepared.track, deduplicator)
                 other_hash = _track_representative_hash(other_prepared.track, deduplicator)
                 if first_hash is not None and other_hash is not None:
-                    ham = deduplicator.hamming_distance(first_hash, other_hash)
-                    same_card = ham <= _SAME_CARD_HAMMING_MAX
+                    hamming_distance = deduplicator.hamming_distance(first_hash, other_hash)
+                    same_card = hamming_distance <= _SAME_CARD_HAMMING_MAX
+
+            # Record hamming distance for adaptive threshold computation
+            if hamming_distance is not None and context is not None:
+                context.add_intra_track_distance(float(hamming_distance))
 
             if same_card:
                 # Check textiness margin: if within threshold, admit as Back
@@ -1381,17 +1390,49 @@ def _prune_empty_workspace_tracks(
     prepared_tracks: list[_PreparedTrack],
     bg: BackgroundModel,
     threshold: float = 0.08,
+    context: Optional[PipelineContext] = None,
 ) -> list[_PreparedTrack]:
     """Drop tracks whose median-novelty across candidates falls below threshold.
 
     A real card's quad is always novel; an empty-stand track's quad is, by
     definition, the workspace itself. We use the median so a few sharp
     outliers (e.g., a card briefly entering frame) cannot rescue a track
-    that is overwhelmingly the empty workspace."""
+    that is overwhelmingly the empty workspace.
+
+    If context is provided, records observed novelty scores and uses adaptive
+    threshold if sufficient samples available.
+    """
     from .presence.background_novelty import quad_novelty
 
     frame_cache: dict[str, np.ndarray] = {}
     kept: list[_PreparedTrack] = []
+
+    # Collect all novelties for adaptive threshold computation
+    effective_threshold = threshold
+    if context is not None:
+        all_novelties: list[float] = []
+        for pt in prepared_tracks:
+            novelties: list[float] = []
+            for cand in pt.track.candidates:
+                if not cand.corners or cand.image_path is None:
+                    continue
+                img = frame_cache.get(cand.image_path)
+                if img is None:
+                    img = cv2.imread(cand.image_path)
+                    if img is None:
+                        continue
+                    frame_cache[cand.image_path] = img
+                novelty = quad_novelty(img, cand.corners, bg, color_space="lab", lab_weights=(1.0, 0.5, 0.5),
+                                       use_variance=True, k=2.0)
+                novelties.append(novelty)
+                all_novelties.append(novelty)
+                context.add_novelty_score(novelty)
+
+        # Use adaptive threshold if sufficient samples
+        if len(all_novelties) >= 10:
+            effective_threshold = context.get_adaptive_novelty_threshold(threshold)
+        frame_cache.clear()
+
     for pt in prepared_tracks:
         novelties: list[float] = []
         for cand in pt.track.candidates:
@@ -1409,11 +1450,11 @@ def _prune_empty_workspace_tracks(
             kept.append(pt)
             continue
         median = float(np.median(novelties))
-        if median >= threshold:
+        if median >= effective_threshold:
             kept.append(pt)
         else:
             print(f"[Stage: NoveltyPrune] | dropped track {pt.track.instance_id} "
-                  f"(median quad novelty={median:.3f} < {threshold})")
+                  f"(median quad novelty={median:.3f} < {effective_threshold})")
     return kept
 
 
