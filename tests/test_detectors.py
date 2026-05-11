@@ -9,6 +9,7 @@ from card_capture.detectors import (
     FakeCornerDetector,
     probe_torch_device_status,
 )
+from card_capture.pipeline import NullStateDetector
 from card_capture.models import DetectionPacket, FramePacket, FrameSample
 
 
@@ -255,3 +256,31 @@ def test_probe_torch_device_status_reports_mps_unavailable_state():
     assert status.mps_built is True
     assert status.mps_available is False
     assert status.reason == "mps_unavailable"
+
+def test_null_state_detector_warmup_batch():
+    detector = NullStateDetector(frames=5, threshold=10.0)
+    # 5 identical frames (BGR color)
+    frames = [np.full((100, 100, 3), 128, dtype=np.uint8) for _ in range(5)]
+    detector.warmup_batch(frames)
+    
+    assert detector.background_model is not None
+    assert detector.frame_count == 5
+    # Testing a frame that is identical to background
+    test_frame = np.full((100, 100, 3), 128, dtype=np.uint8)
+    assert detector.is_workspace_empty(test_frame) is True
+    # Testing a frame that is very different
+    test_frame_diff = np.full((100, 100, 3), 200, dtype=np.uint8)
+    assert detector.is_workspace_empty(test_frame_diff) is False
+
+def test_null_state_detector_sequential_warmup():
+    detector = NullStateDetector(frames=3, threshold=10.0)
+    frame = np.full((100, 100, 3), 128, dtype=np.uint8)
+    
+    # During warmup, it should return False
+    assert detector.is_workspace_empty(frame) is False # frame_count 1
+    assert detector.is_workspace_empty(frame) is False # frame_count 2
+    assert detector.is_workspace_empty(frame) is False # frame_count 3
+    
+    # Now it should be warmed up
+    assert detector.frame_count == 3
+    assert detector.is_workspace_empty(frame) is True

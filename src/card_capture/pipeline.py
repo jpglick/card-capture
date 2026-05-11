@@ -128,8 +128,21 @@ class NullStateDetector:
         self.background_model = None
         self.frame_count = 0
 
+    def warmup_batch(self, frames: list[np.ndarray]) -> None:
+        """Initialize background model from a batch of frames."""
+        for frame in frames:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
+            if self.background_model is None:
+                self.background_model = gray.astype(np.float32)
+                self.frame_count = 1
+            else:
+                self.background_model = (
+                    (self.background_model * self.frame_count + gray) / (self.frame_count + 1)
+                )
+                self.frame_count += 1
+
     def is_workspace_empty(self, frame: np.ndarray) -> bool:
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
         if self.background_model is None:
             self.background_model = np.zeros_like(gray, dtype=np.float32)
 
