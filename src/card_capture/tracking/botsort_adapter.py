@@ -10,10 +10,16 @@ from .bytetrack_adapter import _AdaptedDetection, _xyxy_from_corners
 
 
 def _import_botsort():
-    """Deferred import so module is importable without boxmot installed."""
+    """Deferred import. Tolerates the boxmot v0.17+ rename (`BotSort`) and
+    the legacy `BoTSORT` export. Returns the class object."""
     try:
-        from boxmot import BoTSORT
-        return BoTSORT
+        from boxmot import BoTSORT as _Klass  # legacy (boxmot ≤ 0.16)
+        return _Klass
+    except ImportError:
+        pass
+    try:
+        from boxmot.trackers.botsort.botsort import BotSort as _Klass  # boxmot ≥ 0.17
+        return _Klass
     except ImportError as exc:
         raise ImportError(
             "BoT-SORT backend requires the 'boxmot' package. "

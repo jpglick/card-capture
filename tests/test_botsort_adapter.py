@@ -122,3 +122,11 @@ def test_reset_clears_state(adapter):
 def test_finalized_tracks_returns_list(adapter):
     result = adapter.finalized_tracks()
     assert isinstance(result, list)
+
+
+def test_import_botsort_resolves_new_or_old_api():
+    """The adapter must import BoT-SORT regardless of boxmot major version."""
+    from card_capture.tracking.botsort_adapter import _import_botsort
+    klass = _import_botsort()
+    # Class name varies across versions: 'BoTSORT' (≤0.16) or 'BotSort' (≥0.17).
+    assert klass.__name__ in {"BoTSORT", "BotSort"}, klass.__name__
