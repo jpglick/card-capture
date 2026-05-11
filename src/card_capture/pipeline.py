@@ -110,6 +110,7 @@ class _PreparedTrack:
     side_score: float
     appearance_vector: np.ndarray
     canonical_detection_ids: set[int]
+    embedding: Optional[np.ndarray] = None
     duplicate_track_index: Optional[int] = None
 
     @property
@@ -649,7 +650,15 @@ class VideoProcessor:
                 # Apply 180-rotation check for hashing as well
                 rotated = cv2.rotate(entry["normalized"], cv2.ROTATE_180)
                 candidate_hashes.append(deduplicator.compute_phash(rotated))
-            
+
+            # Extract OSNet embedding from best canonical candidate (Wave 1 ReID)
+            embedding = None
+            best_candidate = best_canonical["candidate"]
+            if hasattr(best_candidate, "reid_embedding") and best_candidate.reid_embedding is not None:
+                embedding = best_candidate.reid_embedding
+            elif hasattr(track, "reid_embedding") and track.reid_embedding is not None:
+                embedding = track.reid_embedding
+
             first_frame_index = (
                 -1 if track.candidates[0].frame_index is None else int(track.candidates[0].frame_index)
             )
@@ -666,6 +675,7 @@ class VideoProcessor:
                     side_score=_side_textiness_score(best_canonical["normalized"]),
                     appearance_vector=_appearance_vector(best_canonical["normalized"]),
                     canonical_detection_ids=canonical_detection_ids,
+                    embedding=embedding,
                 )
             )
 
@@ -1015,8 +1025,9 @@ def _resolve_session_tracks(
     """For each session, label tracks using side_score (textiness) as primary sort.
 
     High textiness (≥0.5) tracks are Front (image-rich sides). Low textiness
-    tracks may be promoted to Back if they represent the same physical card
-    (pHash Hamming distance ≤ _SAME_CARD_HAMMING_MAX). Otherwise both remain Fronts.
+    tracks may be promoted to Back if they represent the same physical card.
+    Uses OSNet cosine embeddings for same-card detection (Wave 3), with fallback
+    to pHash Hamming distance if embeddings unavailable (backward compat).
 
     If textiness margin is within _SESSION_TEXTINESS_MARGIN, the lower-textiness
     track is admitted as Back even if it would normally be its own Front.
@@ -1025,6 +1036,8 @@ def _resolve_session_tracks(
     (0.6·normalized_length + 0.4·mean_quality_score) is used to prefer sharp
     short tracks over blurry long tracks.
     """
+    from .identity.embedding_distance import embedding_same_card_score
+
     by_session: dict[int, list[tuple[int, _PreparedTrack]]] = {}
     for track_index, prepared in enumerate(prepared_tracks):
         by_session.setdefault(prepared.session_id, []).append((track_index, prepared))
@@ -1048,14 +1061,27 @@ def _resolve_session_tracks(
         first_index, first_prepared = session_tracks[0]
         first_prepared.duplicate_track_index = None
         first_prepared.angle = "Front"
-        first_hash = _track_representative_hash(first_prepared.track, deduplicator)
 
         for other_index, other_prepared in session_tracks[1:]:
-            other_hash = _track_representative_hash(other_prepared.track, deduplicator)
             same_card = False
-            if first_hash is not None and other_hash is not None:
-                ham = deduplicator.hamming_distance(first_hash, other_hash)
-                same_card = ham <= _SAME_CARD_HAMMING_MAX
+
+            # Try embedding-based same-card detection (Wave 1/3)
+            if (first_prepared.embedding is not None and
+                other_prepared.embedding is not None):
+                # Use OSNet embeddings with threshold 0.5
+                same_card = embedding_same_card_score(
+                    first_prepared.embedding,
+                    other_prepared.embedding,
+                    threshold=0.5
+                )
+            else:
+                # Fallback to pHash if embeddings unavailable
+                first_hash = _track_representative_hash(first_prepared.track, deduplicator)
+                other_hash = _track_representative_hash(other_prepared.track, deduplicator)
+                if first_hash is not None and other_hash is not None:
+                    ham = deduplicator.hamming_distance(first_hash, other_hash)
+                    same_card = ham <= _SAME_CARD_HAMMING_MAX
+
             if same_card:
                 # Check textiness margin: if within threshold, admit as Back
                 textiness_margin = first_prepared.side_score - other_prepared.side_score
@@ -1125,7 +1151,8 @@ def _filter_candidates_by_novelty(
                 kept.append(cand)  # cannot evaluate; let downstream stages decide
                 continue
             frame_cache[cand.image_path] = img
-        novelty = quad_novelty(img, cand.corners, bg, color_space="lab", lab_weights=(1.0, 0.5, 0.5))
+        novelty = quad_novelty(img, cand.corners, bg, color_space="lab", lab_weights=(1.0, 0.5, 0.5),
+                               use_variance=True, k=2.0)
         if novelty >= threshold:
             kept.append(cand)
     return kept
@@ -1157,7 +1184,8 @@ def _prune_empty_workspace_tracks(
                 if img is None:
                     continue
                 frame_cache[cand.image_path] = img
-            novelties.append(quad_novelty(img, cand.corners, bg, color_space="lab", lab_weights=(1.0, 0.5, 0.5)))
+            novelties.append(quad_novelty(img, cand.corners, bg, color_space="lab", lab_weights=(1.0, 0.5, 0.5),
+                                          use_variance=True, k=2.0))
         if not novelties:
             kept.append(pt)
             continue
