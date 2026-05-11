@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from card_capture._warnings import install as _install_warning_filters
+_install_warning_filters()
+
 import os
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 
