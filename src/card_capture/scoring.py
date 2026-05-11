@@ -44,6 +44,10 @@ class QualityScorer:
         # lower than interior_std, an occluded one does not.
         border_purity = _border_purity_score(gray)
 
+        # Spatial glare: largest saturated blob via connected-component analysis.
+        # Distinguishes scattered specular reflections from large blowout regions.
+        spatial_glare = _spatial_glare_score(image)
+
         confidence = _clamp(float(detection_confidence))
 
         total = (
@@ -53,7 +57,8 @@ class QualityScorer:
             + size * 0.10
             + complexity * 0.10
             + border_purity * 0.20
-            + confidence * 0.05
+            + spatial_glare * 0.03
+            + confidence * 0.02
         )
         components = {
             "sharpness": round(sharpness, 6),
@@ -62,9 +67,61 @@ class QualityScorer:
             "size": round(size, 6),
             "complexity": round(complexity, 6),
             "border_purity": round(border_purity, 6),
+            "spatial_glare": round(spatial_glare, 6),
             "confidence": round(confidence, 6),
         }
         return QualityScore(total=round(total, 6), components=components)
+
+
+def _spatial_glare_score(image: np.ndarray) -> float:
+    """Return [0, 1] where 1 = no glare, 0 = severe glare (large saturated blob).
+
+    Strategy: use connected-component analysis on saturated pixels (V > 240 in HSV)
+    to find the largest contiguous blob. Normalize by frame area and clip to [0, 1].
+
+    Formula:
+    - blob_fraction = largest_blob_area / frame_area
+    - score = clip(1.0 - blob_fraction × 10, 0, 1)
+
+    Examples:
+    - blob_fraction=0 → score=1.0 (no glare)
+    - blob_fraction=0.1 → score~0.0 (severe glare: 10% of frame is saturated blob)
+    """
+    h, w = image.shape[:2]
+    frame_area = h * w
+
+    # Convert to HSV and extract V channel
+    if image.ndim == 3:
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        v_channel = hsv[:, :, 2]
+    else:
+        v_channel = image
+
+    # Create binary mask of saturated pixels (V > 240)
+    saturated_mask = (v_channel > 240).astype(np.uint8)
+
+    # Use connected components with stats to find all blobs
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
+        saturated_mask, connectivity=8
+    )
+
+    if num_labels <= 1:
+        # No saturated pixels (label 0 is background)
+        return 1.0
+
+    # stats[:, cv2.CC_STAT_AREA] gives area of each component
+    # Ignore label 0 (background)
+    areas = stats[1:, cv2.CC_STAT_AREA]
+    largest_blob_area = float(areas.max())
+
+    # Normalize: blob_fraction = largest_area / frame_area
+    blob_fraction = largest_blob_area / frame_area
+
+    # Score: clip(1.0 - blob_fraction × 10, 0, 1)
+    # - blob_fraction ≤ 0.1 → score ≈ 0.0
+    # - blob_fraction=0 → score=1.0
+    score = _clamp(1.0 - blob_fraction * 10.0, low=0.0, high=1.0)
+    return score
 
 
 def _border_purity_score(gray: np.ndarray) -> float:

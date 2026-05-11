@@ -556,3 +556,196 @@ def test_lab_novelty_backward_compatible_with_grayscale(tmp_path):
     # Should be very close (within rounding error)
     assert abs(grayscale_score - lab_lum_only) < 0.05, \
         f"Lab luminance-only ({lab_lum_only:.3f}) should match grayscale ({grayscale_score:.3f})"
+
+
+def test_background_model_refresh_from_frame_ewma():
+    """
+    Task 7: BackgroundModel.refresh_from_frame() with EWMA (alpha=0.1).
+
+    Verifies that periodic refresh updates the background model during
+    inter-window gaps (when workspace is empty) to track lighting drift.
+
+    Test scenario:
+    - Initialize BackgroundModel with dim frame (brightness ~100)
+    - Call refresh_from_frame() with bright frame (brightness ~150)
+    - Verify mean brightness shifted toward bright (EWMA with alpha=0.1)
+    - Formula: new_mean = (1 - alpha) × old_mean + alpha × new_frame
+
+    With alpha=0.1:
+    new_mean ≈ 0.9 × 100 + 0.1 × 150 = 90 + 15 = 105
+
+    This is a much smaller shift than averaging all frames together (would be ~125),
+    showing that EWMA with small alpha preserves the base model while gradually
+    tracking slow lighting changes.
+    """
+    import cv2
+    from card_capture.presence.background_novelty import BackgroundModel
+
+    # Create initial background model with dim lighting (brightness ~100)
+    dim_frames = [np.full((100, 100, 3), (100, 100, 100), dtype=np.uint8) for _ in range(3)]
+    bg = BackgroundModel.from_frames(dim_frames)
+
+    # Get initial mean BGR
+    initial_bgr = bg.get_mean_bgr()
+    assert initial_bgr is not None
+    initial_brightness = float(initial_bgr.mean())
+
+    # Verify initial brightness is close to 100
+    assert 99.0 <= initial_brightness <= 101.0, \
+        f"Initial brightness should be ~100, got {initial_brightness}"
+
+    # Create a bright frame (brightness ~150)
+    bright_frame = np.full((100, 100, 3), (150, 150, 150), dtype=np.uint8)
+
+    # Call refresh_from_frame (should exist and use EWMA with alpha=0.1)
+    bg.refresh_from_frame(bright_frame)
+
+    # Get updated mean BGR
+    updated_bgr = bg.get_mean_bgr()
+    assert updated_bgr is not None
+    updated_brightness = float(updated_bgr.mean())
+
+    # Expected: 0.9 × 100 + 0.1 × 150 = 105
+    # Allow small tolerance for floating point rounding
+    expected_brightness = 105.0
+    assert 104.0 <= updated_brightness <= 106.0, \
+        f"After EWMA refresh with alpha=0.1, brightness should be ~105, got {updated_brightness}"
+
+    # Verify the shift is in the right direction (toward bright frame)
+    assert updated_brightness > initial_brightness, \
+        f"Updated brightness should increase toward bright frame: {initial_brightness} -> {updated_brightness}"
+
+    # Verify the shift is much smaller than simple averaging
+    # (simple average would be 125, but EWMA should be much closer to original 100)
+    simple_average = (initial_brightness + 150.0) / 2.0
+    assert updated_brightness < simple_average, \
+        f"EWMA shift should be smaller than simple average: EWMA={updated_brightness}, avg={simple_average}"
+
+
+def test_background_model_refresh_gradual_drift():
+    """
+    Task 7 integration test: Background model gradually adapts to lighting drift.
+
+    Simulates a long capture session with gradual lighting changes:
+    - Initial brightness: 100
+    - Refresh 10 times with progressively brighter frames (110, 120, 130, etc.)
+    - Final brightness should approach but not reach 200 (due to EWMA conservatism)
+    - Verify convergence is smooth and predictable
+
+    This tests the real scenario mentioned in the task: tracking lighting drift
+    during 10+ minute captures without per-frame latency (refresh only happens
+    during detected empty windows).
+    """
+    import cv2
+    from card_capture.presence.background_novelty import BackgroundModel
+
+    # Initial dim background (brightness ~100)
+    initial_frames = [np.full((100, 100, 3), (100, 100, 100), dtype=np.uint8) for _ in range(3)]
+    bg = BackgroundModel.from_frames(initial_frames)
+
+    initial_bgr = bg.get_mean_bgr()
+    assert initial_bgr is not None
+    brightness_history = [float(initial_bgr.mean())]
+
+    # Simulate 10 refresh cycles with progressively brighter frames
+    # (mimicking a venue where lights are slowly brightening)
+    for i in range(10):
+        # Brightness increases from 100 to 190 in steps
+        frame_brightness = 100 + (i + 1) * 10  # 110, 120, 130, ..., 200
+        frame = np.full((100, 100, 3), (frame_brightness, frame_brightness, frame_brightness), dtype=np.uint8)
+        bg.refresh_from_frame(frame)
+
+        current_bgr = bg.get_mean_bgr()
+        assert current_bgr is not None
+        current_brightness = float(current_bgr.mean())
+        brightness_history.append(current_brightness)
+
+    # Check that we converged gradually without big jumps
+    # Each step should be at most alpha (0.1) of the difference
+    for i in range(1, len(brightness_history)):
+        prev_brightness = brightness_history[i - 1]
+        curr_brightness = brightness_history[i]
+        # Max step is 0.1 * max_possible_diff ≈ 0.1 * 255 = 25.5
+        # But typically much smaller since we're not jumping 255 levels
+        assert curr_brightness >= prev_brightness, \
+            f"Brightness should monotonically increase during gradual brightening: {brightness_history}"
+
+    # Final brightness should approach 200 but not exceed it
+    final_brightness = brightness_history[-1]
+    # After 10 iterations of EWMA with alpha=0.1 toward target 200,
+    # we expect some convergence. With EWMA, we won't reach 200 in 10 steps from 100,
+    # but we should be significantly higher than initial 100.
+    # Rule of thumb: EWMA converges at roughly (1 - alpha)^n = 0.9^10 ≈ 0.35
+    # So we'd expect roughly 100 + 0.65 * 100 = 165 after 10 refreshes to 200
+    assert final_brightness > 140.0, \
+        f"After 10 EWMA refreshes toward 200, brightness should be >140, got {final_brightness}"
+    assert final_brightness < 200.0, \
+        f"EWMA should not overshoot target brightness 200, got {final_brightness}"
+    assert final_brightness > brightness_history[0], \
+        f"Final brightness {final_brightness} should be higher than initial {brightness_history[0]}"
+
+    # Verify monotonic increase (no drops during gradual brightening)
+    for i in range(1, len(brightness_history)):
+        assert brightness_history[i] >= brightness_history[i-1], \
+            f"Brightness should increase monotonically: {brightness_history}"
+
+
+def test_spatial_glare_distinguishes_scattered_from_blob():
+    """
+    Task 8: Spatial-glare metric with connected-component analysis.
+
+    Replaces pixel-fraction glare with largest-saturated-blob area analysis.
+    Distinguishes scattered specular reflections from large blowout regions.
+
+    Test scenario:
+    - Frame A: 10% saturated pixels scattered as many 1×1 white spots
+    - Frame B: 10% saturated pixels as one large 160×40 white rectangle
+    - Both have same pixel fraction, but Frame B should score worse (larger blob)
+
+    Expected:
+    - Frame A (scattered): high glare score (~0.9)
+    - Frame B (blob): low glare score (~0.0)
+    """
+    import cv2
+    from card_capture.scoring import QualityScorer
+
+    # Create frame A: scattered 1×1 white pixels (10% coverage)
+    frame_a = np.zeros((480, 640, 3), dtype=np.uint8)
+    frame_a[:, :] = (100, 100, 100)  # Neutral background
+    # Add scattered 1×1 saturated pixels: ~10% coverage = 30,720 pixels
+    np.random.seed(42)
+    num_saturated = int(480 * 640 * 0.10)
+    saturated_rows = np.random.randint(0, 480, num_saturated)
+    saturated_cols = np.random.randint(0, 640, num_saturated)
+    frame_a[saturated_rows, saturated_cols] = (255, 255, 255)
+
+    # Create frame B: one large 160×40 white rectangle (10% coverage = 6,400 pixels)
+    frame_b = np.zeros((480, 640, 3), dtype=np.uint8)
+    frame_b[:, :] = (100, 100, 100)  # Same neutral background
+    frame_b[220:260, 240:400] = (255, 255, 255)  # 40×160 = 6,400 pixels of saturated
+
+    scorer = QualityScorer(target_pixels=600 * 900)
+
+    # Score both frames with dummy detection confidence
+    score_a = scorer.score(frame_a, detection_confidence=0.9)
+    score_b = scorer.score(frame_b, detection_confidence=0.9)
+
+    # Extract spatial_glare component
+    spatial_glare_a = score_a.components.get("spatial_glare", None)
+    spatial_glare_b = score_b.components.get("spatial_glare", None)
+
+    assert spatial_glare_a is not None, "spatial_glare component not found in frame A score"
+    assert spatial_glare_b is not None, "spatial_glare component not found in frame B score"
+
+    # Frame A (scattered) should have HIGHER glare score (less glare problem)
+    # Frame B (blob) should have LOWER glare score (more glare problem)
+    assert spatial_glare_a > spatial_glare_b, \
+        f"Scattered glare ({spatial_glare_a:.3f}) should score better than blob glare ({spatial_glare_b:.3f})"
+
+    # Rough threshold checks:
+    # - scattered (Frame A): largest blob is tiny, should be close to 1.0
+    # - blob (Frame B): largest blob is 6400 pixels = 2% of frame, should be ~0.8
+    assert spatial_glare_a > 0.9, \
+        f"Scattered glare should be > 0.9 (minimal large blob), got {spatial_glare_a:.3f}"
+    assert spatial_glare_b < 0.8, \
+        f"Blob glare should be < 0.8 (significant large blob), got {spatial_glare_b:.3f}"

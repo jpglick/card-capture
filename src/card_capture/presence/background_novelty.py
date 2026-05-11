@@ -30,6 +30,7 @@ class BackgroundModel:
     for the alternate build path used by the main process after detection)."""
     gray: np.ndarray  # float32 mean, shape (H, W)
     bgr: Optional[np.ndarray] = None  # float32 mean BGR, shape (H, W, 3), for Lab conversion
+    alpha: float = 0.1  # EWMA smoothing factor for refresh_from_frame()
 
     @classmethod
     def from_frames(cls, frames: Sequence[np.ndarray]) -> "BackgroundModel":
@@ -79,6 +80,50 @@ class BackgroundModel:
         For Lab conversion, we need the color channels. If bgr was not stored
         (e.g., legacy models), this returns None."""
         return self.bgr
+
+    def refresh_from_frame(self, frame_bgr: np.ndarray) -> None:
+        """Update background model using EWMA with alpha=0.1.
+
+        Called periodically during inter-window gaps (quiescent periods when
+        the workspace is empty) to track slow lighting drift over long captures.
+
+        Uses exponential weighted moving average (EWMA):
+            mean_new = (1 - alpha) × mean_old + alpha × frame
+
+        With alpha=0.1, the update is conservative: a 50-level brightness shift
+        only moves the model by 5 levels, preserving the base model while
+        gradually tracking environmental lighting changes.
+
+        Args:
+            frame_bgr: Input frame in BGR format (uint8, shape (H, W) or (H, W, 3))
+        """
+        # Ensure BGR format
+        if frame_bgr.ndim == 2:
+            # Grayscale input; convert to BGR for consistency
+            frame_bgr = cv2.cvtColor(frame_bgr, cv2.COLOR_GRAY2BGR)
+        elif frame_bgr.ndim != 3 or frame_bgr.shape[2] != 3:
+            raise ValueError(f"Expected BGR frame (H, W, 3), got shape {frame_bgr.shape}")
+
+        # Resize frame to match model shape if needed
+        h, w = self.gray.shape[:2]
+        if frame_bgr.shape[:2] != (h, w):
+            frame_bgr = cv2.resize(frame_bgr, (w, h))
+
+        # Convert frame to float32 for EWMA computation
+        frame_float = frame_bgr.astype(np.float32)
+
+        # Update grayscale model with EWMA
+        frame_gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        self.gray = (1 - self.alpha) * self.gray + self.alpha * frame_gray
+
+        # Update BGR model with EWMA if available
+        if self.bgr is not None:
+            self.bgr = (1 - self.alpha) * self.bgr + self.alpha * frame_float
+
+        # Ensure values stay in valid range [0, 255]
+        self.gray = np.clip(self.gray, 0.0, 255.0)
+        if self.bgr is not None:
+            self.bgr = np.clip(self.bgr, 0.0, 255.0)
 
     @classmethod
     def from_source_frame_paths(cls, paths: Sequence[str], n: int = 30) -> Optional["BackgroundModel"]:

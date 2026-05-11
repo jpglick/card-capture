@@ -519,7 +519,7 @@ class VideoProcessor:
         # Sequentially decode only the required high-res frames
         all_required_indices = sorted(canonical_indices_to_track.keys())
         print(f"[Stage: Refinement] | Decoding {len(all_required_indices)} high-res frames sequentially...")
-        
+
         # We'll use a local dictionary to store the decoded images
         decoded_images: dict[int, np.ndarray] = {}
         if all_required_indices:
@@ -535,6 +535,11 @@ class VideoProcessor:
                     if not ok: break
                     if curr_idx in target_idx_set:
                         decoded_images[curr_idx] = frame
+                    # Task 7: Refresh background model during detected empty windows
+                    # (valley_split_frames from sampler). This tracks slow lighting drift
+                    # during long captures using EWMA with alpha=0.1.
+                    if self._bg_model is not None and curr_idx in valley_split_frames:
+                        self._bg_model.refresh_from_frame(frame)
                     curr_idx += 1
             finally:
                 capture.release()
