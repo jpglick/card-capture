@@ -10,7 +10,7 @@ requires-python = ">=3.9"
 dependencies = [
   "numpy",
   "opencv-python",
-  "supervision>=0.21",
+  "supervision>=0.21,<0.28",
   "torchvision",
 ]
 
