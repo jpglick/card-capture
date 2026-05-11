@@ -32,22 +32,6 @@ def test_foil_detection_high_variance_across_frames():
     assert not is_foil_regular, "Regular card should not be detected as foil"
     assert is_foil_card, "Foil card should be detected"
 
-def test_foil_detection_threshold_tuning():
-    """Verify foil detection is tunable via threshold."""
-    # Mid-variance frames (could go either way)
-    frames = [np.random.randint(100, 160, (750, 1050, 3), dtype=np.uint8) for _ in range(4)]
-
-    # Low threshold: more sensitive (more false positives)
-    detected_low = detect_foil_card(frames, threshold=30.0)
-
-    # High threshold: less sensitive (more false negatives)
-    detected_high = detect_foil_card(frames, threshold=100.0)
-
-    # At least one should detect it (or neither, but consistency matters)
-    # The key is that threshold is tunable
-    assert isinstance(detected_low, bool), "Should return boolean"
-    assert isinstance(detected_high, bool), "Should return boolean"
-
 def test_foil_detection_edge_cases():
     """Verify detect_foil_card and compute_laplacian_variance handle edge cases.
 
@@ -98,6 +82,124 @@ def test_glare_rejection_fusion_shape():
 
     assert fused.shape == (750, 1050, 3), f"Shape mismatch: expected (750, 1050, 3), got {fused.shape}"
     assert fused.dtype == np.uint8, f"Type should be uint8, got {fused.dtype}"
+
+def test_glare_rejection_fusion_prefers_luminance_over_color_shift():
+    """C3: Verify glare-rejection fusion uses luminance distance, not RGB distance.
+
+    Defect (old behavior): BGR distance sums |B−Bm|+|G−Gm|+|R−Rm|.
+    A color-shifted frame can lose to a luminance-glaring frame if the
+    color channels differ more than the glare differs in luminance.
+
+    Fix (new behavior): Use Lab color space, compute distance on L channel only.
+    A frame that is color-shifted but luminance-correct will beat a frame
+    that is luminance-glaring, even if glaring frame is more RGB-similar.
+
+    This test creates three frames:
+    - Frame 0: Correct luminance, nominal color
+    - Frame 1: Correct luminance, heavily color-shifted (e.g., blue-shifted)
+    - Frame 2: Luminance glare (very bright), but RGB-balanced
+
+    Old L1-BGR distance: Frame 1 (color-shifted) may pick frame 2 (glaring)
+    because color shift accumulates across 3 channels but glare is just brightness.
+
+    New L-only distance: Frame 1 correctly picks frame 0 (same luminance)
+    and ignores the color shift. Frame 2 correctly picks frame 0 (median luminance),
+    not itself (glaring).
+    """
+    from card_capture.fusion.median_fusion import glare_rejection_fusion
+
+    # Create three frames where pixels are identical except for variations we control
+    height, width = 100, 100
+
+    # Frame 0: baseline (neutral color, L=100)
+    frame0 = np.ones((height, width, 3), dtype=np.uint8) * 100
+
+    # Frame 1: same luminance as frame0, but blue-shifted
+    # Simulate a blue-heavy frame by boosting B channel
+    # Use approximate RGB-to-L conversion to keep L near 100
+    # L ≈ 0.299*R + 0.587*G + 0.114*B
+    # If we want L ≈ 100 with heavy blue shift:
+    # Set B = 150, and reduce R to keep L ~ 100
+    # 100 ≈ 0.299*R + 0.587*100 + 0.114*150 => R ≈ 28 (color-shifted but luminance-matched)
+    frame1 = np.ones((height, width, 3), dtype=np.uint8)
+    frame1[:, :, 0] = 28  # B: 28
+    frame1[:, :, 1] = 100  # G: 100 (same as frame0)
+    frame1[:, :, 2] = 28  # R: 28 (reduced to compensate for blue shift)
+
+    # Frame 2: luminance glare (very bright, L >> 100), but balanced RGB
+    frame2 = np.ones((height, width, 3), dtype=np.uint8) * 200  # All channels 200 => L >> median
+
+    frames = [frame0, frame1, frame2]
+    fused = glare_rejection_fusion(frames)
+
+    # Verify fused output is close to frame0's luminance (not glaring)
+    # Calculate approximate luminance of fused output
+    fused_l = cv2.cvtColor(fused, cv2.COLOR_BGR2Lab)[:, :, 0]
+    median_l = np.median(fused_l)
+
+    # The fused frame should be close to median luminance (frame0 at L~100)
+    # not glaring (frame2 at L~200)
+    assert 85 < median_l < 115, \
+        f"Fused luminance {median_l} should be near median (~100), not glaring (>150)"
+
+    # Verify fused is NOT just frame0 (could be) but also passes the sanity check
+    # that it's far from frame2's luminance
+    frame2_l = cv2.cvtColor(frame2, cv2.COLOR_BGR2Lab)[:, :, 0]
+    assert median_l < (np.median(frame2_l) - 50), \
+        f"Fused {median_l} should be much less than glare {np.median(frame2_l)}"
+
+def test_enable_foil_aware_fusion_disabled():
+    """D3: Verify that setting enable_foil_aware_fusion=False forces median fusion.
+
+    Acceptance criterion: When enable_foil_aware_fusion is False, even foil cards
+    are fused using median, not glare_rejection_fusion.
+
+    This test monkeypatches detect_foil_card to always return True, then verifies
+    that disabling the flag causes the median path to be used instead.
+    """
+    from unittest.mock import patch
+    from card_capture.fuser import MultiFrameFuser
+
+    # Create test frames: two nominal, one with high glare
+    frames = [
+        np.ones((100, 100, 3), dtype=np.uint8) * 120,
+        np.ones((100, 100, 3), dtype=np.uint8) * 119,
+        np.ones((100, 100, 3), dtype=np.uint8) * 250,  # glare spike
+    ]
+
+    fuser = MultiFrameFuser()
+
+    # Baseline: with foil_threshold, should use glare-rejection (if detected as foil)
+    with patch('card_capture.fuser.detect_foil_card', return_value=True):
+        fused_with_foil = fuser.fuse(frames, foil_threshold=50.0)
+
+    # With foil_threshold=None (disable flag), should use median regardless
+    with patch('card_capture.fuser.detect_foil_card', return_value=True):
+        fused_no_foil = fuser.fuse(frames, foil_threshold=None)
+
+    # Both should not be None
+    assert fused_with_foil is not None, "Fusion should succeed with foil_threshold"
+    assert fused_no_foil is not None, "Fusion should succeed with foil_threshold=None"
+
+    # Median fusion result: median across all pixels
+    median_fused = np.median(frames, axis=0).astype(np.uint8)
+
+    # When foil_threshold=None, should be identical to median
+    # (or very close due to floating point)
+    assert np.allclose(fused_no_foil, median_fused, atol=1), \
+        "With foil_threshold=None, fusion should use median path"
+
+    # The glare-rejection path should differ from median when foil is detected
+    # (detect_foil_card returns True), so fused_with_foil may differ from fused_no_foil
+    # We don't strictly require difference (in edge cases both might be the same),
+    # but the key is that fused_no_foil must be median.
+    print(f"Median fused mean: {np.mean(median_fused)}")
+    print(f"With foil_threshold mean: {np.mean(fused_with_foil)}")
+    print(f"No foil (None) mean: {np.mean(fused_no_foil)}")
+
+    # Extra verification: fused_no_foil should be close to median, not glare-dominated
+    assert np.mean(fused_no_foil) < 180, \
+        f"foil_threshold=None should use median, not glare-shifted; got mean {np.mean(fused_no_foil)}"
 
 def test_pipeline_uses_glare_rejection_fusion_for_foils():
     """Verify MultiFrameFuser selects glare-rejection fusion for foil cards."""

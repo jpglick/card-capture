@@ -205,6 +205,8 @@ class ProcessingOptions:
     tracker_backend: str = "botsort"
     centroid_jump_ratio: float = 0.30
     centroid_jump_frames: int = 3
+    foil_threshold: float = 50.0
+    enable_foil_aware_fusion: bool = True
 
 
 
@@ -728,7 +730,9 @@ class VideoProcessor:
             # Extract normalized frames from canonical entries for fusion
             canonical_frames = [entry["normalized"] for entry in canonical_entries]
             fuser = MultiFrameFuser()
-            fused_canonical = fuser.fuse(canonical_frames, foil_threshold=50.0)
+            # Use foil_threshold from options; if enable_foil_aware_fusion is False, disable foil detection
+            foil_threshold = options.foil_threshold if options.enable_foil_aware_fusion else None
+            fused_canonical = fuser.fuse(canonical_frames, foil_threshold=foil_threshold)
             # Ensure fused_canonical is not None (best_canonical should always exist with frames)
             if fused_canonical is None:
                 fused_canonical = best_canonical["normalized"]
