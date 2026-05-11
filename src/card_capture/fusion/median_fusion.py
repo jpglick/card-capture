@@ -46,13 +46,19 @@ def glare_rejection_fusion(frames: list[np.ndarray]) -> np.ndarray:
 
     # Build output by picking pixels from the closest frame
     # For each (h, w) position, use the pixel from frames[closest_frame_idx[h, w]]
+    # Vectorized approach: use take_along_axis to select pixels in O(1) operation
     height, width = closest_frame_idx.shape
-    output = np.zeros((height, width, 3), dtype=np.float32)
+    c = stacked.shape[3]
 
-    for h in range(height):
-        for w in range(width):
-            frame_idx = closest_frame_idx[h, w]
-            output[h, w] = stacked[frame_idx, h, w]
+    # Expand closest_frame_idx to (height, width, 3) for broadcasting across channels
+    frame_indices_expanded = np.expand_dims(closest_frame_idx, axis=-1)  # (height, width, 1)
+    frame_indices_expanded = np.broadcast_to(frame_indices_expanded, (height, width, c))  # (height, width, 3)
+
+    # Use take_along_axis to select pixels along frame axis
+    # stacked is (num_frames, height, width, 3), indices are (height, width, 3)
+    # Result shape: (1, height, width, 3)
+    output = np.take_along_axis(stacked, frame_indices_expanded[np.newaxis, ...], axis=0)
+    output = output.squeeze(axis=0)  # (height, width, 3)
 
     # Convert back to uint8
     return np.clip(output, 0, 255).astype(np.uint8)
