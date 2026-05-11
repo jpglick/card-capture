@@ -654,3 +654,48 @@ class TestAdaptivePresenceSamplerClassifierPath:
         windows = sampler._build_windows(sampler._scan_frames)
         # Otsu path: result is a list (possibly empty on gray-only video)
         assert isinstance(windows, list)
+
+def test_sampler_collects_background_proxies(tmp_path):
+    from card_capture.sampler import AdaptivePresenceSampler
+    import numpy as np
+
+    # 10 frames of background (low score), 10 frames of card (high score)
+    frames = gray_frames(10, value=128) + colored_frames(10)
+    path = make_video(tmp_path, frames, fps=30.0)
+
+    sampler = AdaptivePresenceSampler(
+        video_path=str(path),
+        scan_fps=10.0,
+        scan_width=160,
+        device="cpu",
+    )
+    sampler._max_bg_proxies = 3
+    sampler._bg_safety_threshold = 0.5
+
+    # Run sample to trigger background collection
+    list(sampler.sample())
+
+    # Should have 3 background proxies because we have 10 low-score frames
+    assert len(sampler.background_proxies) == 3
+    # They should be from the first 10 frames (gray_frames)
+    # Each proxy should be an image
+    assert all(isinstance(img, np.ndarray) for img in sampler.background_proxies)
+
+def test_sampler_background_proxies_safety_threshold(tmp_path):
+    from card_capture.sampler import AdaptivePresenceSampler
+    # Only "card" frames (high score), no background
+    frames = colored_frames(20)
+    path = make_video(tmp_path, frames, fps=30.0)
+
+    sampler = AdaptivePresenceSampler(
+        video_path=str(path),
+        scan_fps=10.0,
+        scan_width=160,
+        device="cpu",
+    )
+    sampler._bg_safety_threshold = -10.0  # Force safety threshold to be very low
+
+    list(sampler.sample())
+
+    # Should have 0 background proxies because all scores are likely > -10.0
+    assert len(sampler.background_proxies) == 0

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import time
+import heapq
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator, List, Optional, Tuple, Union
@@ -342,6 +343,9 @@ class AdaptivePresenceSampler:
         self.last_fallback_used = False
         self.last_inter_window_gaps_frames: list[int] = []
         self.last_source_fps: float = 30.0
+        self.background_proxies: list[np.ndarray] = []
+        self._max_bg_proxies = 5
+        self._bg_safety_threshold = 0.4  # If min score > this, we have no empty stand
 
     @staticmethod
     def _robust_zscores(values: list[float]) -> list[float]:
@@ -725,6 +729,21 @@ class AdaptivePresenceSampler:
         self._scan_frames = self._scan_video(resolved_video_path)
         self.last_valley_splits = self._compute_valley_splits(self._scan_frames)
         windows = self._build_windows(self._scan_frames, forced_splits=self.last_valley_splits)
+
+        # Collect background proxies: frames with the lowest presence scores
+        bg_candidates: list[tuple[float, int, np.ndarray]] = []  # (-score, frame_index, image)
+        for record in self._scan_frames:
+            score = record.presence_score
+            if score < self._bg_safety_threshold:
+                if len(bg_candidates) < self._max_bg_proxies:
+                    heapq.heappush(bg_candidates, (-score, record.frame_index, record.image.copy()))
+                elif score < -bg_candidates[0][0]:
+                    heapq.heapreplace(bg_candidates, (-score, record.frame_index, record.image.copy()))
+
+        # Sort by score ascending (lowest first)
+        bg_candidates.sort(key=lambda x: -x[0])
+        self.background_proxies = [c[2] for c in bg_candidates]
+
         scored_windows = [self._score_sharpness_in_window(window) for window in windows]
         selected_frame_indices: list[int] = []
         for window in scored_windows:
