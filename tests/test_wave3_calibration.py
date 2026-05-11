@@ -1,7 +1,10 @@
-"""Tests for Wave 3 embedding-based same-card criterion."""
+"""Tests for Wave 3 embedding-based same-card criterion and threshold calibration."""
 
+import json
 import numpy as np
 import pytest
+import tempfile
+from pathlib import Path
 
 from card_capture.identity.embedding_distance import (
     compute_embedding_distance,
@@ -183,3 +186,260 @@ class TestCrossVideoDedup:
         )
 
         assert is_duplicate is False, "Different cards with high embedding distance should NOT be marked as duplicate"
+
+
+class TestThresholdGridSweep:
+    """Test threshold auto-sweep harness for Pareto-optimal points."""
+
+    def test_grid_sweep_finds_pareto_optimal_points(self):
+        """Grid sweep over thresholds returns results with pareto_front.
+
+        Scenario: Sweep over novelty_thresholds and hamming_thresholds,
+        compute robustness metrics for each combination, identify Pareto-optimal
+        (non-dominated) operating points.
+        """
+        import sys
+        scripts_dir = Path(__file__).parent.parent / "scripts"
+        if str(scripts_dir) not in sys.path:
+            sys.path.insert(0, str(scripts_dir))
+
+        from calibrate_wave3 import grid_sweep_thresholds
+
+        # Define small grid for testing
+        novelty_thresholds = [0.05, 0.06, 0.07]
+        hamming_thresholds = [18, 19, 20]
+
+        # Create minimal synthetic metric corpus
+        # (In real use, this would be regression test data with ground truth)
+        metric_corpus = {
+            "test_video_1": {
+                "expected_cards": 10,
+                "detected_cards": 9,
+                "phantom_count": 2,
+                "pipeline_output_count": 11,
+            }
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_file = Path(tmpdir) / "results.json"
+
+            # Run grid sweep
+            result = grid_sweep_thresholds(
+                novelty_thresholds=novelty_thresholds,
+                hamming_thresholds=hamming_thresholds,
+                metric_corpus=metric_corpus,
+                output_file=str(output_file),
+            )
+
+            # Verify result structure
+            assert isinstance(result, dict), "Result should be a dictionary"
+            assert "all_points" in result, "Result should contain 'all_points'"
+            assert "pareto_front" in result, "Result should contain 'pareto_front'"
+
+            all_points = result["all_points"]
+            pareto_front = result["pareto_front"]
+
+            # Should have 3 * 3 = 9 points
+            assert len(all_points) == 9, f"Expected 9 points, got {len(all_points)}"
+
+            # Pareto front should have at least 1 point
+            assert len(pareto_front) >= 1, "Pareto front should have at least 1 point"
+
+            # Each point should have threshold values and metrics
+            for point in all_points:
+                assert "novelty_threshold" in point
+                assert "hamming_threshold" in point
+                assert "metrics" in point
+                assert "f1" in point
+
+            # Each pareto point should also be in all_points
+            pareto_ids = {(p["novelty_threshold"], p["hamming_threshold"]) for p in pareto_front}
+            all_ids = {(p["novelty_threshold"], p["hamming_threshold"]) for p in all_points}
+            assert pareto_ids.issubset(all_ids), "Pareto points should be subset of all points"
+
+            # Output file should be written
+            assert output_file.exists(), "Output file should be created"
+
+            # Read and verify JSON structure
+            with open(output_file) as f:
+                saved = json.load(f)
+            assert "all_points" in saved
+            assert "pareto_front" in saved
+
+    def test_compute_pareto_front_simple(self):
+        """Compute Pareto front identifies non-dominated points.
+
+        Scenario: Given 3 points on objectives [F1, recall], identify which
+        are non-dominated (maximize both).
+        """
+        import sys
+        scripts_dir = Path(__file__).parent.parent / "scripts"
+        if str(scripts_dir) not in sys.path:
+            sys.path.insert(0, str(scripts_dir))
+
+        from calibrate_wave3 import compute_pareto_front
+
+        points = [
+            {"novelty_threshold": 0.05, "f1": 0.80, "recall": 0.75},  # Dominated
+            {"novelty_threshold": 0.06, "f1": 0.85, "recall": 0.80},  # Pareto
+            {"novelty_threshold": 0.07, "f1": 0.82, "recall": 0.85},  # Pareto
+        ]
+        objectives = {"f1": "max", "recall": "max"}
+
+        pareto = compute_pareto_front(points, objectives)
+
+        # Should have 2 non-dominated points (0.06 and 0.07)
+        assert len(pareto) == 2, f"Expected 2 Pareto points, got {len(pareto)}"
+
+        # Both should be in result
+        result_thresholds = {p["novelty_threshold"] for p in pareto}
+        assert result_thresholds == {0.06, 0.07}, f"Expected thresholds 0.06 and 0.07, got {result_thresholds}"
+
+    def test_compute_pareto_front_no_dominance(self):
+        """All points are Pareto-optimal if none dominate others."""
+        import sys
+        scripts_dir = Path(__file__).parent.parent / "scripts"
+        if str(scripts_dir) not in sys.path:
+            sys.path.insert(0, str(scripts_dir))
+
+        from calibrate_wave3 import compute_pareto_front
+
+        points = [
+            {"novelty_threshold": 0.05, "f1": 0.90, "recall": 0.70},  # High F1, low recall
+            {"novelty_threshold": 0.06, "f1": 0.75, "recall": 0.90},  # Low F1, high recall
+            {"novelty_threshold": 0.07, "f1": 0.80, "recall": 0.80},  # Balanced
+        ]
+        objectives = {"f1": "max", "recall": "max"}
+
+        pareto = compute_pareto_front(points, objectives)
+
+        # All 3 should be Pareto-optimal (no point dominates all others)
+        assert len(pareto) == 3, f"Expected 3 Pareto points, got {len(pareto)}"
+
+
+class TestHardCaseCapture:
+    """Test hard-case capture for active learning."""
+
+    def test_hard_case_multiple_fronts(self):
+        """Detect >2 Fronts as hard case."""
+        from card_capture.analysis.hard_case_capture import is_hard_case
+
+        # Session with 3 Fronts (multiple_fronts)
+        session = {
+            "video_id": 123,
+            "session_id": "s1",
+            "front_tracks": [
+                {"track_id": "t1", "angle": "Front"},
+                {"track_id": "t2", "angle": "Front"},
+                {"track_id": "t3", "angle": "Front"},
+            ],
+            "hamming_values": [],
+            "confidence_scores": [0.9],
+            "border_purity_scores": [0.8],
+        }
+
+        reason = is_hard_case(session)
+        assert reason is not None, "Should detect multiple fronts as hard case"
+        assert "multiple_fronts" in reason, f"Reason should mention multiple fronts, got {reason}"
+
+    def test_hard_case_borderline_hamming(self):
+        """Detect borderline Hamming distance (within 4 of 22) as hard case."""
+        from card_capture.analysis.hard_case_capture import is_hard_case
+
+        # Session with borderline Hamming (within range [18, 26])
+        session = {
+            "video_id": 123,
+            "session_id": "s1",
+            "front_tracks": [
+                {"track_id": "t1", "angle": "Front"},
+                {"track_id": "t2", "angle": "Back"},
+            ],
+            "hamming_values": [20],  # Within [18, 26]
+            "confidence_scores": [0.9],
+            "border_purity_scores": [0.8],
+        }
+
+        reason = is_hard_case(session)
+        assert reason is not None, "Should detect borderline Hamming as hard case"
+        assert "borderline_hamming" in reason, f"Reason should mention borderline hamming, got {reason}"
+
+
+class TestAdaptiveThresholds:
+    """Test per-video adaptive threshold computation."""
+
+    def test_adaptive_novelty_threshold_from_distribution(self):
+        """Novelty threshold from p50 of in-video candidate distribution, clipped ±20%."""
+        from card_capture.calibration.per_video_adaptive import AdaptiveThresholdComputer
+
+        computer = AdaptiveThresholdComputer()
+        global_threshold = 0.08
+
+        # Simulate novelty scores from a video: p50 = 0.105 (need 10+ samples)
+        novelty_scores = [0.05, 0.07, 0.09, 0.10, 0.105, 0.11, 0.12, 0.15, 0.20, 0.25]
+
+        adaptive_threshold = computer.compute_novelty_threshold(novelty_scores, global_threshold)
+
+        # Expected: p50 = 0.105, clipped to [0.08 * 0.8, 0.08 * 1.2] = [0.064, 0.096]
+        # p50 (0.105) is outside [0.064, 0.096], so should clip to 0.096
+        expected_min = global_threshold * 0.8  # 0.064
+        expected_max = global_threshold * 1.2  # 0.096
+
+        assert adaptive_threshold >= expected_min, f"Threshold {adaptive_threshold} below min {expected_min}"
+        assert adaptive_threshold <= expected_max, f"Threshold {adaptive_threshold} above max {expected_max}"
+
+        # Verify it's the p50, clipped
+        p50 = np.median(novelty_scores)  # 0.105
+        assert adaptive_threshold == pytest.approx(np.clip(p50, expected_min, expected_max), abs=1e-6)
+
+    def test_adaptive_hamming_threshold_from_intra_track_distances(self):
+        """Hamming threshold from p75 of intra-track pHash distances, clipped ±10%."""
+        from card_capture.calibration.per_video_adaptive import AdaptiveThresholdComputer
+
+        computer = AdaptiveThresholdComputer()
+        global_threshold = 22  # _SAME_CARD_HAMMING_MAX
+
+        # Simulate intra-track Hamming distances: p75 = 8.25
+        distances = [2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 12.0]
+
+        adaptive_threshold = computer.compute_hamming_threshold(distances, global_threshold)
+
+        # Expected: p75 * 1.2 = 8.25 * 1.2 ≈ 9.9, clipped to [22 * 0.9, 22 * 1.1] = [19.8, 24.2]
+        # So should be 9.9 (within clip range)
+        expected_min = global_threshold * 0.9  # 19.8
+        expected_max = global_threshold * 1.1  # 24.2
+
+        assert adaptive_threshold >= expected_min, f"Threshold {adaptive_threshold} below min {expected_min}"
+        assert adaptive_threshold <= expected_max, f"Threshold {adaptive_threshold} above max {expected_max}"
+
+        # Verify it's p75 * 1.2, clipped
+        p75 = np.percentile(distances, 75)
+        expected_value = p75 * 1.2
+        assert adaptive_threshold == pytest.approx(np.clip(expected_value, expected_min, expected_max), abs=1e-6)
+
+    def test_adaptive_novelty_threshold_fallback_to_global(self):
+        """Fallback to global threshold when fewer than 10 samples."""
+        from card_capture.calibration.per_video_adaptive import AdaptiveThresholdComputer
+
+        computer = AdaptiveThresholdComputer()
+        global_threshold = 0.08
+
+        # Fewer than 10 samples
+        novelty_scores = [0.05, 0.07, 0.09]
+
+        adaptive_threshold = computer.compute_novelty_threshold(novelty_scores, global_threshold)
+
+        assert adaptive_threshold == global_threshold, "Should fallback to global for <10 samples"
+
+    def test_adaptive_hamming_threshold_fallback_to_global(self):
+        """Fallback to global threshold when fewer than 10 samples."""
+        from card_capture.calibration.per_video_adaptive import AdaptiveThresholdComputer
+
+        computer = AdaptiveThresholdComputer()
+        global_threshold = 22
+
+        # Fewer than 10 samples
+        distances = [2.0, 4.0, 6.0]
+
+        adaptive_threshold = computer.compute_hamming_threshold(distances, global_threshold)
+
+        assert adaptive_threshold == global_threshold, "Should fallback to global for <10 samples"
