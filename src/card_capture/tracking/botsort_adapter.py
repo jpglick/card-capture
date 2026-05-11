@@ -77,7 +77,7 @@ class BoTSORTAdapter:
             track_high_thresh=track_activation_threshold,
             track_buffer=lost_track_buffer,
             match_thresh=minimum_matching_threshold,
-            cmc_method=None,  # Disable camera motion compensation since we have no real frames
+            cmc_method=None,  # Disable camera motion compensation (assumes static camera setup)
         )
         self.min_track_length = min_track_length
         self._tracks: dict[int, TrackState] = {}
@@ -100,12 +100,40 @@ class BoTSORTAdapter:
             track_high_thresh=self._track_activation_threshold,
             track_buffer=self._lost_track_buffer,
             match_thresh=self._minimum_matching_threshold,
-            cmc_method=None,  # Disable camera motion compensation since we have no real frames
+            cmc_method=None,  # Disable camera motion compensation (assumes static camera setup)
         )
         self.pending_splits = []
 
     def finalized_tracks(self) -> List[TrackState]:
         return list(self._all_finalized)
+
+    def _decode_frame_for_reid(self, candidates: List[ScoredCandidate]) -> np.ndarray:
+        """
+        Attempt to decode the source frame from the first candidate's image_path.
+
+        If successful, returns the decoded BGR frame for ReID feature extraction.
+        If decoding fails or no path available, falls back to a zero-filled dummy image.
+
+        Args:
+            candidates: List of ScoredCandidate objects for the current frame.
+
+        Returns:
+            Decoded frame (BGR, uint8) or fallback zeros array of shape (480, 640, 3).
+        """
+        import cv2
+
+        # Try to use the first candidate's image_path
+        if candidates and candidates[0].image_path:
+            try:
+                frame = cv2.imread(candidates[0].image_path)
+                if frame is not None:
+                    return frame
+            except Exception:
+                # Decode failed; fall back to zeros
+                pass
+
+        # Fallback: dummy image (current behavior)
+        return np.zeros((480, 640, 3), dtype=np.uint8)
 
     def process(self, candidates: List[ScoredCandidate]) -> List[_AdaptedDetection]:
         """Process detections from one frame; returns adapted detections with track_id."""
@@ -132,10 +160,10 @@ class BoTSORTAdapter:
             class_id=np.zeros(len(boxes), dtype=int),
         )
 
-        # BotSort v0.17+ requires an image parameter
-        # Use a dummy image since we're not using visual features in a meaningful way here
-        dummy_img = np.zeros((480, 640, 3), dtype=np.uint8)
-        self._tracker.update(det, dummy_img)
+        # BotSort v0.17+ requires an image parameter.
+        # Try to decode real frame from path reference; fall back to zeros if not available.
+        frame_img = self._decode_frame_for_reid(candidates)
+        self._tracker.update(det, frame_img)
 
         out: List[_AdaptedDetection] = []
         if det.tracker_id is None:
