@@ -1120,7 +1120,7 @@ def _filter_candidates_by_novelty(
                 kept.append(cand)  # cannot evaluate; let downstream stages decide
                 continue
             frame_cache[cand.image_path] = img
-        novelty = quad_novelty(img, cand.corners, bg)
+        novelty = quad_novelty(img, cand.corners, bg, color_space="lab", lab_weights=(1.0, 0.5, 0.5))
         if novelty >= threshold:
             kept.append(cand)
     return kept
@@ -1152,7 +1152,7 @@ def _prune_empty_workspace_tracks(
                 if img is None:
                     continue
                 frame_cache[cand.image_path] = img
-            novelties.append(quad_novelty(img, cand.corners, bg))
+            novelties.append(quad_novelty(img, cand.corners, bg, color_space="lab", lab_weights=(1.0, 0.5, 0.5)))
         if not novelties:
             kept.append(pt)
             continue

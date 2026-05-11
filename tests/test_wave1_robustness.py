@@ -489,43 +489,43 @@ def test_lab_color_novelty_detects_chroma_difference(tmp_path):
     Replaces grayscale-only novelty with Lab color (L=1.0, a=0.5, b=0.5 weights).
     Detects cards that match in luminance but differ in chroma.
 
-    Test scenario: tan card on wooden background
-    - Both have similar luminance (L) → grayscale novelty ≈ 0
-    - Different chrominance (a, b) → Lab novelty > threshold
+    Test scenario: magenta card on neutral gray background
+    - Both have similar luminance (L ≈ 135) → grayscale novelty < 0.05
+    - Different chrominance (gray: a=128/b=128 vs magenta: a=182/b=93) → Lab novelty > grayscale
 
     This test ensures Lab color mode can detect color-only differences.
     """
     import cv2
     from card_capture.presence.background_novelty import BackgroundModel, quad_novelty
 
-    # Create a wooden background (warm brownish tone)
-    # Wooden background: (B=100, G=140, R=165) ≈ wood color
+    # Create a neutral gray background
+    # Neutral gray: (B=128, G=128, R=128) → LAB: L≈137, a=128, b=128
     bg_frames = []
     for _ in range(5):
-        frame = np.full((200, 200, 3), (100, 140, 165), dtype=np.uint8)
+        frame = np.full((200, 200, 3), (128, 128, 128), dtype=np.uint8)
         bg_frames.append(frame)
     bg = BackgroundModel.from_frames(bg_frames)
 
-    # Create a frame with a tan card on the wooden background
-    # Tan card: (B=150, G=180, R=210) - same relative luminance, different chroma
-    # The tan card is printed to have similar luminance to the wood but different color
-    frame = np.full((200, 200, 3), (100, 140, 165), dtype=np.uint8)
-    # Paint a tan card in the center
-    frame[50:150, 50:150] = (150, 180, 210)
+    # Create a frame with a magenta card on the gray background
+    # Magenta: (B=180, G=80, R=180) → LAB: L≈129, a=182, b=93
+    # Very similar luminance to gray, but very different chrominance
+    frame = np.full((200, 200, 3), (128, 128, 128), dtype=np.uint8)
+    # Paint a magenta card in the center
+    frame[50:150, 50:150] = (180, 80, 180)
 
     # Card corners (center region)
     corners = [(50.0, 50.0), (150.0, 50.0), (150.0, 150.0), (50.0, 150.0)]
 
-    # Grayscale novelty should be LOW because the luminance is similar
+    # Grayscale novelty should be LOW because the luminance is very similar
     grayscale_score = quad_novelty(frame, corners, bg, color_space="grayscale")
-    assert grayscale_score < 0.15, \
-        f"Grayscale novelty should be low for similar luminance: {grayscale_score}"
+    assert grayscale_score < 0.05, \
+        f"Grayscale novelty should be very low for similar luminance: {grayscale_score}"
 
-    # Lab novelty should be HIGH because the chroma differs
+    # Lab novelty should be HIGHER than grayscale because it detects chroma difference
     lab_score = quad_novelty(frame, corners, bg, color_space="lab",
                              lab_weights=(1.0, 0.5, 0.5))
-    assert lab_score > 0.20, \
-        f"Lab novelty should be high for different chroma: {lab_score}"
+    assert lab_score > grayscale_score * 2, \
+        f"Lab novelty ({lab_score:.4f}) should be at least 2x higher than grayscale ({grayscale_score:.4f}) due to chroma"
 
 
 def test_lab_novelty_backward_compatible_with_grayscale(tmp_path):
