@@ -339,6 +339,59 @@ class TestPerRegionValleyDetection:
         # Should handle grayscale input without errors
         assert isinstance(valleys, list), "Expected list result"
 
+    def test_sampler_integrates_per_region_valleys(self):
+        """Test that AdaptivePresenceSampler integrates per-region valley detection."""
+        from card_capture.sampler import AdaptivePresenceSampler, _AdaptiveScanFrame
+
+        # Create a mock sampler
+        sampler = AdaptivePresenceSampler(
+            valley_drop_ratio=0.40,
+            valley_min_width_frames=3,
+            delta_spike_ratio=0.50,
+        )
+
+        h, w = 180, 240
+
+        # Create scan frames with a clear multi-card swap scenario
+        # Frames 0-2: stable (high edges everywhere)
+        # Frames 3-5: swap (left loses edges, right gains)
+        # Frames 6-8: back to stable
+        scan_frames = []
+        for i in range(9):
+            if i in [0, 1, 2, 6, 7, 8]:
+                image = self._create_high_edge_frame(h, w)
+            else:
+                # For frames 3-5, create left/right difference
+                image = np.zeros((h, w), dtype=np.uint8)
+                left_third = w // 3
+                right_third = 2 * w // 3
+                # Left: low edges
+                image[:, :left_third] = self._create_low_edge_frame(h, left_third)
+                # Middle/Right: high edges
+                image[:, left_third:] = self._create_high_edge_frame(h, w - left_third)
+
+            # Convert to 3-channel if needed for frame format
+            image_3ch = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR) if image.ndim == 2 else image
+
+            frame = _AdaptiveScanFrame(
+                frame_index=i,
+                timestamp_ms=i * 33,
+                image=image_3ch,
+                metrics={"edge_density": 0.5, "sharpness": 0.8, "variance": 100, "empty_ratio": 0.1},
+                motion=0.0,
+                presence_score=0.7,
+                delta_score=0.0 if i == 0 else 10.0,
+            )
+            scan_frames.append(frame)
+
+        # Compute valley splits (should use both global and regional detection)
+        splits = sampler._compute_valley_splits(scan_frames)
+
+        # Should detect valleys during the swap (frames 3-5)
+        assert len(splits) > 0, f"Expected to detect valley splits, got {splits}"
+        assert any(3 <= s <= 5 for s in splits), \
+            f"Expected at least one split in [3, 4, 5], got {splits}"
+
 
 def _candidate_with_rotation(detection_id, frame_index, x, y, conf=0.9, w=200, h=300, angle_deg=0):
     """

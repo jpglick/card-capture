@@ -706,10 +706,13 @@ class AdaptivePresenceSampler:
 
     def _compute_valley_splits(self, scan_frames: list[_AdaptiveScanFrame]) -> list[int]:
         from .valley_splits import find_valley_splits
+        from .valley_detection_per_region import find_valley_splits_per_region
+
+        # Global Sobel valley detection
         sobel_scores = [r.sobel_score for r in scan_frames]
         delta_scores = [r.delta_score for r in scan_frames]
         frame_indices = [r.frame_index for r in scan_frames]
-        return find_valley_splits(
+        global_splits = find_valley_splits(
             sobel_scores,
             delta_scores,
             frame_indices,
@@ -717,6 +720,20 @@ class AdaptivePresenceSampler:
             valley_min_width_frames=self.valley_min_width_frames,
             delta_spike_ratio=self.delta_spike_ratio,
         )
+
+        # Per-region valley detection for multi-card swaps on opposite sides
+        proxy_frames = [r.image for r in scan_frames]
+        regional_splits = find_valley_splits_per_region(
+            proxy_frames,
+            grid_rows=3,
+            grid_cols=3,
+            valley_drop_ratio=0.70,
+            min_valley_width_frames=self.valley_min_width_frames,
+        )
+
+        # Combine both signals: global + regional splits
+        all_splits = sorted(set(global_splits) | set(regional_splits))
+        return all_splits
 
     def _find_presence_windows(self) -> list[PresenceWindow]:
         video_path = self._resolve_video_path(None)
