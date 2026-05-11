@@ -17,6 +17,10 @@ class ExpectedCard:
     approx_back_window_ms: Optional[Tuple[int, int]] = None
     physical_card_key: Optional[str] = None
     notes: str = ""
+    scene_type: str = "single_card"  # "single_card", "multi_card", "rapid_swap"
+    foil_label: Optional[str] = None  # "foil", "holo", None
+    is_occluded: bool = False
+    occlusion_type: Optional[str] = None  # "finger", "sticker", "adjacent_card", "lens_flare", None
 
 
 @dataclass(frozen=True)
@@ -62,6 +66,10 @@ def load_truth(path: Path) -> GroundTruth:
                 approx_back_window_ms=_coerce_window(entry.get("approx_back_window_ms")),
                 physical_card_key=entry.get("physical_card_key"),
                 notes=str(entry.get("notes", "")),
+                scene_type=str(entry.get("scene_type", "single_card")),
+                foil_label=entry.get("foil_label"),
+                is_occluded=bool(entry.get("is_occluded", False)),
+                occlusion_type=entry.get("occlusion_type"),
             )
         )
 

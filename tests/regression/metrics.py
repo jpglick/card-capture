@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Sequence
+from typing import Dict, Iterable, Sequence, Tuple
 
-from .matcher import MatchResult
+from .matcher import MatchResult, MatchedPair
+from .pipeline_runner import HarnessInstance
 from .truth import ExpectedCard
 
 
@@ -97,3 +98,47 @@ def count_id_switches(events: Iterable[dict]) -> int:
                 switches += 1
             prev = tid
     return switches
+
+
+def report_robustness_metrics(
+    matched: Tuple[MatchedPair, ...],
+    unmatched_truth: Tuple[ExpectedCard, ...],
+    phantom_instances: Tuple[HarnessInstance, ...],
+    truth_cards: Sequence[ExpectedCard],
+) -> Dict[str, float]:
+    """Compute and report robustness metrics.
+
+    Args:
+        matched: Tuple of matched card pairs
+        unmatched_truth: Tuple of unmatched ground truth cards
+        phantom_instances: Tuple of false positive detections
+        truth_cards: Sequence of all ground truth cards
+
+    Returns:
+        Dictionary containing all robustness metrics:
+        - card_recall: fraction of truth cards detected
+        - card_precision: fraction of predictions that matched truth
+        - front_back_f1: angle accuracy (F1 score)
+        - multi_card_survival: recall in multi-card scenes
+        - foil_survival: recall for foil/holo cards
+    """
+    from card_capture.metrics.robustness_pack import RobustnessMetrics
+
+    metrics = RobustnessMetrics(
+        matched=matched,
+        unmatched_truth=unmatched_truth,
+        phantom_instances=phantom_instances,
+        truth_cards=truth_cards,
+    )
+
+    metrics_dict = metrics.compute_all()
+
+    # Print metrics to stdout for regression report
+    print("\n=== Robustness Metrics ===")
+    print(f"Card Recall:         {metrics_dict['card_recall']:.4f}")
+    print(f"Card Precision:      {metrics_dict['card_precision']:.4f}")
+    print(f"Front/Back F1:       {metrics_dict['front_back_f1']:.4f}")
+    print(f"Multi-Card Survival: {metrics_dict['multi_card_survival']:.4f}")
+    print(f"Foil Survival:       {metrics_dict['foil_survival']:.4f}")
+
+    return metrics_dict
