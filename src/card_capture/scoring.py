@@ -52,13 +52,13 @@ class QualityScorer:
 
         total = (
             sharpness * 0.25
-            + glare * 0.15
+            + glare * 0.12
             + aspect_ratio * 0.15
             + size * 0.10
             + complexity * 0.10
             + border_purity * 0.20
             + spatial_glare * 0.03
-            + confidence * 0.02
+            + confidence * 0.05
         )
         components = {
             "sharpness": round(sharpness, 6),
