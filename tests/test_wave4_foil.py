@@ -1,7 +1,7 @@
 import numpy as np
 import cv2
 from unittest.mock import Mock
-from src.card_capture.fusion.foil_detection import detect_foil_card, compute_laplacian_variance
+from card_capture.fusion.foil_detection import detect_foil_card, compute_laplacian_variance
 
 def test_foil_detection_high_variance_across_frames():
     """Verify foil cards show high Laplacian variance across frames."""
@@ -48,9 +48,26 @@ def test_foil_detection_threshold_tuning():
     assert isinstance(detected_low, bool), "Should return boolean"
     assert isinstance(detected_high, bool), "Should return boolean"
 
+def test_foil_detection_edge_cases():
+    """Verify detect_foil_card and compute_laplacian_variance handle edge cases.
+
+    D5: Tests explicit len() checks for < 2 frames.
+    """
+    # Empty list: should return False and 0.0 respectively
+    assert detect_foil_card([]) == False, "Empty frames should not be foil"
+    assert compute_laplacian_variance([]) == 0.0, "Empty frames should have 0 variance"
+
+    # Single frame: should return False and 0.0 respectively
+    single_frame = [np.ones((750, 1050, 3), dtype=np.uint8) * 100]
+    assert detect_foil_card(single_frame) == False, "Single frame should not be foil"
+    assert compute_laplacian_variance(single_frame) == 0.0, "Single frame should have 0 variance"
+
+    # Single frame with threshold: still False
+    assert detect_foil_card(single_frame, threshold=1.0) == False, "Single frame with low threshold should still be False"
+
 def test_glare_rejection_fusion_preserves_luminance():
     """Verify glare-rejection fusion picks closest-to-median pixels."""
-    from src.card_capture.fusion.median_fusion import glare_rejection_fusion
+    from card_capture.fusion.median_fusion import glare_rejection_fusion
 
     # Three frames: one bright (glare), two nominal
     frames = [
@@ -69,7 +86,7 @@ def test_glare_rejection_fusion_preserves_luminance():
 
 def test_glare_rejection_fusion_shape():
     """Verify glare-rejection fusion returns same shape as input frames."""
-    from src.card_capture.fusion.median_fusion import glare_rejection_fusion
+    from card_capture.fusion.median_fusion import glare_rejection_fusion
 
     frames = [
         np.random.randint(50, 200, (750, 1050, 3), dtype=np.uint8),
@@ -84,7 +101,7 @@ def test_glare_rejection_fusion_shape():
 
 def test_pipeline_uses_glare_rejection_fusion_for_foils():
     """Verify MultiFrameFuser selects glare-rejection fusion for foil cards."""
-    from src.card_capture.fuser import MultiFrameFuser
+    from card_capture.fuser import MultiFrameFuser
 
     # Create mock frames
     regular_frames = [np.random.randint(100, 150, (750, 1050, 3), dtype=np.uint8) for _ in range(4)]
@@ -117,7 +134,7 @@ def test_fused_canonical_persisted_for_best_only():
     3. During storage writing, fused_canonical is used for best_canonical
     4. Other canonical entries use raw normalized frames
     """
-    from src.card_capture.pipeline import _PreparedTrack
+    from card_capture.pipeline import _PreparedTrack
 
     # Create mock canonical entries with different detection IDs
     candidate1 = Mock(detection_id=101)
@@ -180,7 +197,7 @@ def test_fused_canonical_none_fallback_behavior():
     The fallback at line 719 ensures fused_canonical is never None in practice,
     but the type annotation is Optional. This test documents the contract.
     """
-    from src.card_capture.pipeline import _PreparedTrack
+    from card_capture.pipeline import _PreparedTrack
 
     # Create minimal mock objects
     candidate = Mock(detection_id=101)
@@ -219,7 +236,7 @@ def test_fused_canonical_write_conditional_behavior():
     - Other entries use entry["normalized"]
     """
     from unittest.mock import patch, call
-    from src.card_capture.pipeline import _PreparedTrack
+    from card_capture.pipeline import _PreparedTrack
 
     # Create mock candidates with different detection IDs
     candidate1 = Mock(detection_id=101)
@@ -279,3 +296,75 @@ def test_fused_canonical_write_conditional_behavior():
     # Check that the fused image array was passed for the best entry
     assert any(np.array_equal(call_args[0][1], fused) for call_args in calls), \
         "Fused canonical should be written for best_canonical entry"
+
+
+def test_foil_detection_on_labeled_fixtures():
+    """E3: Verify foil detection works on labeled fixture sets.
+
+    This test loads foil vs non-foil fixtures from the regression corpus
+    and asserts that the default threshold correctly classifies them.
+    """
+    from pathlib import Path
+
+    # Define fixture directories
+    foil_dir = Path(__file__).parent / "fixtures" / "foil" / "foil"
+    non_foil_dir = Path(__file__).parent / "fixtures" / "foil" / "non_foil"
+
+    # Load foil fixtures (each subdirectory is a frame group)
+    foil_groups = _load_fixture_groups(foil_dir)
+    assert len(foil_groups) >= 3, f"Expected at least 3 foil fixtures, got {len(foil_groups)}"
+
+    # Load non-foil fixtures
+    non_foil_groups = _load_fixture_groups(non_foil_dir)
+    assert len(non_foil_groups) >= 3, f"Expected at least 3 non-foil fixtures, got {len(non_foil_groups)}"
+
+    # Test default threshold (50.0)
+    DEFAULT_FOIL_THRESHOLD = 50.0
+
+    # Verify all foil fixtures are detected as foil
+    for i, frames in enumerate(foil_groups):
+        if len(frames) < 2:
+            continue  # Skip single-frame groups
+        is_foil = detect_foil_card(frames, threshold=DEFAULT_FOIL_THRESHOLD)
+        assert is_foil is True, f"Foil fixture {i} should be detected as foil at threshold {DEFAULT_FOIL_THRESHOLD}"
+
+    # Verify all non-foil fixtures are NOT detected as foil
+    for i, frames in enumerate(non_foil_groups):
+        if len(frames) < 2:
+            continue  # Skip single-frame groups
+        is_foil = detect_foil_card(frames, threshold=DEFAULT_FOIL_THRESHOLD)
+        assert is_foil is False, f"Non-foil fixture {i} should NOT be detected as foil at threshold {DEFAULT_FOIL_THRESHOLD}"
+
+
+def _load_fixture_groups(fixture_dir: 'Path') -> list:
+    """Load all fixture groups from subdirectories.
+
+    Args:
+        fixture_dir: Path to directory containing subdirectories with PNGs
+
+    Returns:
+        List of frame groups, where each group is a list of BGR frames
+    """
+    from pathlib import Path
+
+    if not fixture_dir.exists():
+        return []
+
+    groups = []
+    subdirs = sorted([d for d in fixture_dir.iterdir() if d.is_dir()])
+    for subdir in subdirs:
+        png_files = sorted(subdir.glob("*.png"))
+        if not png_files:
+            continue
+
+        frames = []
+        for png_file in png_files:
+            frame = cv2.imread(str(png_file), cv2.IMREAD_COLOR)
+            if frame is None:
+                continue
+            frames.append(frame)
+
+        if frames:
+            groups.append(frames)
+
+    return groups

@@ -1,6 +1,12 @@
 import numpy as np
 import cv2
 
+# Calibrated via scripts/calibrate_foil_threshold.py
+# Threshold for detecting foil/holographic cards based on Laplacian variance across frames.
+# Calibration on synthetic fixture sets (3 foil + 3 non-foil groups) showed perfect
+# separation across the range 10.0-80.0, selecting 50.0 as a robust midpoint.
+DEFAULT_FOIL_THRESHOLD = 50.0
+
 
 def compute_laplacian_variance(frames: list[np.ndarray]) -> float:
     """
@@ -14,7 +20,7 @@ def compute_laplacian_variance(frames: list[np.ndarray]) -> float:
     Returns:
         Mean spatial variance of Laplacian magnitudes across all frames
     """
-    if not frames:
+    if len(frames) < 2:
         return 0.0
 
     # Convert frames to grayscale and compute Laplacian for each
@@ -44,7 +50,7 @@ def compute_laplacian_variance(frames: list[np.ndarray]) -> float:
     return float(mean_variance)
 
 
-def detect_foil_card(frames: list[np.ndarray], threshold: float = 50.0) -> bool:
+def detect_foil_card(frames: list[np.ndarray], threshold: float = DEFAULT_FOIL_THRESHOLD) -> bool:
     """
     Detect if a card is foil/holographic based on Laplacian variance.
 
@@ -58,5 +64,7 @@ def detect_foil_card(frames: list[np.ndarray], threshold: float = 50.0) -> bool:
     Returns:
         True if card is foil, False otherwise
     """
+    if len(frames) < 2:
+        return False
     variance = compute_laplacian_variance(frames)
     return variance > threshold
