@@ -46,3 +46,37 @@ def test_foil_detection_threshold_tuning():
     # The key is that threshold is tunable
     assert isinstance(detected_low, bool), "Should return boolean"
     assert isinstance(detected_high, bool), "Should return boolean"
+
+def test_glare_rejection_fusion_preserves_luminance():
+    """Verify glare-rejection fusion picks closest-to-median pixels."""
+    from src.card_capture.fusion.median_fusion import glare_rejection_fusion
+
+    # Three frames: one bright (glare), two nominal
+    frames = [
+        np.ones((100, 100, 3), dtype=np.uint8) * 120,  # nominal
+        np.ones((100, 100, 3), dtype=np.uint8) * 250,  # bright (glare)
+        np.ones((100, 100, 3), dtype=np.uint8) * 118,  # nominal (close to first)
+    ]
+
+    fused = glare_rejection_fusion(frames)
+
+    # Result should be close to median (120), not glare (250)
+    mean_pixel_value = np.mean(fused)
+
+    assert 110 < mean_pixel_value < 130, f"Should preserve luminance ~120, got {mean_pixel_value}"
+    assert mean_pixel_value < 200, f"Should reject glare, but got {mean_pixel_value}"
+
+def test_glare_rejection_fusion_shape():
+    """Verify glare-rejection fusion returns same shape as input frames."""
+    from src.card_capture.fusion.median_fusion import glare_rejection_fusion
+
+    frames = [
+        np.random.randint(50, 200, (750, 1050, 3), dtype=np.uint8),
+        np.random.randint(50, 200, (750, 1050, 3), dtype=np.uint8),
+        np.random.randint(50, 200, (750, 1050, 3), dtype=np.uint8),
+    ]
+
+    fused = glare_rejection_fusion(frames)
+
+    assert fused.shape == (750, 1050, 3), f"Shape mismatch: expected (750, 1050, 3), got {fused.shape}"
+    assert fused.dtype == np.uint8, f"Type should be uint8, got {fused.dtype}"
