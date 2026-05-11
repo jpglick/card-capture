@@ -47,6 +47,7 @@ _SESSION_DUPLICATE_HAMMING_MAX = 6
 _SESSION_TEXTINESS_MARGIN = 0.03
 _SESSION_APPEARANCE_SIMILARITY_MIN = 0.995
 _SESSION_MERGE_SIMILARITY_MIN = 0.99
+_SAME_CARD_HAMMING_MAX = 22  # 16-hex-char (64-bit) phash; 22/64 ≈ 34% bits differ
 
 
 class PipelineTimer:
@@ -879,10 +880,40 @@ def _min_hash_distance(
     )
 
 
+def _track_representative_hash(
+    track: Any,
+    deduplicator: VisualDeduplicator,
+) -> Optional[str]:
+    """Compute a phash from the highest-confidence candidate in the track."""
+    best = None
+    best_score = -1.0
+    for cand in track.candidates:
+        if cand.image_path is None:
+            continue
+        score = float(cand.score.total)
+        if score > best_score:
+            best = cand
+            best_score = score
+    if best is None:
+        return None
+    img = cv2.imread(best.image_path)
+    if img is None:
+        return None
+    try:
+        return deduplicator.compute_phash(img)
+    except Exception:
+        return None
+
+
 def _resolve_session_tracks(
     prepared_tracks: list[_PreparedTrack],
     deduplicator: VisualDeduplicator,
 ) -> None:
+    """For each session, label the longest track Front. The second-longest is
+    only promoted to Back if its representative appearance is within
+    _SAME_CARD_HAMMING_MAX of the front's (i.e., it really looks like another
+    view of the same card). Otherwise both tracks remain Fronts of distinct
+    cards."""
     by_session: dict[int, list[tuple[int, _PreparedTrack]]] = {}
     for track_index, prepared in enumerate(prepared_tracks):
         by_session.setdefault(prepared.session_id, []).append((track_index, prepared))
@@ -890,25 +921,32 @@ def _resolve_session_tracks(
     for session_tracks in by_session.values():
         if not session_tracks:
             continue
-            
-        # Sort by track length (descending)
         session_tracks.sort(key=lambda item: len(item[1].track.candidates), reverse=True)
-        
-        # Longest track is front
+
         first_index, first_prepared = session_tracks[0]
         first_prepared.duplicate_track_index = None
         first_prepared.angle = "Front"
-        
-        # Second longest is back
-        if len(session_tracks) > 1:
-            second_index, second_prepared = session_tracks[1]
-            second_prepared.duplicate_track_index = first_index
-            second_prepared.angle = "Back"
-            
-            # Any remaining are fragments, merge them to the front
-            for frag_index, frag_prepared in session_tracks[2:]:
-                frag_prepared.duplicate_track_index = first_index
-                frag_prepared.angle = "Front"
+        first_hash = _track_representative_hash(first_prepared.track, deduplicator)
+
+        for other_index, other_prepared in session_tracks[1:]:
+            other_hash = _track_representative_hash(other_prepared.track, deduplicator)
+            same_card = False
+            if first_hash is not None and other_hash is not None:
+                ham = deduplicator.hamming_distance(first_hash, other_hash)
+                same_card = ham <= _SAME_CARD_HAMMING_MAX
+            if same_card:
+                # First "same-card" companion → Back; any further same-card → Front fragment.
+                if all(prev_pt.duplicate_track_index != first_index or prev_pt.angle != "Back"
+                       for _, prev_pt in session_tracks[1:]
+                       if prev_pt is not other_prepared):
+                    other_prepared.angle = "Back"
+                else:
+                    other_prepared.angle = "Front"
+                other_prepared.duplicate_track_index = first_index
+            else:
+                # Distinct card → independent Front instance.
+                other_prepared.angle = "Front"
+                other_prepared.duplicate_track_index = None
 
 def _build_candidates(rows: list[_DetectionEnvelope]) -> list[ScoredCandidate]:
     candidates: list[ScoredCandidate] = []

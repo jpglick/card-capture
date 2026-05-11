@@ -376,15 +376,30 @@ def test_select_canonical_entries_prefers_same_appearance_cluster():
     assert selected_ids == {1, 2, 3}
 
 
-def test_resolve_session_tracks_merges_visually_identical_clusters():
+def test_resolve_session_tracks_merges_visually_identical_clusters(tmp_path):
+    """v4.1 NoveltyGate: visually identical tracks still merge front+back."""
+    import cv2
     deduplicator = VisualDeduplicator()
     image = np.full((120, 80, 3), 180, dtype=np.uint8)
     image[20:100, 20:60] = 30
+
+    # Save the image so we have a path to read from
+    img_path = str(tmp_path / "identical.jpg")
+    cv2.imwrite(img_path, image)
+
     prepared = []
     for idx, frame_index in enumerate((100, 120), start=1):
+        # Create a track with a candidate that has an image path
+        track = type("Track", (), {"instance_id": f"t{idx}", "candidates": []})()
+        track.candidates.append(ScoredCandidate(
+            detection_id=idx, timestamp_ms=idx * 33, image_path=img_path,
+            score=QualityScore(total=0.7, components={}),
+            corners=[(0, 0), (60, 0), (60, 90), (0, 90)],
+            frame_index=frame_index,
+        ))
         prepared.append(
             _PreparedTrack(
-                track=type("Track", (), {"instance_id": f"t{idx}", "candidates": []})(),
+                track=track,
                 session_id=1,
                 first_frame_index=frame_index,
                 angle="Front",
