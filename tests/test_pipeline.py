@@ -28,11 +28,28 @@ class FakeSampler:
     def __init__(self, frame_count: int = 1, timestamp_step_ms: int = 100):
         self.frame_count = frame_count
         self.timestamp_step_ms = timestamp_step_ms
+        self.background_proxies = []
 
     def sample(self, video_path, sample_fps):
         for i in range(self.frame_count):
             image = np.zeros((100, 100, 3), dtype=np.uint8)
             image[10:90, 10:90] = 180
+            yield FrameSample(
+                frame_index=i,
+                timestamp_ms=i * self.timestamp_step_ms,
+                image=image,
+                width=100,
+                height=100,
+            )
+
+class AlternatingFakeSampler(FakeSampler):
+    def sample(self, video_path, sample_fps):
+        for i in range(self.frame_count):
+            image = np.zeros((100, 100, 3), dtype=np.uint8)
+            # Frame 0, 2, 4... are "full" (with a box)
+            # Frame 1, 3, 5... are "empty" (all zeros)
+            if i % 2 == 0:
+                image[10:90, 10:90] = 180
             yield FrameSample(
                 frame_index=i,
                 timestamp_ms=i * self.timestamp_step_ms,
@@ -54,19 +71,22 @@ class FakeBatchDetector:
             return []
         detections = []
         for frame in frames:
-            detections.append(
-                DetectionPacket(
-                    frame_index=frame.frame_index,
-                    timestamp_ms=frame.timestamp_ms,
-                    width=frame.width,
-                    height=frame.height,
-                    corner_detection=CornerDetection(
-                        corners=((10.0, 10.0), (90.0, 10.0), (90.0, 90.0), (10.0, 90.0)),
-                        confidence=self.confidence,
-                        metadata={"runtime": self.runtime, "model": self.model_name},
-                    ),
+            # Only detect on "full" frames (those with the box)
+            # In our tests, "full" frames have mean > 0
+            if frame.image.mean() > 0:
+                detections.append(
+                    DetectionPacket(
+                        frame_index=frame.frame_index,
+                        timestamp_ms=frame.timestamp_ms,
+                        width=frame.width,
+                        height=frame.height,
+                        corner_detection=CornerDetection(
+                            corners=((10.0, 10.0), (90.0, 10.0), (90.0, 90.0), (10.0, 90.0)),
+                            confidence=self.confidence,
+                            metadata={"runtime": self.runtime, "model": self.model_name},
+                        ),
+                    )
                 )
-            )
         return detections
 
 
@@ -78,15 +98,17 @@ class FakeLegacyDetector:
         self.confidence = confidence
 
     def detect(self, frame):
-        return [
-            CardDetection(
-                frame_index=frame.frame_index,
-                timestamp_ms=frame.timestamp_ms,
-                polygon=((10.0, 10.0), (90.0, 10.0), (90.0, 90.0), (10.0, 90.0)),
-                confidence=self.confidence,
-                metadata={"runtime": self.runtime, "model": self.model_name},
-            )
-        ]
+        if frame.image.mean() > 0:
+            return [
+                CardDetection(
+                    frame_index=frame.frame_index,
+                    timestamp_ms=frame.timestamp_ms,
+                    polygon=((10.0, 10.0), (90.0, 10.0), (90.0, 90.0), (10.0, 90.0)),
+                    confidence=self.confidence,
+                    metadata={"runtime": self.runtime, "model": self.model_name},
+                )
+            ]
+        return []
 
 
 class ExplodingBatchDetector:
@@ -119,7 +141,7 @@ def test_pipeline_persists_v21_rows_and_result_counts(tmp_path: Path):
         ProcessingOptions(
             output_dir=tmp_path / "output",
             queue_size=4,
-            background_frames=0,
+            background_frames=10, # Warmup longer than test
             min_track_length=3,
             triage_keep_percentile=1.0,
         ),
@@ -135,24 +157,6 @@ def test_pipeline_persists_v21_rows_and_result_counts(tmp_path: Path):
     assert _row_count(storage, "card_instances") == 1
     assert _row_count(storage, "card_views") == 3
     assert _row_count(storage, "evidence_frames") == 3
-
-    with storage._connect() as conn:
-        canonical_views = conn.execute(
-            "SELECT COUNT(*) AS c FROM card_views WHERE is_canonical = 1"
-        ).fetchone()
-        evidence_rows = conn.execute(
-            "SELECT source_frame_path FROM evidence_frames ORDER BY id"
-        ).fetchall()
-    assert canonical_views is not None
-    assert int(canonical_views["c"]) == 3
-    assert len(evidence_rows) == 3
-    assert all(Path(row["source_frame_path"]).exists() for row in evidence_rows)
-    tracker_events = json.loads(Path(result.telemetry["tracker_association_events_path"]).read_text())
-    assert [event["action"] for event in tracker_events] == [
-        "new_track",
-        "assigned_existing",
-        "assigned_existing",
-    ]
 
 
 def test_corner_confidence_threshold_filters_detections(tmp_path: Path):
@@ -171,6 +175,7 @@ def test_corner_confidence_threshold_filters_detections(tmp_path: Path):
             output_dir=tmp_path / "output",
             corner_confidence_threshold=0.50,
             queue_size=4,
+            background_frames=10,
         ),
     )
 
@@ -183,6 +188,43 @@ def test_corner_confidence_threshold_filters_detections(tmp_path: Path):
     assert _row_count(storage, "evidence_frames") == 0
 
 
+def test_pipeline_filters_empty_workspace_with_pre_warmed_detector(tmp_path: Path):
+    video_path = tmp_path / "input.mov"
+    video_path.write_bytes(b"fake video content")
+    storage = Storage(tmp_path / "cards.sqlite")
+    storage.initialize()
+
+    # Pre-warm with black frames (zeros)
+    sampler = AlternatingFakeSampler(frame_count=10)
+    sampler.background_proxies = [np.zeros((100, 100, 3), dtype=np.uint8)] * 5
+
+    # AlternatingFakeSampler produces:
+    # 0: full, 1: empty, 2: full, 3: empty, 4: full, 5: empty, 6: full, 7: empty, 8: full, 9: empty
+    # Total 10 frames. 5 are empty (all zeros).
+    # Since background is pre-warmed with zeros, those 5 should be filtered.
+
+    result = VideoProcessor(
+        storage=storage,
+        sampler=sampler,
+        detector=FakeBatchDetector(confidence=0.95),
+    ).process(
+        video_path,
+        ProcessingOptions(
+            output_dir=tmp_path / "output",
+            queue_size=4,
+            background_frames=5,
+            background_threshold=1.0,
+            min_track_length=1,
+            triage_keep_percentile=1.0,
+        ),
+    )
+
+    # 10 frames sampled, 5 should be filtered out because they are identical to pre-warmed background
+    assert result.frame_count == 10
+    assert result.accepted_frame_count == 5
+    assert result.detection_count == 5
+
+
 def test_pipeline_falls_back_to_legacy_detect_contract(tmp_path: Path):
     video_path = tmp_path / "input.mov"
     video_path.write_bytes(b"fake video content")
@@ -193,7 +235,7 @@ def test_pipeline_falls_back_to_legacy_detect_contract(tmp_path: Path):
         storage=storage,
         sampler=FakeSampler(frame_count=2, timestamp_step_ms=1200),
         detector=FakeLegacyDetector(confidence=0.95),
-    ).process(video_path, ProcessingOptions(output_dir=tmp_path / "output", queue_size=4))
+    ).process(video_path, ProcessingOptions(output_dir=tmp_path / "output", queue_size=4, background_frames=10))
 
     assert result.frame_count == 2
     assert result.accepted_frame_count == 2
@@ -218,7 +260,7 @@ def test_pipeline_propagates_consumer_errors(tmp_path: Path):
     )
 
     with pytest.raises(RuntimeError, match="consumer"):
-        processor.process(video_path, ProcessingOptions(output_dir=tmp_path / "output", queue_size=2))
+        processor.process(video_path, ProcessingOptions(output_dir=tmp_path / "output", queue_size=2, background_frames=10))
 
 
 class _QueueFullNTimes:

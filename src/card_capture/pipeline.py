@@ -985,6 +985,7 @@ def _run_pipeline_workers(
     detection_queue = ctx.Queue(maxsize=options.queue_size)
     error_queue = ctx.Queue(maxsize=8)
     stats_queue = ctx.Queue(maxsize=1)
+    background_proxies = getattr(sampler, "background_proxies", [])
     producer = ctx.Process(
         target=_producer_main,
         args=(
@@ -996,6 +997,7 @@ def _run_pipeline_workers(
             options.empty_pixel_threshold,
             options.background_frames,
             options.background_threshold,
+            background_proxies,
             options.triage_keep_percentile,
             frame_queue,
             stats_queue,
@@ -1157,6 +1159,7 @@ def _producer_main(
     empty_pixel_threshold: float,
     background_frames: int,
     background_threshold: float,
+    background_proxies: list[np.ndarray],
     triage_keep_percentile: float,
     frame_queue,
     stats_queue,
@@ -1171,10 +1174,19 @@ def _producer_main(
         blur_threshold=blur_threshold,
     )
     null_detector = NullStateDetector(frames=background_frames, threshold=background_threshold)
+    if background_proxies:
+        null_detector.warmup_batch(background_proxies)
+
     try:
         for frame in sampler.sample(Path(video_path), 0.0):
             timer = PipelineTimer()
             frame_count += 1
+            
+            # Workspace empty check (background subtraction)
+            is_empty = null_detector.is_workspace_empty(frame.image)
+            if is_empty:
+                continue
+
             accepted, metrics = triage.evaluate(frame.image)
             timer.record("t_ingest")
 
