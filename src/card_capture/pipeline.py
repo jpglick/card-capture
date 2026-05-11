@@ -50,6 +50,44 @@ _SESSION_MERGE_SIMILARITY_MIN = 0.99
 _SAME_CARD_HAMMING_MAX = 22  # 16-hex-char (64-bit) phash; 22/64 ≈ 34% bits differ
 
 
+def adaptive_min_track_length(
+    detection_count: int,
+    inter_gap_frames: list[float],
+    min_baseline: int = 3,
+) -> int:
+    """Compute adaptive min_track_length from inter-detection gaps.
+
+    Replaces the formula: len(detection_rows) // 3 (which is too high
+    for long single-card videos) with:
+    max(min_baseline, median_gap × 3)
+
+    This scales the threshold to the typical card-swap frequency rather
+    than the absolute detection count.
+
+    Args:
+        detection_count: Total number of detections (unused in new formula, kept for API)
+        inter_gap_frames: List of inter-detection gap frame counts
+        min_baseline: Minimum threshold (default 3)
+
+    Returns:
+        max(min_baseline, int(median_gap × 3))
+
+    Example:
+        Long single-card video (300 detections, gaps ~2 frames):
+        - Old: 300 // 3 = 100 (too high)
+        - New: max(3, 2 × 3) = 6 (better)
+
+        Frequent swaps (300 detections, gaps ~11 frames):
+        - Old: 300 // 3 = 100
+        - New: max(3, 11 × 3) = 33 (appropriate for swap frequency)
+    """
+    if not inter_gap_frames:
+        return min_baseline
+
+    median_gap = float(np.median(inter_gap_frames))
+    return max(min_baseline, int(median_gap * 3))
+
+
 class PipelineTimer:
     def __init__(self):
         self.start_time = time.monotonic()
@@ -306,10 +344,29 @@ class VideoProcessor:
         else:
             tracker_t_high = 0.60
         tracker_t_low = max(0.20, tracker_t_high - 0.20)
-        adaptive_min_track_length = max(
-            3,
-            min(options.min_track_length, max(3, len(detection_rows) // 3)),
+
+        # Task 6: Compute inter-detection gaps for adaptive min_track_length
+        inter_detection_gaps: list[float] = []
+        if len(detection_rows) > 1:
+            # Sort detections by frame_index to compute gaps in chronological order
+            sorted_detections = sorted(
+                detection_rows,
+                key=lambda row: int(row.detection_packet.frame_index)
+            )
+            for i in range(1, len(sorted_detections)):
+                prev_frame = int(sorted_detections[i - 1].detection_packet.frame_index)
+                curr_frame = int(sorted_detections[i].detection_packet.frame_index)
+                gap = curr_frame - prev_frame
+                if gap > 0:  # Only positive gaps
+                    inter_detection_gaps.append(gap)
+
+        # Task 6: Use adaptive formula instead of len(detection_rows) // 3
+        min_track_length_adaptive = adaptive_min_track_length(len(detection_rows), inter_detection_gaps)
+        min_track_length_value = min(
+            options.min_track_length,
+            min_track_length_adaptive
         )
+
         # lost_track_buffer: keep a ByteTrack "lost" track alive for half the session gap
         # so detections that briefly disappear within a session are re-associated rather
         # than spawning a new track.
@@ -320,7 +377,7 @@ class VideoProcessor:
         if options.tracker_backend == "botsort":
             try:
                 self.tracker = BoTSORTAdapter(
-                    min_track_length=adaptive_min_track_length,
+                    min_track_length=min_track_length_value,
                     track_activation_threshold=tracker_t_high,
                     lost_track_buffer=lost_track_buffer,
                     minimum_matching_threshold=tracker_t_low,
@@ -335,12 +392,12 @@ class VideoProcessor:
                     stacklevel=2,
                 )
                 self.tracker = ByteTrackAdapter(
-                    min_track_length=adaptive_min_track_length,
+                    min_track_length=min_track_length_value,
                     lost_track_buffer=lost_track_buffer,
                 )
         else:
             self.tracker = ByteTrackAdapter(
-                min_track_length=adaptive_min_track_length,
+                min_track_length=min_track_length_value,
                 lost_track_buffer=lost_track_buffer,
             )
 
@@ -386,16 +443,15 @@ class VideoProcessor:
             last_frame_idx = frame_index
 
             # --- Centroid jump split ---
-            primary_bbox = None
+            primary_obb_corners = None
             frame_candidates_for_centroid = by_frame.get(frame_index, [])
             if frame_candidates_for_centroid:
                 best = max(frame_candidates_for_centroid, key=lambda c: c.score.total)
                 if best.corners:
-                    from .tracking.bytetrack_adapter import _xyxy_from_corners
-                    primary_bbox = _xyxy_from_corners(best.corners)
+                    primary_obb_corners = np.array(best.corners, dtype=np.float32)
             # frame_width: use a reasonable default; exact value from sampler telemetry if available
             frame_width = getattr(options, '_frame_width_hint', 1280)
-            if centroid_detector.update(primary_bbox, frame_width):
+            if centroid_detector.update(primary_obb_corners, frame_width):
                 self.tracker.finalize()
                 self.storage.add_pipeline_event(
                     video_id=video_id,
@@ -630,7 +686,7 @@ class VideoProcessor:
             )
         sampler_telemetry["tracker_t_high"] = tracker_t_high
         sampler_telemetry["tracker_t_low"] = tracker_t_low
-        sampler_telemetry["adaptive_min_track_length"] = adaptive_min_track_length
+        sampler_telemetry["adaptive_min_track_length"] = min_track_length_value
         sampler_telemetry["detections"] = len(detection_rows)
         sampler_telemetry["raw_track_lengths"] = raw_track_lengths
         sampler_telemetry["tracks_finalized"] = len(tracks)

@@ -380,3 +380,179 @@ def test_quality_weighted_track_selection(tmp_path):
         f"Sharp track should be Front (quality-weighted), got {angles['sharp_short']}"
     assert angles["blurry_long"] == "Back", \
         f"Blurry track should be Back despite longer length, got {angles['blurry_long']}"
+
+
+def test_obb_centroid_invariant_under_rotation():
+    """
+    Task 5: OBB centroid for centroid-jump detection.
+
+    The centroid of a rotated bounding box (OBB) should remain constant
+    regardless of rotation angle. This test verifies that:
+    1. A 0° (axis-aligned) box at (100, 100)-(300, 300) has centroid (200, 200)
+    2. A 45° rotated box at the same location has the same centroid (200, 200)
+
+    This ensures in-place rotation doesn't trigger spurious session resets
+    due to false positive centroid jumps.
+    """
+    from card_capture.tracking.centroid_jump import centroid_from_obb
+
+    # Axis-aligned OBB: corners at (100, 100), (300, 100), (300, 300), (100, 300)
+    # Center should be at (200, 200)
+    obb_aligned = np.array([
+        (100.0, 100.0),  # top-left
+        (300.0, 100.0),  # top-right
+        (300.0, 300.0),  # bottom-right
+        (100.0, 300.0),  # bottom-left
+    ], dtype=np.float32)
+
+    centroid_aligned = centroid_from_obb(obb_aligned)
+    assert centroid_aligned == (200.0, 200.0), \
+        f"Axis-aligned centroid should be (200, 200), got {centroid_aligned}"
+
+    # Rotated OBB: 45° rotation around the same center (150, 150) with ~142px diagonal
+    # The four corners of a 200x200 box rotated 45° around center (200, 200):
+    # Distance from center to corner: sqrt(100^2 + 100^2) ≈ 141.42
+    # Corners are at 45°, 135°, 225°, 315° from center
+    d = np.sqrt(2) * 100  # ~141.42 distance from center to corner
+    obb_rotated = np.array([
+        (200 + d * np.cos(np.pi / 4), 200 + d * np.sin(np.pi / 4)),      # 45°
+        (200 + d * np.cos(3 * np.pi / 4), 200 + d * np.sin(3 * np.pi / 4)),  # 135°
+        (200 + d * np.cos(5 * np.pi / 4), 200 + d * np.sin(5 * np.pi / 4)),  # 225°
+        (200 + d * np.cos(7 * np.pi / 4), 200 + d * np.sin(7 * np.pi / 4)),  # 315°
+    ], dtype=np.float32)
+
+    centroid_rotated = centroid_from_obb(obb_rotated)
+    # Allow small floating-point error (1e-10)
+    assert abs(centroid_rotated[0] - 200.0) < 1e-9, \
+        f"Rotated centroid X should be ~200.0, got {centroid_rotated[0]}"
+    assert abs(centroid_rotated[1] - 200.0) < 1e-9, \
+        f"Rotated centroid Y should be ~200.0, got {centroid_rotated[1]}"
+
+    # Both centroids should be equal (within floating-point precision)
+    assert abs(centroid_aligned[0] - centroid_rotated[0]) < 1e-9, \
+        f"Aligned and rotated centroids should match (X), got {centroid_aligned[0]} vs {centroid_rotated[0]}"
+    assert abs(centroid_aligned[1] - centroid_rotated[1]) < 1e-9, \
+        f"Aligned and rotated centroids should match (Y), got {centroid_aligned[1]} vs {centroid_rotated[1]}"
+
+
+def test_adaptive_min_track_length_from_inter_gaps():
+    """
+    Task 6: Adaptive min_track_length from inter-detection gaps.
+
+    Replace formula: len(detection_rows) // 3
+    With formula:    max(3, median_gap × 3)
+
+    Scenario:
+    - 300 detections in long single-card video
+    - Inter-detection gaps ~2 frames (median)
+    - Old formula: 300 // 3 = 100 (too high, causes false negative resets)
+    - New formula: max(3, 2 × 3) = 6 (much better)
+
+    This test verifies that the adaptive formula scales with typical
+    swap frequency instead of absolute detection count.
+    """
+    from card_capture.pipeline import adaptive_min_track_length
+
+    # Scenario 1: Long video with many detections, small inter-gaps
+    # (single card continuously visible)
+    inter_gaps_small = [2, 2, 2, 2, 2]  # median = 2
+    result = adaptive_min_track_length(detection_count=300, inter_gap_frames=inter_gaps_small)
+    assert result == 6, \
+        f"Expected 6 (max(3, 2*3)), got {result}"
+
+    # Scenario 2: Frequent card swaps (larger inter-gaps)
+    inter_gaps_large = [10, 12, 11, 13, 10]  # median = 11
+    result = adaptive_min_track_length(detection_count=300, inter_gap_frames=inter_gaps_large)
+    assert result == 33, \
+        f"Expected 33 (max(3, 11*3)), got {result}"
+
+    # Scenario 3: Empty inter-gaps list (fallback)
+    result = adaptive_min_track_length(detection_count=100, inter_gap_frames=[])
+    assert result == 3, \
+        f"Expected 3 (baseline min), got {result}"
+
+    # Scenario 4: Single gap value
+    result = adaptive_min_track_length(detection_count=50, inter_gap_frames=[5])
+    assert result == 15, \
+        f"Expected 15 (max(3, 5*3)), got {result}"
+
+    # Scenario 5: Gaps that compute to less than baseline
+    result = adaptive_min_track_length(detection_count=200, inter_gap_frames=[0.5])
+    assert result == 3, \
+        f"Expected 3 (baseline min, since 0.5*3 < 3), got {result}"
+
+
+def test_lab_color_novelty_detects_chroma_difference(tmp_path):
+    """
+    Task 4: Lab-color novelty detection.
+
+    Replaces grayscale-only novelty with Lab color (L=1.0, a=0.5, b=0.5 weights).
+    Detects cards that match in luminance but differ in chroma.
+
+    Test scenario: tan card on wooden background
+    - Both have similar luminance (L) → grayscale novelty ≈ 0
+    - Different chrominance (a, b) → Lab novelty > threshold
+
+    This test ensures Lab color mode can detect color-only differences.
+    """
+    import cv2
+    from card_capture.presence.background_novelty import BackgroundModel, quad_novelty
+
+    # Create a wooden background (warm brownish tone)
+    # Wooden background: (B=100, G=140, R=165) ≈ wood color
+    bg_frames = []
+    for _ in range(5):
+        frame = np.full((200, 200, 3), (100, 140, 165), dtype=np.uint8)
+        bg_frames.append(frame)
+    bg = BackgroundModel.from_frames(bg_frames)
+
+    # Create a frame with a tan card on the wooden background
+    # Tan card: (B=150, G=180, R=210) - same relative luminance, different chroma
+    # The tan card is printed to have similar luminance to the wood but different color
+    frame = np.full((200, 200, 3), (100, 140, 165), dtype=np.uint8)
+    # Paint a tan card in the center
+    frame[50:150, 50:150] = (150, 180, 210)
+
+    # Card corners (center region)
+    corners = [(50.0, 50.0), (150.0, 50.0), (150.0, 150.0), (50.0, 150.0)]
+
+    # Grayscale novelty should be LOW because the luminance is similar
+    grayscale_score = quad_novelty(frame, corners, bg, color_space="grayscale")
+    assert grayscale_score < 0.15, \
+        f"Grayscale novelty should be low for similar luminance: {grayscale_score}"
+
+    # Lab novelty should be HIGH because the chroma differs
+    lab_score = quad_novelty(frame, corners, bg, color_space="lab",
+                             lab_weights=(1.0, 0.5, 0.5))
+    assert lab_score > 0.20, \
+        f"Lab novelty should be high for different chroma: {lab_score}"
+
+
+def test_lab_novelty_backward_compatible_with_grayscale(tmp_path):
+    """
+    Test that Lab novelty with zero a/b weights equals grayscale novelty.
+
+    This verifies backward compatibility: Lab mode with (1.0, 0, 0) weights
+    should produce the same result as grayscale mode (approximately, due to
+    rounding differences in color space conversion).
+    """
+    import cv2
+    from card_capture.presence.background_novelty import BackgroundModel, quad_novelty
+
+    # Create uniform background
+    bg_frames = [np.full((100, 100, 3), (128, 128, 128), dtype=np.uint8) for _ in range(3)]
+    bg = BackgroundModel.from_frames(bg_frames)
+
+    # Create frame with contrasting patch
+    frame = np.full((100, 100, 3), (128, 128, 128), dtype=np.uint8)
+    frame[25:75, 25:75] = (50, 50, 50)
+    corners = [(25.0, 25.0), (75.0, 25.0), (75.0, 75.0), (25.0, 75.0)]
+
+    grayscale_score = quad_novelty(frame, corners, bg, color_space="grayscale")
+    # Lab with zero chroma weights (only luminance)
+    lab_lum_only = quad_novelty(frame, corners, bg, color_space="lab",
+                                lab_weights=(1.0, 0.0, 0.0))
+
+    # Should be very close (within rounding error)
+    assert abs(grayscale_score - lab_lum_only) < 0.05, \
+        f"Lab luminance-only ({lab_lum_only:.3f}) should match grayscale ({grayscale_score:.3f})"
