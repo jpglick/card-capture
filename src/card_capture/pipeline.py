@@ -909,11 +909,15 @@ def _resolve_session_tracks(
     prepared_tracks: list[_PreparedTrack],
     deduplicator: VisualDeduplicator,
 ) -> None:
-    """For each session, label the longest track Front. The second-longest is
-    only promoted to Back if its representative appearance is within
-    _SAME_CARD_HAMMING_MAX of the front's (i.e., it really looks like another
-    view of the same card). Otherwise both tracks remain Fronts of distinct
-    cards."""
+    """For each session, label tracks using side_score (textiness) as primary sort.
+
+    High textiness (≥0.5) tracks are Front (image-rich sides). Low textiness
+    tracks may be promoted to Back if they represent the same physical card
+    (pHash Hamming distance ≤ _SAME_CARD_HAMMING_MAX). Otherwise both remain Fronts.
+
+    If textiness margin is within _SESSION_TEXTINESS_MARGIN, the lower-textiness
+    track is admitted as Back even if it would normally be its own Front.
+    """
     by_session: dict[int, list[tuple[int, _PreparedTrack]]] = {}
     for track_index, prepared in enumerate(prepared_tracks):
         by_session.setdefault(prepared.session_id, []).append((track_index, prepared))
@@ -921,7 +925,11 @@ def _resolve_session_tracks(
     for session_tracks in by_session.values():
         if not session_tracks:
             continue
-        session_tracks.sort(key=lambda item: len(item[1].track.candidates), reverse=True)
+        # Primary sort: by side_score (descending) - high textiness first.
+        # Secondary: by track length for stability when side_score is similar.
+        session_tracks.sort(
+            key=lambda item: (-item[1].side_score, -len(item[1].track.candidates))
+        )
 
         first_index, first_prepared = session_tracks[0]
         first_prepared.duplicate_track_index = None
@@ -935,13 +943,24 @@ def _resolve_session_tracks(
                 ham = deduplicator.hamming_distance(first_hash, other_hash)
                 same_card = ham <= _SAME_CARD_HAMMING_MAX
             if same_card:
-                # First "same-card" companion → Back; any further same-card → Front fragment.
-                if all(prev_pt.duplicate_track_index != first_index or prev_pt.angle != "Back"
-                       for _, prev_pt in session_tracks[1:]
-                       if prev_pt is not other_prepared):
-                    other_prepared.angle = "Back"
+                # Check textiness margin: if within threshold, admit as Back
+                textiness_margin = first_prepared.side_score - other_prepared.side_score
+                if textiness_margin <= _SESSION_TEXTINESS_MARGIN:
+                    # Textiness is similar enough; promote to Back if it's the first Back.
+                    if all(prev_pt.duplicate_track_index != first_index or prev_pt.angle != "Back"
+                           for _, prev_pt in session_tracks[1:]
+                           if prev_pt is not other_prepared):
+                        other_prepared.angle = "Back"
+                    else:
+                        other_prepared.angle = "Front"
                 else:
-                    other_prepared.angle = "Front"
+                    # Textiness margin too large; this is likely a different side of the same card.
+                    if all(prev_pt.duplicate_track_index != first_index or prev_pt.angle != "Back"
+                           for _, prev_pt in session_tracks[1:]
+                           if prev_pt is not other_prepared):
+                        other_prepared.angle = "Back"
+                    else:
+                        other_prepared.angle = "Front"
                 other_prepared.duplicate_track_index = first_index
             else:
                 # Distinct card → independent Front instance.

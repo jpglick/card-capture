@@ -195,3 +195,90 @@ def test_botsort_fallback_to_zeros_on_decode_failure(mock_botsort_adapter):
 
     # Should still return adapted detections
     assert isinstance(result, list)
+
+
+def test_front_back_assignment_uses_side_score(tmp_path):
+    """
+    Task 2: Front/Back assignment should use side_score (textiness) as primary sort key.
+
+    High textiness (0.8+) → Front (image-rich side)
+    Low textiness (0.2-) → Back (uniform color side)
+
+    This test creates two mock tracks with different side_score values and verifies
+    that the high-textiness track is selected as Front regardless of track length.
+    """
+    import cv2
+    from card_capture.pipeline import _resolve_session_tracks, _PreparedTrack
+    from card_capture.selector import TrackState, ScoredCandidate
+    from card_capture.models import QualityScore
+    from card_capture.deduplicator import VisualDeduplicator
+
+    # Helper to create a track with specified side_score
+    def make_track_with_score(instance_id, num_frames, side_score_val):
+        ts = TrackState(instance_id=instance_id)
+        # Create dummy frame images
+        for i in range(num_frames):
+            frame_path = tmp_path / f"{instance_id}_frame_{i}.jpg"
+            frame = np.zeros((200, 150, 3), dtype=np.uint8)
+            frame[:] = (100, 100, 100)
+            cv2.imwrite(str(frame_path), frame)
+
+            ts.candidates.append(ScoredCandidate(
+                detection_id=i,
+                timestamp_ms=i * 33,
+                image_path=str(frame_path),
+                score=QualityScore(total=0.7, components={}),
+                corners=[(0, 0), (60, 0), (60, 90), (0, 90)],
+                frame_index=i,
+            ))
+        return ts, side_score_val
+
+    # Create high-textiness track (Front candidate)
+    track_high, score_high = make_track_with_score("high_text", num_frames=3, side_score_val=0.8)
+
+    # Create low-textiness track (Back candidate) - NOTE: MORE frames but lower textiness
+    track_low, score_low = make_track_with_score("low_text", num_frames=5, side_score_val=0.2)
+
+    # Build PreparedTrack objects with explicit side_score values
+    prepared = [
+        _PreparedTrack(
+            track=track_high,
+            session_id=1,
+            first_frame_index=0,
+            angle="Front",
+            frame_entries=[],
+            canonical_entries=[],
+            candidate_hashes=[],
+            primary_hash="",
+            side_score=score_high,  # HIGH textiness
+            appearance_vector=np.array([]),
+            canonical_detection_ids=set(),
+            duplicate_track_index=None
+        ),
+        _PreparedTrack(
+            track=track_low,
+            session_id=1,
+            first_frame_index=0,
+            angle="Front",
+            frame_entries=[],
+            canonical_entries=[],
+            candidate_hashes=[],
+            primary_hash="",
+            side_score=score_low,  # LOW textiness (but more frames)
+            appearance_vector=np.array([]),
+            canonical_detection_ids=set(),
+            duplicate_track_index=None
+        ),
+    ]
+
+    # Before refactoring, this test will fail because length-based sort gives
+    # the 5-frame track priority. After refactoring to use side_score, high-textiness
+    # should be Front.
+    _resolve_session_tracks(prepared, VisualDeduplicator())
+
+    angles = {pt.track.instance_id: pt.angle for pt in prepared}
+    # High textiness should be Front, low should be Back (if same card detection passes)
+    assert angles["high_text"] == "Front", \
+        f"High-textiness track should be Front, got {angles['high_text']}"
+    assert angles["low_text"] == "Back", \
+        f"Low-textiness track should be Back, got {angles['low_text']}"
