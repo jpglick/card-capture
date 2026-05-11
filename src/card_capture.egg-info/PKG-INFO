@@ -5,11 +5,12 @@ Summary: Extract high-quality sports card stills from local video files.
 Requires-Python: >=3.9
 Requires-Dist: numpy
 Requires-Dist: opencv-python
-Requires-Dist: supervision>=0.21
+Requires-Dist: supervision<0.28,>=0.21
 Requires-Dist: torchvision
 Provides-Extra: pipeline-v21
 Requires-Dist: av; extra == "pipeline-v21"
 Requires-Dist: onnxruntime; extra == "pipeline-v21"
+Requires-Dist: boxmot>=0.14.0; extra == "pipeline-v21"
 Provides-Extra: model
 Requires-Dist: huggingface-hub; extra == "model"
 Requires-Dist: ultralytics; extra == "model"

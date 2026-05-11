@@ -1,6 +1,6 @@
 numpy
 opencv-python
-supervision>=0.21
+supervision<0.28,>=0.21
 torchvision
 
 [model]
@@ -10,6 +10,7 @@ ultralytics
 [pipeline_v21]
 av
 onnxruntime
+boxmot>=0.14.0
 
 [review]
 fastapi

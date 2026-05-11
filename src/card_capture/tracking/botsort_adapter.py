@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 from typing import List, Optional
 
 import numpy as np
+import torch
 
 from ..selector import ScoredCandidate, TrackState
 from .bytetrack_adapter import _AdaptedDetection, _xyxy_from_corners
@@ -27,6 +29,20 @@ def _import_botsort():
         ) from exc
 
 
+def _get_default_reid_weights() -> Path:
+    """Get the default ReID weights path for boxmot v0.17+."""
+    try:
+        import boxmot
+        weights_dir = Path(boxmot.__file__).parent / "trackers" / "botsort" / "weights"
+        reid_weights = weights_dir / "osnet_x0_25_msmt17.pt"
+        if reid_weights.exists():
+            return reid_weights
+    except Exception:
+        pass
+    # Fallback: boxmot will download if needed
+    return Path("osnet_x0_25_msmt17.pt")
+
+
 class BoTSORTAdapter:
     """BoT-SORT tracker adapter mirroring ByteTrackAdapter interface.
 
@@ -48,10 +64,20 @@ class BoTSORTAdapter:
         self._lost_track_buffer = lost_track_buffer
         self._minimum_matching_threshold = minimum_matching_threshold
         self.reid_distance_threshold = reid_distance_threshold
+
+        # Prepare required arguments for boxmot v0.17+
+        device = torch.device("cpu")
+        reid_weights = _get_default_reid_weights()
+        half = False
+
         self._tracker = BoTSORT(
-            track_activation_threshold=track_activation_threshold,
-            lost_track_buffer=lost_track_buffer,
-            minimum_matching_threshold=minimum_matching_threshold,
+            reid_weights=reid_weights,
+            device=device,
+            half=half,
+            track_high_thresh=track_activation_threshold,
+            track_buffer=lost_track_buffer,
+            match_thresh=minimum_matching_threshold,
+            cmc_method=None,  # Disable camera motion compensation since we have no real frames
         )
         self.min_track_length = min_track_length
         self._tracks: dict[int, TrackState] = {}
@@ -62,10 +88,19 @@ class BoTSORTAdapter:
         """Reset tracker state (e.g., between sessions)."""
         self._all_finalized.extend(self._tracks.values())
         self._tracks = {}
+
+        device = torch.device("cpu")
+        reid_weights = _get_default_reid_weights()
+        half = False
+
         self._tracker = self._BoTSORT(
-            track_activation_threshold=self._track_activation_threshold,
-            lost_track_buffer=self._lost_track_buffer,
-            minimum_matching_threshold=self._minimum_matching_threshold,
+            reid_weights=reid_weights,
+            device=device,
+            half=half,
+            track_high_thresh=self._track_activation_threshold,
+            track_buffer=self._lost_track_buffer,
+            match_thresh=self._minimum_matching_threshold,
+            cmc_method=None,  # Disable camera motion compensation since we have no real frames
         )
         self.pending_splits = []
 
@@ -96,7 +131,11 @@ class BoTSORTAdapter:
             confidence=np.array(confidences, dtype=np.float32),
             class_id=np.zeros(len(boxes), dtype=int),
         )
-        self._tracker.update_with_detections(det)
+
+        # BotSort v0.17+ requires an image parameter
+        # Use a dummy image since we're not using visual features in a meaningful way here
+        dummy_img = np.zeros((480, 640, 3), dtype=np.uint8)
+        self._tracker.update(det, dummy_img)
 
         out: List[_AdaptedDetection] = []
         if det.tracker_id is None:

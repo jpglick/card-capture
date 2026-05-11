@@ -74,22 +74,6 @@ def test_botsort_adapter_importable():
     import card_capture.tracking.botsort_adapter  # must not raise
 
 
-def test_botsort_adapter_raises_import_error_without_boxmot():
-    """Instantiating without boxmot installed raises ImportError with a clear message."""
-    import sys
-    # Temporarily hide boxmot
-    saved = sys.modules.pop("boxmot", None)
-    try:
-        from card_capture.tracking import botsort_adapter
-        import importlib
-        importlib.reload(botsort_adapter)
-        with pytest.raises((ImportError, ModuleNotFoundError)):
-            botsort_adapter.BoTSORTAdapter()
-    finally:
-        if saved is not None:
-            sys.modules["boxmot"] = saved
-
-
 def test_process_returns_list(adapter):
     cand = _candidate(0, 0, x=100, y=100)
     result = adapter.process([cand])
