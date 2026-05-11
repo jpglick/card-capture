@@ -498,3 +498,65 @@ class TestOrientedIoU:
 
         iou = axis_aligned_iou_from_corners(corners_a, corners_b)
         assert iou == 0.0, f"Expected IoU=0.0 for non-overlapping boxes, got {iou}"
+
+
+def test_ecc_registers_shifted_frames():
+    """Verify ECC aligns shifted copies to reference.
+
+    This tests that ECC alignment removes ±1-3 px jitter caused by corner detector
+    instability, which is critical for clean median fusion without ghosting.
+    """
+    # Create a realistic reference frame (trading card size with clear structure)
+    h, w = 1050, 750
+    ref = np.full((h, w, 3), 200, dtype=np.uint8)  # Light background
+    # Add dark borders (card-like)
+    ref[50:150, :] = 50
+    ref[900:950, :] = 50
+    ref[:, 50:150] = 50
+    ref[:, 600:650] = 50
+    # Add interior texture
+    interior = np.random.randint(80, 120, (h - 200, w - 200, 3), dtype=np.uint8)
+    ref[100:h - 100, 100:w - 100] = interior
+
+    # Create shifted versions (simulating corner detector jitter)
+    frames = [ref.copy()]
+    shifts = [(1, 0), (0, 1), (-1, 1)]
+    for shift_x, shift_y in shifts:
+        warp_matrix = np.array([[1, 0, shift_x], [0, 1, shift_y]], dtype=np.float32)
+        shifted = cv2.warpAffine(ref, warp_matrix, (w, h))
+        frames.append(shifted)
+
+    # Measure alignment improvement from ECC registration
+    # First, check mean diff before alignment
+    mean_diffs_before = []
+    for frame in frames[1:]:
+        diff = cv2.absdiff(frame.astype(np.float32), ref.astype(np.float32))
+        mean_diffs_before.append(np.mean(diff))
+
+    # Apply ECC registration
+    aligned = register_frames_via_ecc(frames, reference_index=0)
+
+    # Measure alignment quality after ECC
+    mean_diffs_after = []
+    for aligned_frame in aligned[1:]:
+        diff = cv2.absdiff(aligned_frame.astype(np.float32), ref.astype(np.float32))
+        mean_diffs_after.append(np.mean(diff))
+
+    # Verify that ECC improves alignment (reduces error)
+    avg_before = np.mean(mean_diffs_before)
+    avg_after = np.mean(mean_diffs_after)
+
+    assert avg_after < avg_before, (
+        f"Expected ECC to reduce mean error from {avg_before:.2f} to less than that, "
+        f"but got {avg_after:.2f}"
+    )
+
+    # Verify alignment is reasonably tight (accounting for interpolation and boundary effects)
+    # For 1-3px jitter, we should reduce error to < 50% of original
+    assert avg_after < avg_before * 0.5, (
+        f"Expected ECC to reduce mean error to < 50% of original, "
+        f"but only reduced from {avg_before:.2f} to {avg_after:.2f}"
+    )
+
+    # Also verify that reference frame is unchanged
+    assert np.array_equal(aligned[0], ref), "Reference frame should remain unchanged"

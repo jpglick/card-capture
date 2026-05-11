@@ -2,6 +2,8 @@ import cv2
 import numpy as np
 from typing import List, Tuple, Optional
 
+from card_capture.ecc_registration import register_frames_via_ecc
+
 def find_glare_centroid(image: np.ndarray) -> Optional[Tuple[float, float]]:
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
     _, thresh = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
@@ -55,4 +57,7 @@ class MultiFrameFuser:
         selected_indices = self.select_lighting_diverse_indices(images, max_frames=4)
         selected_frames = [images[i] for i in selected_indices]
 
-        return np.median(np.stack(selected_frames), axis=0).astype(np.uint8)
+        # Register frames to eliminate jitter before median fusion
+        aligned_frames = register_frames_via_ecc(selected_frames, reference_index=0)
+
+        return np.median(np.stack(aligned_frames), axis=0).astype(np.uint8)
