@@ -275,12 +275,36 @@ def test_null_state_detector_warmup_batch():
 def test_null_state_detector_sequential_warmup():
     detector = NullStateDetector(frames=3, threshold=10.0)
     frame = np.full((100, 100, 3), 128, dtype=np.uint8)
-    
+
     # During warmup, it should return False
     assert detector.is_workspace_empty(frame) is False # frame_count 1
     assert detector.is_workspace_empty(frame) is False # frame_count 2
     assert detector.is_workspace_empty(frame) is False # frame_count 3
-    
+
     # Now it should be warmed up
     assert detector.frame_count == 3
     assert detector.is_workspace_empty(frame) is True
+
+
+def test_detector_skips_hf_download_when_cached(tmp_path, monkeypatch):
+    """If hf_hub_download finds the file in the local cache, no network call is needed."""
+    from card_capture import detectors as det_mod
+
+    fake_path = tmp_path / "cached_model.onnx"
+    fake_path.write_bytes(b"weights")
+
+    called = {"count": 0}
+
+    def fake_try_cache(repo_id, filename):
+        return str(fake_path)
+
+    def fake_hf_hub_download(*args, **kwargs):
+        called["count"] += 1
+        return str(fake_path)
+
+    monkeypatch.setattr(det_mod, "_try_local_cache", fake_try_cache, raising=False)
+    monkeypatch.setattr(det_mod, "hf_hub_download", fake_hf_hub_download, raising=False)
+
+    resolved = det_mod._resolve_model_path("acme/foo", "model.onnx")
+    assert resolved == str(fake_path)
+    assert called["count"] == 0, "hf_hub_download must not be invoked when a local cache hit is found"

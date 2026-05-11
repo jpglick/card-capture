@@ -17,6 +17,28 @@ from .models import (
     Polygon,
 )
 
+from huggingface_hub import hf_hub_download
+from huggingface_hub import try_to_load_from_cache
+
+
+def _try_local_cache(repo_id: str, filename: str):
+    """Return the local cached path for (repo_id, filename), else None."""
+    try:
+        cached = try_to_load_from_cache(repo_id=repo_id, filename=filename)
+    except Exception:
+        return None
+    if isinstance(cached, str):
+        return cached
+    return None
+
+
+def _resolve_model_path(repo_id: str, filename: str) -> str:
+    """Prefer a locally cached weights file. Only hit the Hub if no cache exists."""
+    cached = _try_local_cache(repo_id, filename)
+    if cached:
+        return cached
+    return hf_hub_download(repo_id=repo_id, filename=filename)
+
 
 class CardDetector(Protocol):
     runtime: str
@@ -290,7 +312,6 @@ class CardcaptorUltralyticsDetector:
         if self._model is not None:
             return self._model
         try:
-            from huggingface_hub import hf_hub_download
             from ultralytics import YOLO
         except ImportError as exc:
             raise RuntimeError(
@@ -298,7 +319,7 @@ class CardcaptorUltralyticsDetector:
                 "Install with: pip install '.[model]'"
             ) from exc
 
-        model_path = hf_hub_download(repo_id=self.repo_id, filename=self.filename)
+        model_path = _resolve_model_path(self.repo_id, self.filename)
         self._model = YOLO(model_path)
         self._model.to(self._resolve_device())
         return self._model
