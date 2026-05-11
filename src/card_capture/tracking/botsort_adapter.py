@@ -2,13 +2,93 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import numpy as np
 import torch
 
 from ..selector import ScoredCandidate, TrackState
 from .bytetrack_adapter import _AdaptedDetection, _xyxy_from_corners
+
+
+def rotated_iou(corners_a: List[Tuple[float, float]], corners_b: List[Tuple[float, float]]) -> float:
+    """
+    Compute intersection-over-union (IoU) for oriented bounding boxes.
+
+    Uses Shapely Polygon intersection when available; falls back to axis-aligned IoU
+    if Shapely fails or is unavailable.
+
+    Args:
+        corners_a: List of 4 (x, y) tuples representing OBB corners of first box
+        corners_b: List of 4 (x, y) tuples representing OBB corners of second box
+
+    Returns:
+        IoU value in range [0, 1]
+    """
+    try:
+        from shapely.geometry import Polygon
+    except ImportError:
+        # Fallback: use axis-aligned IoU if Shapely not available
+        return axis_aligned_iou_from_corners(corners_a, corners_b)
+
+    try:
+        # Convert corner lists to Polygons
+        poly_a = Polygon(corners_a)
+        poly_b = Polygon(corners_b)
+
+        # Compute intersection and union areas
+        intersection = poly_a.intersection(poly_b).area
+        union = poly_a.union(poly_b).area
+
+        # Return IoU
+        if union == 0:
+            return 0.0
+        return float(intersection / union)
+    except Exception:
+        # Fallback to axis-aligned IoU if Shapely fails
+        return axis_aligned_iou_from_corners(corners_a, corners_b)
+
+
+def axis_aligned_iou_from_corners(corners_a: List[Tuple[float, float]], corners_b: List[Tuple[float, float]]) -> float:
+    """
+    Compute axis-aligned IoU from corner coordinates.
+
+    Extracts axis-aligned bounding boxes from corners and computes standard IoU.
+
+    Args:
+        corners_a: List of 4 (x, y) tuples
+        corners_b: List of 4 (x, y) tuples
+
+    Returns:
+        IoU value in range [0, 1]
+    """
+    # Extract axis-aligned bboxes from corners
+    def bbox_from_corners(corners):
+        xs = [c[0] for c in corners]
+        ys = [c[1] for c in corners]
+        return min(xs), min(ys), max(xs), max(ys)
+
+    x1a, y1a, x2a, y2a = bbox_from_corners(corners_a)
+    x1b, y1b, x2b, y2b = bbox_from_corners(corners_b)
+
+    # Compute intersection box
+    xi1 = max(x1a, x1b)
+    yi1 = max(y1a, y1b)
+    xi2 = min(x2a, x2b)
+    yi2 = min(y2a, y2b)
+
+    # Intersection area
+    intersection = max(0.0, xi2 - xi1) * max(0.0, yi2 - yi1)
+
+    # Union area
+    area_a = (x2a - x1a) * (y2a - y1a)
+    area_b = (x2b - x1b) * (y2b - y1b)
+    union = area_a + area_b - intersection
+
+    # IoU
+    if union == 0:
+        return 0.0
+    return float(intersection / union)
 
 
 def _import_botsort():
