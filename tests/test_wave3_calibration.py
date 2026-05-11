@@ -443,3 +443,114 @@ class TestAdaptiveThresholds:
         adaptive_threshold = computer.compute_hamming_threshold(distances, global_threshold)
 
         assert adaptive_threshold == global_threshold, "Should fallback to global for <10 samples"
+
+    def test_novelty_collection_not_double_counted(self):
+        """Novelty scores collected once at candidate-level, not twice via track-level.
+
+        Scenario: Process candidates through _filter_candidates_by_novelty (collects scores)
+        and later through _prune_empty_workspace_tracks (reads threshold but does NOT collect).
+        Verify len(context.observed_novelty_scores) == N (not 2N).
+        """
+        from card_capture.pipeline import (
+            PipelineContext,
+            _filter_candidates_by_novelty,
+            _prune_empty_workspace_tracks,
+            _PreparedTrack,
+        )
+        from card_capture.presence.background_novelty import BackgroundModel
+        from card_capture.selector import ScoredCandidate
+        from card_capture.models import QualityScore
+        import cv2
+
+        # Create a simple background model from a constant frame
+        bg_frame = np.ones((100, 100, 3), dtype=np.uint8) * 128
+        bg_gray = cv2.cvtColor(bg_frame, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        bg = BackgroundModel(gray=bg_gray, bgr=bg_frame.astype(np.float32))
+
+        # Create N candidate images with distinct novelties
+        N = 12
+        candidates = []
+        temp_images = []
+
+        for i in range(N):
+            # Create distinct test images (higher variance = higher novelty)
+            img_array = np.ones((100, 100, 3), dtype=np.uint8) * (80 + i * 5)
+            # Add some pattern to increase novelty
+            img_array[:, :50] = img_array[:, :50] + 20
+            temp_path = f"/tmp/test_candidate_{i}.jpg"
+            cv2.imwrite(temp_path, img_array)
+            temp_images.append(temp_path)
+
+            # Create candidate with corners
+            corners = [(10.0, 10.0), (90.0, 10.0), (90.0, 90.0), (10.0, 90.0)]
+            candidate = ScoredCandidate(
+                detection_id=i,
+                timestamp_ms=i * 100,
+                image_path=temp_path,
+                score=QualityScore(total=0.9, components={}),
+                corners=corners,
+                frame_index=i,
+            )
+            candidates.append(candidate)
+
+        # Initialize context
+        context = PipelineContext()
+
+        # Step 1: Filter candidates (should collect N novelty scores)
+        filtered = _filter_candidates_by_novelty(
+            candidates, bg, threshold=0.05, context=context
+        )
+
+        count_after_filter = len(context.observed_novelty_scores)
+        assert count_after_filter == N, (
+            f"After filter, expected {N} novelty scores, got {count_after_filter}"
+        )
+
+        # Step 2: Create prepared tracks from filtered candidates
+        # Simulate track creation (in real pipeline, tracks come from tracking stage)
+        prepared_tracks = []
+        for candidate in filtered:
+            # Create a mock track with one candidate
+            from unittest.mock import Mock
+            mock_track = Mock()
+            mock_track.candidates = [candidate]
+            mock_track.instance_id = f"track_{candidate.detection_id}"
+
+            prep = _PreparedTrack(
+                track=mock_track,
+                session_id=0,
+                first_frame_index=candidate.frame_index,
+                angle="Front",
+                frame_entries=[],
+                canonical_entries=[],
+                candidate_hashes=[],
+                primary_hash="test_hash",
+                side_score=0.5,
+                appearance_vector=np.zeros(272),
+                canonical_detection_ids=set(),
+                best_canonical_detection_id=candidate.detection_id,
+                fused_canonical=np.zeros((100, 100, 3), dtype=np.uint8),
+                embedding=None,
+            )
+            prepared_tracks.append(prep)
+
+        # Step 3: Prune tracks via track-level gate (should NOT collect again)
+        pruned = _prune_empty_workspace_tracks(
+            prepared_tracks, bg, threshold=0.05, context=context
+        )
+
+        count_after_prune = len(context.observed_novelty_scores)
+
+        # Verify: should still be N (not 2N)
+        assert count_after_prune == count_after_filter, (
+            f"After prune, expected {count_after_filter} novelty scores "
+            f"(not doubled to {count_after_filter * 2}), got {count_after_prune}"
+        )
+
+        # Cleanup
+        for path in temp_images:
+            import os
+            try:
+                os.remove(path)
+            except Exception:
+                pass

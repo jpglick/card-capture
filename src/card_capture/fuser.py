@@ -3,6 +3,8 @@ import numpy as np
 from typing import List, Tuple, Optional
 
 from card_capture.ecc_registration import register_frames_via_ecc
+from card_capture.fusion.foil_detection import detect_foil_card
+from card_capture.fusion.median_fusion import glare_rejection_fusion
 
 def find_glare_centroid(image: np.ndarray) -> Optional[Tuple[float, float]]:
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
@@ -51,13 +53,54 @@ class MultiFrameFuser:
 
         return selected_indices[:max_frames]
 
-    def fuse(self, images: List[np.ndarray]) -> np.ndarray:
-        if not images: raise ValueError("No images")
-        if len(images) == 1: return images[0]
+    def fuse(self, images: List[np.ndarray], foil_threshold: Optional[float] = None) -> np.ndarray:
+        """Fuse multiple images with optional foil-aware fusion.
+
+        Algorithm:
+        1. Return single image if only one provided
+        2. Select lighting-diverse indices (max 4 frames)
+        3. If foil_threshold is set: detect foil on unregistered frames (preserves high-freq content)
+        4. Register frames via ECC to eliminate jitter
+        5. If foil_threshold is None: use standard median fusion
+        6. If foil_threshold is set: use glare_rejection_fusion for foils, median for regular
+
+        Args:
+            images: List of uint8 BGR frames to fuse
+            foil_threshold: Optional Laplacian variance threshold for foil detection.
+                          If None, always uses median fusion (Wave 2 behavior).
+                          If set, applies foil detection and uses glare-rejection for foils.
+
+        Returns:
+            Fused uint8 BGR frame
+        """
+        if not images:
+            raise ValueError("No images")
+        if len(images) == 1:
+            return images[0]
+
         selected_indices = self.select_lighting_diverse_indices(images, max_frames=4)
         selected_frames = [images[i] for i in selected_indices]
 
-        # Register frames to eliminate jitter before median fusion
+        # CRITICAL: Foil detection must happen BEFORE ECC registration.
+        # ECC uses bilinear interpolation which low-pass filters frames and attenuates
+        # the high-frequency Laplacian energy that the foil detector keys off.
+        # Detecting on unregistered frames preserves the holographic shimmer signature.
+        is_foil = None
+        if foil_threshold is not None:
+            is_foil = detect_foil_card(selected_frames, threshold=foil_threshold)
+
+        # Register frames to eliminate jitter before fusion
         aligned_frames = register_frames_via_ecc(selected_frames, reference_index=0)
 
-        return np.median(np.stack(aligned_frames), axis=0).astype(np.uint8)
+        # Choose fusion strategy based on foil detection result
+        if foil_threshold is None:
+            # Wave 2 behavior: always use median fusion
+            return np.median(np.stack(aligned_frames), axis=0).astype(np.uint8)
+        else:
+            # Wave 4 behavior: use foil detection result to choose fusion strategy
+            if is_foil:
+                # Use glare-rejection fusion for foil cards (preserves holographic shimmer)
+                return glare_rejection_fusion(aligned_frames)
+            else:
+                # Use standard median fusion for regular cards
+                return np.median(np.stack(aligned_frames), axis=0).astype(np.uint8)

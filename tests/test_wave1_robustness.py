@@ -253,6 +253,8 @@ def test_front_back_assignment_uses_side_score(tmp_path):
             side_score=score_high,  # HIGH textiness
             appearance_vector=np.array([]),
             canonical_detection_ids=set(),
+            best_canonical_detection_id=0,
+            fused_canonical=None,
             duplicate_track_index=None
         ),
         _PreparedTrack(
@@ -267,6 +269,8 @@ def test_front_back_assignment_uses_side_score(tmp_path):
             side_score=score_low,  # LOW textiness (but more frames)
             appearance_vector=np.array([]),
             canonical_detection_ids=set(),
+            best_canonical_detection_id=0,
+            fused_canonical=None,
             duplicate_track_index=None
         ),
     ]
@@ -351,6 +355,8 @@ def test_quality_weighted_track_selection(tmp_path):
             side_score=score_sharp,  # Same side_score as tie-breaker test
             appearance_vector=np.array([]),
             canonical_detection_ids=set(),
+            best_canonical_detection_id=0,
+            fused_canonical=None,
             duplicate_track_index=None
         ),
         _PreparedTrack(
@@ -365,6 +371,8 @@ def test_quality_weighted_track_selection(tmp_path):
             side_score=score_blurry,  # Same side_score
             appearance_vector=np.array([]),
             canonical_detection_ids=set(),
+            best_canonical_detection_id=0,
+            fused_canonical=None,
             duplicate_track_index=None
         ),
     ]

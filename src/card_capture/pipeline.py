@@ -18,7 +18,7 @@ from .cropper import CardCropper, PrecisionNormalizer
 from .gpu_refinement import KorniaNormalizer
 from .detectors import CardDetector
 from .deduplicator import VisualDeduplicator
-from .fuser import calculate_sharpness, find_glare_centroid
+from .fuser import calculate_sharpness, find_glare_centroid, MultiFrameFuser
 from .ingestion import FrameTriageFilter, _open_capture
 from .models import (
     CornerDetection,
@@ -37,9 +37,6 @@ from .adaptive_gap import compute_session_gap_frames
 from .presence.background_novelty import BackgroundModel
 from .analysis.hard_case_capture import is_hard_case, capture_hard_case
 from .calibration.per_video_adaptive import AdaptiveThresholdComputer
-from .ecc_registration import register_frames_via_ecc
-from .fusion.foil_detection import detect_foil_card
-from .fusion.median_fusion import glare_rejection_fusion
 
 _SENTINEL = "__card_capture_queue_sentinel__"
 _QUEUE_POLL_INTERVAL_SECONDS = 0.1
@@ -104,6 +101,27 @@ class PipelineTimer:
 
 @dataclass
 class _PreparedTrack:
+    """Prepared track with canonical entries and foil-aware fusion.
+
+    Attributes:
+        track: Raw track object with instance_id and candidates
+        session_id: Session ID for grouping detections
+        first_frame_index: Index of first detection in track
+        angle: Card angle (e.g., 'front', 'back')
+        frame_entries: List of frame-level detections with normalized images
+        canonical_entries: List of canonical (highest-quality) detections
+        candidate_hashes: Visual hashes of all candidates for deduplication
+        primary_hash: Primary hash of best canonical entry
+        side_score: Textiness score for side detection
+        appearance_vector: OSNet embedding vector for ReID
+        canonical_detection_ids: Set of detection IDs in canonical_entries
+        best_canonical_detection_id: Detection ID of highest-scored canonical entry
+        fused_canonical: Foil-aware fused image (median or glare-rejection),
+                         or fallback to best_canonical normalized if fusion failed.
+                         Guaranteed non-None after line 719 fallback check.
+        embedding: OSNet ReID embedding of best candidate
+        duplicate_track_index: If set, track is duplicate of another in same batch
+    """
     track: Any
     session_id: int
     first_frame_index: int
@@ -115,6 +133,8 @@ class _PreparedTrack:
     side_score: float
     appearance_vector: np.ndarray
     canonical_detection_ids: set[int]
+    best_canonical_detection_id: int
+    fused_canonical: Optional[np.ndarray]
     embedding: Optional[np.ndarray] = None
     duplicate_track_index: Optional[int] = None
 
@@ -707,11 +727,12 @@ class VideoProcessor:
             # Stage 9: Foil-aware fusion of canonical frames
             # Extract normalized frames from canonical entries for fusion
             canonical_frames = [entry["normalized"] for entry in canonical_entries]
-            fused_canonical = _fuse_canonical_frames_with_foil_awareness(
-                canonical_frames,
-                foil_threshold=50.0,
-                use_ecc_registration=True
-            )
+            fuser = MultiFrameFuser()
+            fused_canonical = fuser.fuse(canonical_frames, foil_threshold=50.0)
+            # Ensure fused_canonical is not None (best_canonical should always exist with frames)
+            if fused_canonical is None:
+                fused_canonical = best_canonical["normalized"]
+
             candidate_hashes: list[str] = []
             for entry in canonical_entries:
                 h = str(entry["visual_hash"])
@@ -719,6 +740,10 @@ class VideoProcessor:
                 # Apply 180-rotation check for hashing as well
                 rotated = cv2.rotate(entry["normalized"], cv2.ROTATE_180)
                 candidate_hashes.append(deduplicator.compute_phash(rotated))
+
+            # Validate consistency: best_canonical_detection_id must be in canonical_detection_ids
+            assert best_canonical["candidate"].detection_id in canonical_detection_ids, \
+                f"best_canonical detection_id {best_canonical['candidate'].detection_id} not in canonical_detection_ids {canonical_detection_ids}"
 
             # Extract OSNet embedding from best canonical candidate (Wave 1 ReID)
             embedding = None
@@ -744,6 +769,8 @@ class VideoProcessor:
                     side_score=_side_textiness_score(best_canonical["normalized"]),
                     appearance_vector=_appearance_vector(best_canonical["normalized"]),
                     canonical_detection_ids=canonical_detection_ids,
+                    best_canonical_detection_id=best_canonical["candidate"].detection_id,
+                    fused_canonical=fused_canonical,
                     embedding=embedding,
                 )
             )
@@ -818,7 +845,13 @@ class VideoProcessor:
                 rectified_path = (
                     crops_dir / f"instance_{instance_id}_view_{canonical_order}_rectified.jpg"
                 ).resolve()
-                cv2.imwrite(str(rectified_path), entry["normalized"])
+                # Use fused canonical for best_canonical entry, raw normalized for others
+                if candidate.detection_id == prepared.best_canonical_detection_id:
+                    assert prepared.fused_canonical is not None, \
+                        "fused_canonical must be set for best_canonical_detection_id"
+                    cv2.imwrite(str(rectified_path), prepared.fused_canonical)
+                else:
+                    cv2.imwrite(str(rectified_path), entry["normalized"])
                 rectified_paths[candidate.detection_id] = str(rectified_path)
 
             timer.record("t_refine")
@@ -1186,6 +1219,18 @@ def _resolve_session_tracks(
         first_prepared.duplicate_track_index = None
         first_prepared.angle = "Front"
 
+        # FIRST PASS: Collect intra-track Hamming distances for adaptive threshold
+        # This allows later comparisons to use a threshold adapted from actual distribution
+        if context is not None:
+            for other_index, other_prepared in session_tracks[1:]:
+                # Collect pHash distances (both embedding and pHash paths)
+                first_hash = _track_representative_hash(first_prepared.track, deduplicator)
+                other_hash = _track_representative_hash(other_prepared.track, deduplicator)
+                if first_hash is not None and other_hash is not None:
+                    hamming_distance = deduplicator.hamming_distance(first_hash, other_hash)
+                    context.add_intra_track_distance(float(hamming_distance))
+
+        # SECOND PASS: Apply same-card classification using adaptive threshold
         for other_index, other_prepared in session_tracks[1:]:
             same_card = False
             hamming_distance = None
@@ -1205,11 +1250,11 @@ def _resolve_session_tracks(
                 other_hash = _track_representative_hash(other_prepared.track, deduplicator)
                 if first_hash is not None and other_hash is not None:
                     hamming_distance = deduplicator.hamming_distance(first_hash, other_hash)
-                    same_card = hamming_distance <= _SAME_CARD_HAMMING_MAX
-
-            # Record hamming distance for adaptive threshold computation
-            if hamming_distance is not None and context is not None:
-                context.add_intra_track_distance(float(hamming_distance))
+                    # Use adaptive threshold if context is available, otherwise fall back to global constant
+                    threshold = (_SAME_CARD_HAMMING_MAX
+                                 if context is None
+                                 else context.get_adaptive_hamming_threshold(_SAME_CARD_HAMMING_MAX))
+                    same_card = hamming_distance <= threshold
 
             if same_card:
                 # Check textiness margin: if within threshold, admit as Back
@@ -1369,10 +1414,15 @@ def _filter_candidates_by_novelty(
                 if img is None:
                     continue
                 frame_cache[cand.image_path] = img
-            novelty = quad_novelty(img, cand.corners, bg, color_space="lab", lab_weights=(1.0, 0.5, 0.5),
-                                   use_variance=True, k=2.0)
+            novelty = quad_novelty(img, cand.corners, bg, color_space="lab", lab_weights=(1.0, 0.5, 0.5))
             collected_scores.append(novelty)
-            context.add_novelty_score(novelty)
+
+        # SOLE COLLECTION POINT: Only candidate-level gate collects novelty scores.
+        # Track-level pruning reads the computed threshold but does NOT re-collect scores.
+        # This ensures len(context.observed_novelty_scores) == N (not 2N).
+        if context is not None:
+            for novelty in collected_scores:
+                context.add_novelty_score(novelty)
 
         # Use adaptive threshold if we have enough data
         if len(collected_scores) >= 10:
@@ -1391,8 +1441,7 @@ def _filter_candidates_by_novelty(
                 kept.append(cand)  # cannot evaluate; let downstream stages decide
                 continue
             frame_cache[cand.image_path] = img
-        novelty = quad_novelty(img, cand.corners, bg, color_space="lab", lab_weights=(1.0, 0.5, 0.5),
-                               use_variance=True, k=2.0)
+        novelty = quad_novelty(img, cand.corners, bg, color_space="lab", lab_weights=(1.0, 0.5, 0.5))
         if novelty >= effective_threshold:
             kept.append(cand)
     return kept
@@ -1434,11 +1483,9 @@ def _prune_empty_workspace_tracks(
                     if img is None:
                         continue
                     frame_cache[cand.image_path] = img
-                novelty = quad_novelty(img, cand.corners, bg, color_space="lab", lab_weights=(1.0, 0.5, 0.5),
-                                       use_variance=True, k=2.0)
+                novelty = quad_novelty(img, cand.corners, bg, color_space="lab", lab_weights=(1.0, 0.5, 0.5))
                 novelties.append(novelty)
                 all_novelties.append(novelty)
-                context.add_novelty_score(novelty)
 
         # Use adaptive threshold if sufficient samples
         if len(all_novelties) >= 10:
@@ -1456,8 +1503,7 @@ def _prune_empty_workspace_tracks(
                 if img is None:
                     continue
                 frame_cache[cand.image_path] = img
-            novelties.append(quad_novelty(img, cand.corners, bg, color_space="lab", lab_weights=(1.0, 0.5, 0.5),
-                                          use_variance=True, k=2.0))
+            novelties.append(quad_novelty(img, cand.corners, bg, color_space="lab", lab_weights=(1.0, 0.5, 0.5)))
         if not novelties:
             kept.append(pt)
             continue
@@ -1468,51 +1514,6 @@ def _prune_empty_workspace_tracks(
             print(f"[Stage: NoveltyPrune] | dropped track {pt.track.instance_id} "
                   f"(median quad novelty={median:.3f} < {effective_threshold})")
     return kept
-
-
-def _fuse_canonical_frames_with_foil_awareness(
-    frames: list[np.ndarray],
-    foil_threshold: float = 50.0,
-    use_ecc_registration: bool = True,
-) -> Optional[np.ndarray]:
-    """Fuse canonical frames using foil detection to choose fusion strategy.
-
-    Algorithm:
-    1. Return None if no frames provided
-    2. If use_ecc_registration and len(frames) > 1: align frames via ECC
-    3. Detect if track is foil: is_foil = detect_foil_card(frames, threshold)
-    4. If foil: use glare_rejection_fusion (preserves shimmer)
-    5. Else: use standard median fusion
-    6. Return fused frame (uint8 BGR)
-
-    Args:
-        frames: List of aligned canonical frames (typically 4), each uint8 BGR
-        foil_threshold: Laplacian variance threshold for foil detection (default 50.0)
-        use_ecc_registration: Whether to register frames before fusion (default True)
-
-    Returns:
-        Fused uint8 BGR frame, or None if frames is empty
-    """
-    if not frames:
-        return None
-
-    # Register frames if requested and multiple frames provided
-    working_frames = frames
-    if use_ecc_registration and len(frames) > 1:
-        working_frames = register_frames_via_ecc(frames, reference_index=0)
-
-    # Detect if this is a foil card
-    is_foil = detect_foil_card(working_frames, threshold=foil_threshold)
-
-    # Choose fusion strategy based on foil detection
-    if is_foil:
-        # Use glare-rejection fusion for foil cards (preserves holographic shimmer)
-        fused = glare_rejection_fusion(working_frames)
-    else:
-        # Use standard median fusion for regular cards
-        fused = np.median(np.stack(working_frames, axis=0), axis=0).astype(np.uint8)
-
-    return fused
 
 
 def _select_canonical_entries(frame_entries: list[dict], deduplicator: VisualDeduplicator) -> list[dict]:

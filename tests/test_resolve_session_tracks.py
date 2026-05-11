@@ -46,13 +46,15 @@ def test_two_visually_similar_tracks_become_front_and_back(tmp_path):
             track=longer, session_id=1, first_frame_index=0, angle="Front",
             frame_entries=[], canonical_entries=[], candidate_hashes=[],
             primary_hash="", side_score=0.0, appearance_vector=np.array([]),
-            canonical_detection_ids=set(), duplicate_track_index=None
+            canonical_detection_ids=set(), best_canonical_detection_id=0,
+            fused_canonical=None, duplicate_track_index=None
         ),
         _PreparedTrack(
             track=shorter, session_id=1, first_frame_index=0, angle="Front",
             frame_entries=[], canonical_entries=[], candidate_hashes=[],
             primary_hash="", side_score=0.0, appearance_vector=np.array([]),
-            canonical_detection_ids=set(), duplicate_track_index=None
+            canonical_detection_ids=set(), best_canonical_detection_id=0,
+            fused_canonical=None, duplicate_track_index=None
         ),
     ]
     _resolve_session_tracks(prepared, VisualDeduplicator())
@@ -72,13 +74,15 @@ def test_two_visually_distinct_tracks_remain_two_fronts(tmp_path):
             track=t1, session_id=1, first_frame_index=0, angle="Front",
             frame_entries=[], canonical_entries=[], candidate_hashes=[],
             primary_hash="", side_score=0.0, appearance_vector=np.array([]),
-            canonical_detection_ids=set(), duplicate_track_index=None
+            canonical_detection_ids=set(), best_canonical_detection_id=0,
+            fused_canonical=None, duplicate_track_index=None
         ),
         _PreparedTrack(
             track=t2, session_id=1, first_frame_index=0, angle="Front",
             frame_entries=[], canonical_entries=[], candidate_hashes=[],
             primary_hash="", side_score=0.0, appearance_vector=np.array([]),
-            canonical_detection_ids=set(), duplicate_track_index=None
+            canonical_detection_ids=set(), best_canonical_detection_id=0,
+            fused_canonical=None, duplicate_track_index=None
         ),
     ]
     _resolve_session_tracks(prepared, VisualDeduplicator())
