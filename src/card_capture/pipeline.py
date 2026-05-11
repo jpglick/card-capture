@@ -35,6 +35,8 @@ from .tracking import ByteTrackAdapter
 from .storage import Storage
 from .adaptive_gap import compute_session_gap_frames
 from .presence.background_novelty import BackgroundModel
+from .analysis.hard_case_capture import is_hard_case, capture_hard_case
+from .calibration.per_video_adaptive import AdaptiveThresholdComputer
 
 _SENTINEL = "__card_capture_queue_sentinel__"
 _QUEUE_POLL_INTERVAL_SECONDS = 0.1
@@ -236,9 +238,59 @@ class NullStateDetector:
 class SessionManager:
     def __init__(self):
         self.active_session_id: Optional[str] = None
-        
+
     def start_session(self, timestamp: int):
         self.active_session_id = str(timestamp)
+
+
+class PipelineContext:
+    """Per-video context for tracking observed distributions and computing adaptive thresholds.
+
+    Collects:
+    - observed_novelty_scores: novelty scores from all processed candidates
+    - observed_intra_track_distances: Hamming distances within tracks
+
+    Provides:
+    - get_adaptive_novelty_threshold(): p50 clipped ±20% of global
+    - get_adaptive_hamming_threshold(): p75*1.2 clipped ±10% of global
+    - Graceful fallback to global if <10 samples
+    """
+
+    def __init__(self):
+        self.observed_novelty_scores: List[float] = []
+        self.observed_intra_track_distances: List[float] = []
+        self.computer = AdaptiveThresholdComputer()
+
+    def add_novelty_score(self, score: float) -> None:
+        """Record a novelty score observed during processing."""
+        self.observed_novelty_scores.append(float(score))
+
+    def add_intra_track_distance(self, distance: float) -> None:
+        """Record a Hamming distance within a track."""
+        self.observed_intra_track_distances.append(float(distance))
+
+    def get_adaptive_novelty_threshold(self, global_threshold: float = 0.08) -> float:
+        """Compute adaptive novelty threshold from observed distribution.
+
+        Returns:
+            Adaptive threshold (p50 clipped ±20%) or global if insufficient samples.
+        """
+        return self.computer.compute_novelty_threshold(
+            self.observed_novelty_scores,
+            global_threshold
+        )
+
+    def get_adaptive_hamming_threshold(self, global_threshold: float = 22) -> float:
+        """Compute adaptive Hamming threshold from observed distribution.
+
+        Returns:
+            Adaptive threshold (p75*1.2 clipped ±10%) or global if insufficient samples.
+        """
+        return self.computer.compute_hamming_threshold(
+            self.observed_intra_track_distances,
+            global_threshold
+        )
+
 
 class VideoProcessor:
     def __init__(
@@ -270,7 +322,10 @@ class VideoProcessor:
         video_path = Path(video_path).resolve()
         if not video_path.exists():
             raise FileNotFoundError(f"Video does not exist: {video_path}")
-            
+
+        # Initialize per-video context for adaptive thresholds
+        pipeline_context = PipelineContext()
+
         self.null_detector = NullStateDetector(frames=options.background_frames, threshold=options.background_threshold)
         if options.use_kornia:
             try:
@@ -334,7 +389,9 @@ class VideoProcessor:
         _bg_model = BackgroundModel.from_source_frame_paths(_bg_paths, n=30)
         if _bg_model is not None:
             _before = len(candidates)
-            candidates = _filter_candidates_by_novelty(candidates, _bg_model, threshold=0.08)
+            candidates = _filter_candidates_by_novelty(
+                candidates, _bg_model, threshold=0.08, context=pipeline_context
+            )
             print(f"[Stage: NoveltyGate] | dropped {_before - len(candidates)} / {_before} candidates")
         self._bg_model = _bg_model  # retained for track-level pruning in Step 7
         candidate_confidences = [candidate.score.total for candidate in candidates]
@@ -683,9 +740,15 @@ class VideoProcessor:
         print(f"[Stage: Refinement] | {t_refine:.2f}s | Sessions: {current_session_id}")
 
         if getattr(self, "_bg_model", None) is not None:
-            prepared_tracks = _prune_empty_workspace_tracks(prepared_tracks, self._bg_model, threshold=0.08)
+            prepared_tracks = _prune_empty_workspace_tracks(
+                prepared_tracks, self._bg_model, threshold=0.08, context=pipeline_context
+            )
 
-        _resolve_session_tracks(prepared_tracks, deduplicator)
+        _resolve_session_tracks(prepared_tracks, deduplicator, context=pipeline_context)
+
+        # Capture hard cases for active learning (Wave 3 Task 3)
+        _capture_hard_cases_from_sessions(prepared_tracks, video_id, output_dir)
+
         duplicate_track_count = sum(
             1 for prepared in prepared_tracks if prepared.duplicate_track_index is not None
         )
@@ -1152,6 +1215,86 @@ def _resolve_session_tracks(
                 other_prepared.angle = "Front"
                 other_prepared.duplicate_track_index = None
 
+
+def _capture_hard_cases_from_sessions(
+    prepared_tracks: list[_PreparedTrack],
+    video_id: int,
+    output_dir: Path,
+) -> None:
+    """Capture hard cases for active learning from session tracks.
+
+    Groups tracks by session and checks each session for hard-case criteria:
+    - Multiple Fronts (>2)
+    - Borderline Hamming distance ([18, 26])
+    - Borderline confidence ([0.45, 0.55])
+    - Low border purity (<0.3)
+
+    Args:
+        prepared_tracks: List of prepared tracks after session resolution
+        video_id: Video ID for metadata
+        output_dir: Output directory for hard_cases.jsonl
+    """
+    # Group tracks by session
+    by_session: dict[int, list[_PreparedTrack]] = {}
+    for prepared in prepared_tracks:
+        by_session.setdefault(prepared.session_id, []).append(prepared)
+
+    hard_cases_file = output_dir / "hard_cases.jsonl"
+
+    # Process each session
+    for session_id, session_tracks in by_session.items():
+        if not session_tracks:
+            continue
+
+        # Build session dict for is_hard_case
+        front_tracks = []
+        for prepared in session_tracks:
+            front_tracks.append({"track_id": str(prepared.track.instance_id), "angle": prepared.angle})
+
+        # Extract hamming distances from all candidates in the session
+        hamming_values = []
+        confidence_scores = []
+        border_purity_scores = []
+
+        for prepared in session_tracks:
+            # Compute Hamming distances between this track and others in session
+            for other in session_tracks:
+                if prepared is other:
+                    continue
+                # Use representative hashes
+                hash_a = prepared.primary_hash
+                hash_b = other.primary_hash
+                if hash_a and hash_b:
+                    dedup = VisualDeduplicator()
+                    ham = dedup.hamming_distance(hash_a, hash_b)
+                    hamming_values.append(ham)
+
+            # Extract confidence scores from candidates
+            for candidate in prepared.track.candidates:
+                if hasattr(candidate, 'score') and hasattr(candidate.score, 'total'):
+                    confidence_scores.append(float(candidate.score.total))
+
+            # Extract border purity from candidates
+            for candidate in prepared.track.candidates:
+                if hasattr(candidate, 'score') and hasattr(candidate.score, 'components'):
+                    border_purity = candidate.score.components.get('border_purity')
+                    if border_purity is not None:
+                        border_purity_scores.append(float(border_purity))
+
+        session = {
+            "video_id": video_id,
+            "session_id": str(session_id),
+            "front_tracks": front_tracks,
+            "hamming_values": hamming_values,
+            "confidence_scores": confidence_scores,
+            "border_purity_scores": border_purity_scores,
+        }
+
+        # Check if hard case
+        reason = is_hard_case(session)
+        if reason:
+            capture_hard_case(session, reason, output_file=str(hard_cases_file))
+
 def _build_candidates(rows: list[_DetectionEnvelope]) -> list[ScoredCandidate]:
     candidates: list[ScoredCandidate] = []
     for index, row in enumerate(rows):
@@ -1176,15 +1319,46 @@ def _filter_candidates_by_novelty(
     candidates: list[ScoredCandidate],
     bg: BackgroundModel,
     threshold: float = 0.08,
+    context: Optional[PipelineContext] = None,
 ) -> list[ScoredCandidate]:
     """Drop candidates whose quad interior matches the workspace baseline.
 
     Loads each unique source frame at most once (small per-frame cost: a single
-    grayscale conversion via cv2.imread)."""
+    grayscale conversion via cv2.imread).
+
+    If context is provided, records observed novelty scores for adaptive threshold
+    computation and uses adaptive threshold if sufficient samples available.
+    """
     from .presence.background_novelty import quad_novelty
 
     frame_cache: dict[str, np.ndarray] = {}
     kept: list[ScoredCandidate] = []
+
+    # Determine which threshold to use (adaptive or global)
+    effective_threshold = threshold
+    if context is not None:
+        # First pass: collect all scores to determine adaptive threshold
+        collected_scores: list[float] = []
+        for cand in candidates:
+            if not cand.corners or cand.image_path is None:
+                continue
+            img = frame_cache.get(cand.image_path)
+            if img is None:
+                img = cv2.imread(cand.image_path)
+                if img is None:
+                    continue
+                frame_cache[cand.image_path] = img
+            novelty = quad_novelty(img, cand.corners, bg, color_space="lab", lab_weights=(1.0, 0.5, 0.5),
+                                   use_variance=True, k=2.0)
+            collected_scores.append(novelty)
+            context.add_novelty_score(novelty)
+
+        # Use adaptive threshold if we have enough data
+        if len(collected_scores) >= 10:
+            effective_threshold = context.get_adaptive_novelty_threshold(threshold)
+
+    # Second pass: filter using effective threshold
+    frame_cache.clear()  # Clear and refill for consistency
     for cand in candidates:
         if not cand.corners or cand.image_path is None:
             kept.append(cand)
@@ -1198,7 +1372,7 @@ def _filter_candidates_by_novelty(
             frame_cache[cand.image_path] = img
         novelty = quad_novelty(img, cand.corners, bg, color_space="lab", lab_weights=(1.0, 0.5, 0.5),
                                use_variance=True, k=2.0)
-        if novelty >= threshold:
+        if novelty >= effective_threshold:
             kept.append(cand)
     return kept
 
