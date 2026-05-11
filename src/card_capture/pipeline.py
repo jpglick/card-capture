@@ -151,6 +151,11 @@ class NullStateDetector:
         if self.background_model is None:
             self.background_model = np.zeros_like(gray, dtype=np.float32)
 
+        # Ensure dimensions match for comparison
+        target_h, target_w = self.background_model.shape[:2]
+        if gray.shape[0] != target_h or gray.shape[1] != target_w:
+            gray = cv2.resize(gray, (target_w, target_h))
+
         if self.frame_count < self.frames:
             self.background_model = (
                 (self.background_model * self.frame_count + gray) / (self.frame_count + 1)
