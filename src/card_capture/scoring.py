@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from typing import Optional, Sequence
+
 import cv2
 import numpy as np
 
 from .models import QualityScore
+from .occlusion_residual import compute_occlusion_residual_score
 
 CARD_ASPECT_RATIO: float = 63.5 / 88.9  # ≈ 0.714 (width / height, standard trading card)
 ASPECT_TOLERANCE: float = 0.25
@@ -17,7 +20,12 @@ class QualityScorer:
     def __init__(self, target_pixels: int = 600 * 900):
         self.target_pixels = target_pixels
 
-    def score(self, image: np.ndarray, detection_confidence: float) -> QualityScore:
+    def score(
+        self,
+        image: np.ndarray,
+        detection_confidence: float,
+        prior_frames: Optional[Sequence[np.ndarray]] = None,
+    ) -> QualityScore:
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
 
         laplacian_variance = float(cv2.Laplacian(gray, cv2.CV_64F).var())
@@ -48,6 +56,12 @@ class QualityScorer:
         # Distinguishes scattered specular reflections from large blowout regions.
         spatial_glare = _spatial_glare_score(image)
 
+        # Occlusion residual: detect interior occlusions via per-tile median residuals.
+        # Requires prior frames; if unavailable, score is neutral (1.0).
+        occlusion = 1.0
+        if prior_frames:
+            occlusion = compute_occlusion_residual_score(gray, prior_frames)
+
         confidence = _clamp(float(detection_confidence))
 
         total = (
@@ -55,10 +69,10 @@ class QualityScorer:
             + glare * 0.12
             + aspect_ratio * 0.15
             + size * 0.10
-            + complexity * 0.10
+            + complexity * 0.03
             + border_purity * 0.20
-            + spatial_glare * 0.03
-            + confidence * 0.05
+            + spatial_glare * 0.05
+            + occlusion * 0.10
         )
         components = {
             "sharpness": round(sharpness, 6),
@@ -68,7 +82,7 @@ class QualityScorer:
             "complexity": round(complexity, 6),
             "border_purity": round(border_purity, 6),
             "spatial_glare": round(spatial_glare, 6),
-            "confidence": round(confidence, 6),
+            "occlusion": round(occlusion, 6),
         }
         return QualityScore(total=round(total, 6), components=components)
 
