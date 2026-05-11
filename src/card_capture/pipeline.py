@@ -34,6 +34,7 @@ from .selector import CandidateSelector, ScoredCandidate
 from .tracking import ByteTrackAdapter
 from .storage import Storage
 from .adaptive_gap import compute_session_gap_frames
+from .presence.background_novelty import BackgroundModel
 
 _SENTINEL = "__card_capture_queue_sentinel__"
 _QUEUE_POLL_INTERVAL_SECONDS = 0.1
@@ -258,6 +259,22 @@ class VideoProcessor:
         effective_session_gap_frames = gap_dist.recommended_gap_frames
 
         candidates = _build_candidates(detection_rows)
+
+        # v4.1 per-quad background novelty gate.
+        # Build a workspace baseline from the chronologically-first source frames; reject
+        # any candidate whose quad interior matches that baseline. This catches "empty
+        # stand" / "stationary background structure" false positives without any
+        # setup-specific training.
+        _bg_paths = sorted(
+            {row.source_frame_path for row in detection_rows if row.source_frame_path},
+            key=str,
+        )[:30]
+        _bg_model = BackgroundModel.from_source_frame_paths(_bg_paths, n=30)
+        if _bg_model is not None:
+            _before = len(candidates)
+            candidates = _filter_candidates_by_novelty(candidates, _bg_model, threshold=0.08)
+            print(f"[Stage: NoveltyGate] | dropped {_before - len(candidates)} / {_before} candidates")
+        self._bg_model = _bg_model  # retained for track-level pruning in Step 7
         candidate_confidences = [candidate.score.total for candidate in candidates]
         if candidate_confidences:
             tracker_t_high = float(
@@ -570,6 +587,9 @@ class VideoProcessor:
 
         t_refine = time.time() - t_refine_start
         print(f"[Stage: Refinement] | {t_refine:.2f}s | Sessions: {current_session_id}")
+
+        if getattr(self, "_bg_model", None) is not None:
+            prepared_tracks = _prune_empty_workspace_tracks(prepared_tracks, self._bg_model, threshold=0.08)
 
         _resolve_session_tracks(prepared_tracks, deduplicator)
         duplicate_track_count = sum(
@@ -908,6 +928,75 @@ def _build_candidates(rows: list[_DetectionEnvelope]) -> list[ScoredCandidate]:
             )
         )
     return candidates
+
+
+def _filter_candidates_by_novelty(
+    candidates: list[ScoredCandidate],
+    bg: BackgroundModel,
+    threshold: float = 0.08,
+) -> list[ScoredCandidate]:
+    """Drop candidates whose quad interior matches the workspace baseline.
+
+    Loads each unique source frame at most once (small per-frame cost: a single
+    grayscale conversion via cv2.imread)."""
+    from .presence.background_novelty import quad_novelty
+
+    frame_cache: dict[str, np.ndarray] = {}
+    kept: list[ScoredCandidate] = []
+    for cand in candidates:
+        if not cand.corners or cand.image_path is None:
+            kept.append(cand)
+            continue
+        img = frame_cache.get(cand.image_path)
+        if img is None:
+            img = cv2.imread(cand.image_path)
+            if img is None:
+                kept.append(cand)  # cannot evaluate; let downstream stages decide
+                continue
+            frame_cache[cand.image_path] = img
+        novelty = quad_novelty(img, cand.corners, bg)
+        if novelty >= threshold:
+            kept.append(cand)
+    return kept
+
+
+def _prune_empty_workspace_tracks(
+    prepared_tracks: list[_PreparedTrack],
+    bg: BackgroundModel,
+    threshold: float = 0.08,
+) -> list[_PreparedTrack]:
+    """Drop tracks whose median-novelty across candidates falls below threshold.
+
+    A real card's quad is always novel; an empty-stand track's quad is, by
+    definition, the workspace itself. We use the median so a few sharp
+    outliers (e.g., a card briefly entering frame) cannot rescue a track
+    that is overwhelmingly the empty workspace."""
+    from .presence.background_novelty import quad_novelty
+
+    frame_cache: dict[str, np.ndarray] = {}
+    kept: list[_PreparedTrack] = []
+    for pt in prepared_tracks:
+        novelties: list[float] = []
+        for cand in pt.track.candidates:
+            if not cand.corners or cand.image_path is None:
+                continue
+            img = frame_cache.get(cand.image_path)
+            if img is None:
+                img = cv2.imread(cand.image_path)
+                if img is None:
+                    continue
+                frame_cache[cand.image_path] = img
+            novelties.append(quad_novelty(img, cand.corners, bg))
+        if not novelties:
+            kept.append(pt)
+            continue
+        median = float(np.median(novelties))
+        if median >= threshold:
+            kept.append(pt)
+        else:
+            print(f"[Stage: NoveltyPrune] | dropped track {pt.track.instance_id} "
+                  f"(median quad novelty={median:.3f} < {threshold})")
+    return kept
 
 
 def _select_canonical_entries(frame_entries: list[dict], deduplicator: VisualDeduplicator) -> list[dict]:

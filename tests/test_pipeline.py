@@ -431,3 +431,99 @@ def test_pyproject_declares_pipeline_v21_runtime_dependencies():
     for dep_name in ("onnxruntime", "av"):
         assert f'"{dep_name}"' in runtime_block
     assert '"decord"' not in runtime_block
+
+
+def test_candidate_filter_drops_background_quads(tmp_path):
+    """_filter_candidates_by_novelty must remove candidates whose quad interior
+    matches the workspace baseline."""
+    from card_capture.pipeline import _filter_candidates_by_novelty
+    from card_capture.presence.background_novelty import BackgroundModel
+    import cv2
+
+    # Build a flat background and write it to disk
+    bg_arr = np.full((200, 200, 3), 128, dtype=np.uint8)
+    bg_path = tmp_path / "bg.jpg"
+    cv2.imwrite(str(bg_path), bg_arr)
+
+    # Build a "card" frame and write it to disk
+    card_arr = bg_arr.copy()
+    card_arr[40:160, 40:160] = 20
+    card_path = tmp_path / "card.jpg"
+    cv2.imwrite(str(card_path), card_arr)
+
+    bg = BackgroundModel.from_frames([bg_arr])
+
+    cands = [
+        # Background-only candidate: corners over a flat region.
+        ScoredCandidate(
+            detection_id=0, timestamp_ms=0, image_path=str(bg_path),
+            score=QualityScore(total=0.8, components={}),
+            corners=[(40, 40), (160, 40), (160, 160), (40, 160)],
+            frame_index=0,
+        ),
+        # Card candidate: corners over the painted patch.
+        ScoredCandidate(
+            detection_id=1, timestamp_ms=33, image_path=str(card_path),
+            score=QualityScore(total=0.8, components={}),
+            corners=[(40, 40), (160, 40), (160, 160), (40, 160)],
+            frame_index=1,
+        ),
+    ]
+    kept = _filter_candidates_by_novelty(cands, bg, threshold=0.08)
+    kept_ids = [c.detection_id for c in kept]
+    assert kept_ids == [1], kept_ids
+
+
+def test_prune_empty_workspace_tracks_drops_low_novelty_tracks(tmp_path):
+    """A finalized track whose medoid frame's quad matches the background is removed."""
+    from card_capture.pipeline import _prune_empty_workspace_tracks, _PreparedTrack
+    from card_capture.selector import TrackState
+    from card_capture.presence.background_novelty import BackgroundModel
+    import cv2
+
+    bg_arr = np.full((200, 200, 3), 128, dtype=np.uint8)
+    bg_path = tmp_path / "bg.jpg"
+    cv2.imwrite(str(bg_path), bg_arr)
+    bg = BackgroundModel.from_frames([bg_arr])
+
+    fake_corners = [(40, 40), (160, 40), (160, 160), (40, 160)]
+
+    # Empty-workspace track (3 background-matching candidates)
+    empty_track = TrackState(instance_id="empty")
+    for i in range(3):
+        empty_track.candidates.append(ScoredCandidate(
+            detection_id=i, timestamp_ms=i * 33, image_path=str(bg_path),
+            score=QualityScore(total=0.7, components={}),
+            corners=fake_corners, frame_index=i,
+        ))
+
+    # Real-card track (3 painted-frame candidates)
+    card_arr = bg_arr.copy()
+    card_arr[40:160, 40:160] = 20
+    card_path = tmp_path / "card.jpg"
+    cv2.imwrite(str(card_path), card_arr)
+    card_track = TrackState(instance_id="card")
+    for i in range(3):
+        card_track.candidates.append(ScoredCandidate(
+            detection_id=10 + i, timestamp_ms=i * 33, image_path=str(card_path),
+            score=QualityScore(total=0.7, components={}),
+            corners=fake_corners, frame_index=i,
+        ))
+
+    prepared = [
+        _PreparedTrack(
+            track=empty_track, session_id=1, first_frame_index=0, angle="Front",
+            frame_entries=[], canonical_entries=[], candidate_hashes=[],
+            primary_hash="", side_score=0.0, appearance_vector=np.array([]),
+            canonical_detection_ids=set(), duplicate_track_index=None
+        ),
+        _PreparedTrack(
+            track=card_track, session_id=1, first_frame_index=0, angle="Back",
+            frame_entries=[], canonical_entries=[], candidate_hashes=[],
+            primary_hash="", side_score=0.0, appearance_vector=np.array([]),
+            canonical_detection_ids=set(), duplicate_track_index=0
+        ),
+    ]
+    kept = _prune_empty_workspace_tracks(prepared, bg, threshold=0.08)
+    kept_ids = [pt.track.instance_id for pt in kept]
+    assert kept_ids == ["card"], kept_ids
