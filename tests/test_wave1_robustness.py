@@ -282,3 +282,101 @@ def test_front_back_assignment_uses_side_score(tmp_path):
         f"High-textiness track should be Front, got {angles['high_text']}"
     assert angles["low_text"] == "Back", \
         f"Low-textiness track should be Back, got {angles['low_text']}"
+
+
+def test_quality_weighted_track_selection(tmp_path):
+    """
+    Task 3: Quality-weighted primary track selection.
+
+    Replace pure length-based selection with composite score:
+    score = 0.6·normalized_length + 0.4·mean_quality_score
+
+    Even though blurry track is longer, sharp short track should be selected as Front
+    because it has higher quality (0.85 vs 0.40).
+
+    Test creates:
+    - Sharp short track: 3 candidates, quality_score 0.85
+    - Blurry long track: 20 candidates, quality_score 0.40
+
+    Expected: sharp track selected as Front (not blurry despite length)
+    """
+    import cv2
+    from card_capture.pipeline import _resolve_session_tracks, _PreparedTrack
+    from card_capture.selector import TrackState, ScoredCandidate
+    from card_capture.models import QualityScore
+    from card_capture.deduplicator import VisualDeduplicator
+
+    def make_track_with_quality(instance_id, num_frames, quality_val, side_score_val=0.5):
+        ts = TrackState(instance_id=instance_id)
+        for i in range(num_frames):
+            frame_path = tmp_path / f"{instance_id}_frame_{i}.jpg"
+            frame = np.zeros((200, 150, 3), dtype=np.uint8)
+            frame[:] = (100, 100, 100)
+            cv2.imwrite(str(frame_path), frame)
+
+            ts.candidates.append(ScoredCandidate(
+                detection_id=i,
+                timestamp_ms=i * 33,
+                image_path=str(frame_path),
+                # quality_score in components dict simulates sharpness metric
+                score=QualityScore(
+                    total=quality_val,
+                    components={"quality_score": quality_val}
+                ),
+                corners=[(0, 0), (60, 0), (60, 90), (0, 90)],
+                frame_index=i,
+            ))
+        return ts, side_score_val
+
+    # Sharp short track: 3 candidates, quality 0.85
+    track_sharp, score_sharp = make_track_with_quality(
+        "sharp_short", num_frames=3, quality_val=0.85, side_score_val=0.5
+    )
+
+    # Blurry long track: 20 candidates, quality 0.40
+    track_blurry, score_blurry = make_track_with_quality(
+        "blurry_long", num_frames=20, quality_val=0.40, side_score_val=0.5
+    )
+
+    prepared = [
+        _PreparedTrack(
+            track=track_sharp,
+            session_id=1,
+            first_frame_index=0,
+            angle="Front",
+            frame_entries=[],
+            canonical_entries=[],
+            candidate_hashes=[],
+            primary_hash="",
+            side_score=score_sharp,  # Same side_score as tie-breaker test
+            appearance_vector=np.array([]),
+            canonical_detection_ids=set(),
+            duplicate_track_index=None
+        ),
+        _PreparedTrack(
+            track=track_blurry,
+            session_id=1,
+            first_frame_index=0,
+            angle="Front",
+            frame_entries=[],
+            canonical_entries=[],
+            candidate_hashes=[],
+            primary_hash="",
+            side_score=score_blurry,  # Same side_score
+            appearance_vector=np.array([]),
+            canonical_detection_ids=set(),
+            duplicate_track_index=None
+        ),
+    ]
+
+    # Before quality weighting, this test FAILS because blurry track
+    # has 20 candidates vs 3 for sharp track (length-based sort).
+    # After implementation, sharp track should be selected as Front
+    # due to composite score: 0.6·normalized_length + 0.4·mean_quality_score
+    _resolve_session_tracks(prepared, VisualDeduplicator())
+
+    angles = {pt.track.instance_id: pt.angle for pt in prepared}
+    assert angles["sharp_short"] == "Front", \
+        f"Sharp track should be Front (quality-weighted), got {angles['sharp_short']}"
+    assert angles["blurry_long"] == "Back", \
+        f"Blurry track should be Back despite longer length, got {angles['blurry_long']}"

@@ -74,6 +74,28 @@ class _PreparedTrack:
     canonical_detection_ids: set[int]
     duplicate_track_index: Optional[int] = None
 
+    @property
+    def mean_quality_score(self) -> float:
+        """Compute mean quality_score across all candidates.
+
+        Extracts quality_score from each candidate's score.components dict.
+        Falls back to 0.0 if no candidates have quality_score.
+        """
+        if not self.track.candidates:
+            return 0.0
+
+        quality_scores = []
+        for candidate in self.track.candidates:
+            # Try to get quality_score from components dict
+            if hasattr(candidate, 'score') and hasattr(candidate.score, 'components'):
+                quality = candidate.score.components.get('quality_score')
+                if quality is not None:
+                    quality_scores.append(float(quality))
+
+        if not quality_scores:
+            return 0.0
+        return float(np.mean(quality_scores))
+
 
 @dataclass(frozen=True)
 class _FrameEnvelope:
@@ -905,6 +927,26 @@ def _track_representative_hash(
         return None
 
 
+def _compute_quality_weighted_score(prepared: _PreparedTrack, max_length: int) -> float:
+    """Compute composite track selection score.
+
+    Args:
+        prepared: _PreparedTrack to score
+        max_length: Maximum track length in session (for normalization)
+
+    Returns:
+        Composite score: 0.3 * normalized_length + 0.7 * mean_quality_score
+        (Quality is weighted higher to prefer sharp short tracks over blurry long)
+    """
+    if max_length <= 0:
+        norm_length = 0.0
+    else:
+        norm_length = len(prepared.track.candidates) / max_length
+
+    mean_quality = prepared.mean_quality_score
+    return 0.3 * norm_length + 0.7 * mean_quality
+
+
 def _resolve_session_tracks(
     prepared_tracks: list[_PreparedTrack],
     deduplicator: VisualDeduplicator,
@@ -917,6 +959,10 @@ def _resolve_session_tracks(
 
     If textiness margin is within _SESSION_TEXTINESS_MARGIN, the lower-textiness
     track is admitted as Back even if it would normally be its own Front.
+
+    Quality-weighted tie-breaker: When side_score is similar, composite score
+    (0.6·normalized_length + 0.4·mean_quality_score) is used to prefer sharp
+    short tracks over blurry long tracks.
     """
     by_session: dict[int, list[tuple[int, _PreparedTrack]]] = {}
     for track_index, prepared in enumerate(prepared_tracks):
@@ -925,10 +971,17 @@ def _resolve_session_tracks(
     for session_tracks in by_session.values():
         if not session_tracks:
             continue
+
+        # Find max length in session for normalized_length computation
+        max_length = max(len(item[1].track.candidates) for item in session_tracks) if session_tracks else 1
+
         # Primary sort: by side_score (descending) - high textiness first.
-        # Secondary: by track length for stability when side_score is similar.
+        # Secondary tie-breaker: quality-weighted composite score (descending)
         session_tracks.sort(
-            key=lambda item: (-item[1].side_score, -len(item[1].track.candidates))
+            key=lambda item: (
+                -item[1].side_score,
+                -_compute_quality_weighted_score(item[1], max_length)
+            )
         )
 
         first_index, first_prepared = session_tracks[0]
