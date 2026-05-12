@@ -491,15 +491,31 @@ using only mouse + keyboard, no JSON editing.
 Break the 2,079-line monolith into named stage modules with explicit
 interfaces. This is pure refactor — behavior preserved, gated by Phase 0.
 
+**Orchestration choice: custom Stage protocol (~250 LOC), not a library.**
+
+Rationale: Our pipeline is (a) single-user, single-machine, linear DAG with
+no parallelism, (b) stream subsystem (Stages 1–3) + batch DAG (Stages 4–10),
+and (c) needs per-stage artifact persistence for the threshold-tuning
+playground. A lightweight Stage protocol with in-process artifact store
+matches this shape exactly; heavyweight orchestrators (Prefect, Airflow,
+Metaflow) add ceremony with no payoff. Metaflow is documented as the exit
+ramp if future work requires distributed compute or richer artifact lineage.
+
 Deliverables:
-- `pipeline/stages/` directory with one file per stage (s1_sampler,
-  s2_triage, s3_detector, ... s10_dedup_storage)
-- Each stage: `run(input, ctx) -> output` with typed payloads
-- `pipeline/orchestrator.py` — < 300 lines, only stage wiring + IPC
+- `pipeline/stage.py` — Stage protocol (input → output), StageContext
+  (run_id, config, artifacts store, telemetry), Pipeline class (run with
+  optional resume_from parameter)
+- `pipeline/orchestrator.py` — < 100 lines, only stage sequencing + timing
+- `pipeline/artifact_store.py` — persist stage outputs to `<run_dir>/artifacts/<stage_name>`
+- `pipeline/stages/` directory with one file per stage (s1_streaming,
+  s2_triage, s3_detector, ... s10_dedup_storage). Stages 1–3 wrapped as
+  single "streaming" stage with internal multiprocessing; Stages 4–10 are
+  individual stages
 - All persisted artifacts unchanged; harness must report 0% delta on golden set
 
-Acceptance: harness metrics identical (or within float noise) of pre-refactor
-baseline; orchestrator file under 300 lines.
+Acceptance: harness metrics identical of pre-refactor baseline; orchestrator
+code < 100 lines; Stage protocol self-documents the pipeline shape; resume
+from any stage works and skips re-runs.
 
 #### Phase 3 — High-Impact Algorithmic Fixes
 
@@ -799,7 +815,30 @@ The next 6-8 weeks of work, gated by Phase 0:
 
 Phase 5 is ongoing once Phase 1 ships.
 
-### A.8 Open Questions for Future Sessions
+### A.8 Orchestration Library Decision
+
+**Chosen: custom Stage protocol (~250 LOC in-tree), not a framework.**
+
+Considered: Metaflow (strong library candidate; artifact persistence + resume
+are native), Hamilton (lighter but less stream-friendly), Kedro (too
+ceremonious), Luigi/Snakemake (file-driven, awkward for frames), Ray/Dask
+(distributed overkill), Prefect/Airflow (explicitly ruled out as too heavy).
+
+**Why custom Stage protocol wins for this problem:**
+1. Pipeline shape (linear DAG, no parallelism, stream subsystem + batch DAG)
+   is specific enough that a lightweight protocol matches exactly.
+2. Artifact persistence is load-bearing for the threshold-tuning playground
+   (§A.5.3); we need it persisted per-stage anyway, so no external dependency.
+3. Resume capability (skip re-runs from a given stage) is ~30 extra lines in
+   the Pipeline class.
+4. Zero framework lock-in; we control the entire orchestration shape.
+
+**Exit ramp:** If future work requires distributed compute or richer
+artifact lineage (multi-branch DAGs, fan-out/fan-in), the Stage protocol can
+be adapted to `@step` decorators in Metaflow with minimal migration. Document
+this as the intended evolution path in Phase 2.
+
+### A.9 Open Questions for Future Sessions
 
 These were flagged but not yet decided:
 
