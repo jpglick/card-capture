@@ -780,3 +780,57 @@ def test_prune_empty_workspace_tracks_drops_low_novelty_tracks(tmp_path):
     kept = _prune_empty_workspace_tracks(prepared, bg, threshold=0.08)
     kept_ids = [pt.track.instance_id for pt in kept]
     assert kept_ids == ["card"], kept_ids
+
+
+class SingleFrameSampler:
+    def sample(self, video_path, sample_fps):
+        image = np.full((100, 100, 3), 128, dtype=np.uint8)
+        image[20:80, 20:80] = 30 # A "card"
+        yield FrameSample(frame_index=0, timestamp_ms=0, image=image, width=100, height=100)
+
+# Detector returns one detection
+class SingleDetectionDetector:
+    runtime = "fake"
+    model_name = "fake"
+    def detect_batch(self, frames, threshold=None, confidence_threshold=None):
+        return [DetectionPacket(
+            frame_index=0, timestamp_ms=0, width=100, height=100,
+            corner_detection=CornerDetection(
+                corners=((20.0, 20.0), (80.0, 20.0), (80.0, 80.0), (20.0, 80.0)),
+                confidence=0.9, metadata={}
+            )
+        )]
+
+def test_pipeline_integrates_novelty_score(tmp_path):
+    """Pipeline must compute novelty and store it in card_views quality_score_json."""
+    from card_capture.pipeline import VideoProcessor, ProcessingOptions
+    from card_capture.storage import Storage
+    import cv2
+    import json
+
+    video_path = tmp_path / "input.mov"
+    video_path.write_bytes(b"fake video content")
+    storage = Storage(tmp_path / "cards.sqlite")
+    storage.initialize()
+
+    # Pre-warm background with different content
+    bg_image = np.full((100, 100, 3), 128, dtype=np.uint8)
+    sampler = SingleFrameSampler()
+    sampler.background_proxies = [bg_image]
+
+    processor = VideoProcessor(storage=storage, sampler=sampler, detector=SingleDetectionDetector())
+    processor.process(video_path, ProcessingOptions(
+        output_dir=tmp_path / "output",
+        background_frames=1,
+        min_track_length=1,
+        triage_keep_percentile=1.0,
+    ))
+    # Check the database for the novelty score in quality_score_json
+    with storage._connect() as conn:
+        row = conn.execute("SELECT quality_score_json FROM card_views").fetchone()
+    
+    assert row is not None
+    quality_score = json.loads(row["quality_score_json"])
+    assert "novelty" in quality_score
+    # Novelty should be > 0 because we have a painted patch vs flat background
+    assert quality_score["novelty"] > 0

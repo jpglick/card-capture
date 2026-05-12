@@ -703,13 +703,22 @@ class VideoProcessor:
                 normalized = normalized_by_detection.get(candidate.detection_id)
                 if normalized is None:
                     normalized = normalizer.normalize(raw_image, candidate.corners, rotate_180=options.rotate_180)
-                
+
+                # Compute novelty score (how much the candidate differs from background)
+                novelty_score = 1.0
+                if self._bg_model is not None and candidate.corners:
+                    from .presence.background_novelty import quad_novelty
+                    novelty_score = quad_novelty(
+                        raw_image, candidate.corners, self._bg_model,
+                        color_space="lab", lab_weights=(1.0, 0.5, 0.5)
+                    )
+
                 # Perform full quality scoring on the rectified crop
                 quality_score = self.scorer.score(
                     normalized,
-                    float(row.detection_packet.corner_detection.confidence)
+                    float(row.detection_packet.corner_detection.confidence),
+                    novelty=novelty_score
                 )
-
                 glare_centroid = find_glare_centroid(normalized)
                 glare_x, glare_y = glare_centroid if glare_centroid else (None, None)
                 frame_entries.append(
@@ -834,6 +843,9 @@ class VideoProcessor:
 
         t_storage_start = time.time()
         track_instance_ids: dict[int, int] = {}
+        # Keep track of canonical embeddings for the current run to merge cross-session duplicates
+        run_canonical_embeddings: list[tuple[int, np.ndarray, str]] = []  # (instance_id, embedding, phash)
+
         for track_index, prepared in enumerate(prepared_tracks):
             timer = PipelineTimer()
             instance_id = self.storage.add_card_instance(
@@ -847,12 +859,34 @@ class VideoProcessor:
             duplicate_of = None
             if prepared.duplicate_track_index is not None:
                 duplicate_of = track_instance_ids.get(prepared.duplicate_track_index)
+
+            # --- Global Deduplication (Cross-Session/Cross-Video) ---
+            is_intra_run_match = False
             if duplicate_of is None:
-                duplicate_of = self.storage.find_canonical_for_hashes(
-                    prepared.candidate_hashes,
-                    threshold=6,
-                )
+                # 1. Check against current run's canonicals using embeddings (most robust)
+                if prepared.embedding is not None:
+                    from .identity.embedding_distance import embedding_same_card_score
+                    for other_id, other_emb, other_phash in run_canonical_embeddings:
+                        if embedding_same_card_score(prepared.embedding, other_emb, threshold=0.5):
+                            if deduplicator.hamming_distance(prepared.primary_hash, other_phash) <= 30:
+                                duplicate_of = other_id
+                                is_intra_run_match = True
+                                break
+                
+                # 2. Fall back to Storage-based lookup (pHash-only, cross-video)
+                if duplicate_of is None:
+                    duplicate_of = self.storage.find_canonical_for_hashes(
+                        prepared.candidate_hashes,
+                        threshold=6,
+                    )
+                    # Note: We don't easily know if this is same video without querying DB,
+                    # but typically find_canonical_for_hashes will find the earliest one.
+            
             self.storage.update_instance_deduplication(instance_id, prepared.primary_hash, duplicate_of)
+            
+            # If this is NOT a duplicate, add it to our run's canonical cache
+            if duplicate_of is None and prepared.embedding is not None:
+                run_canonical_embeddings.append((instance_id, prepared.embedding, prepared.primary_hash))
 
             rectified_paths: dict[int, str] = {}
             for canonical_order, entry in enumerate(prepared.canonical_entries):
@@ -884,7 +918,7 @@ class VideoProcessor:
                     timestamp_ms=row.detection_packet.timestamp_ms,
                     detection=row.detection_packet.corner_detection,
                     rectified_path=rectified_paths.get(candidate.detection_id),
-                    quality_score={"confidence": round(row.detection_packet.corner_detection.confidence, 6)},
+                    quality_score=entry["quality_score"].components,
                     is_canonical=is_canonical,
                     glare_x=entry["glare_x"],
                     glare_y=entry["glare_y"],
@@ -941,10 +975,12 @@ class VideoProcessor:
                 if canonical_image_path is None:
                     continue
                 
-                # Only suppress saving for intra-run duplicates (secondary sides/Backs).
+                # Only suppress saving for intra-run duplicates (secondary sides/Backs 
+                # or cross-session matches within the same video).
                 # We still want to record 'saved_cards' for global duplicates (same card, 
                 # different video) so that per-run recall is accurate.
-                is_intra_run_duplicate = prepared.duplicate_track_index is not None
+                
+                is_intra_run_duplicate = prepared.duplicate_track_index is not None or is_intra_run_match
                 
                 if not is_intra_run_duplicate:
                     self.storage.add_saved_card(
@@ -1177,15 +1213,15 @@ def _is_reid_duplicate(
     """
     from .identity.embedding_distance import embedding_same_card_score
 
-    # Stage 1: pHash pre-filter (broad candidates)
+    # Stage 1: pHash as broad pre-filter (Wave 3)
     ham = deduplicator.hamming_distance(phash_1, phash_2)
-    if ham > 22:
-        # Hamming distance too large → definitely not same card
-        return False
-
-    # Stage 2: pHash is close or identical; use embeddings to decide
+    
+    # If embeddings available: use them as the primary decision metric.
+    # Relax pHash threshold when embeddings are present to handle blur/deformation.
     if embedding_1 is not None and embedding_2 is not None:
-        # Embeddings available: use cosine distance < 0.5 as deciding metric
+        if ham > 28: # Much more relaxed than 22
+            return False
+        from .identity.embedding_distance import embedding_same_card_score
         return embedding_same_card_score(embedding_1, embedding_2, threshold=0.5)
     else:
         # Embeddings unavailable: fall back to stricter pHash threshold for backward compat
