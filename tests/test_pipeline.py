@@ -150,15 +150,15 @@ def test_pipeline_persists_v21_rows_and_result_counts(tmp_path: Path):
     assert result.frame_count == 3
     assert result.accepted_frame_count == 3
     assert result.detection_count == 3
-    # v4.1: FakeBatchDetector with min_track_length=3 and only 3 total frames doesn't form tracks
-    # (tracker needs activation thresholds met). Expect 0 instances in this test scenario.
-    assert result.saved_instance_count == 0
-    assert result.telemetry["tracker_event_count"] == 0
+    # BoT-SORT emits tentative tracks immediately; the pipeline-level
+    # min_track_length gate is the single confirmation gate.
+    assert result.saved_instance_count == 1
+    assert result.telemetry["tracker_event_count"] == 3
     assert Path(result.telemetry["tracker_association_events_path"]).exists()
 
-    assert _row_count(storage, "card_instances") == 0
-    assert _row_count(storage, "card_views") == 0
-    assert _row_count(storage, "evidence_frames") == 0
+    assert _row_count(storage, "card_instances") == 1
+    assert _row_count(storage, "card_views") == 3
+    assert _row_count(storage, "evidence_frames") == 3
 
 
 def test_corner_confidence_threshold_filters_detections(tmp_path: Path):
@@ -686,6 +686,43 @@ def test_candidate_filter_drops_background_quads(tmp_path):
     kept = _filter_candidates_by_novelty(cands, bg, threshold=0.08)
     kept_ids = [c.detection_id for c in kept]
     assert kept_ids == [1], kept_ids
+
+
+def test_candidate_novelty_collection_does_not_drop_pre_tracking_candidates(tmp_path):
+    from card_capture.pipeline import _collect_candidate_novelty_scores, PipelineContext
+    from card_capture.presence.background_novelty import BackgroundModel
+    import cv2
+
+    bg_arr = np.full((200, 200, 3), 128, dtype=np.uint8)
+    bg_path = tmp_path / "bg.jpg"
+    cv2.imwrite(str(bg_path), bg_arr)
+
+    card_arr = bg_arr.copy()
+    card_arr[40:160, 40:160] = 20
+    card_path = tmp_path / "card.jpg"
+    cv2.imwrite(str(card_path), card_arr)
+
+    cands = [
+        ScoredCandidate(
+            detection_id=0, timestamp_ms=0, image_path=str(bg_path),
+            score=QualityScore(total=0.8, components={}),
+            corners=[(40, 40), (160, 40), (160, 160), (40, 160)],
+            frame_index=0,
+        ),
+        ScoredCandidate(
+            detection_id=1, timestamp_ms=33, image_path=str(card_path),
+            score=QualityScore(total=0.8, components={}),
+            corners=[(40, 40), (160, 40), (160, 160), (40, 160)],
+            frame_index=1,
+        ),
+    ]
+
+    context = PipelineContext()
+    scored = _collect_candidate_novelty_scores(cands, BackgroundModel.from_frames([bg_arr]), context)
+
+    assert scored == 2
+    assert len(cands) == 2
+    assert len(context.observed_novelty_scores) == 2
 
 
 def test_prune_empty_workspace_tracks_drops_low_novelty_tracks(tmp_path):

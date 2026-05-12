@@ -7,6 +7,8 @@ left while card B enters right) that global Sobel detection misses.
 
 from __future__ import annotations
 
+from collections import Counter
+
 import numpy as np
 import cv2
 
@@ -175,6 +177,8 @@ def find_valley_splits_per_region(
     grid_cols: int = 3,
     valley_drop_ratio: float = 0.70,
     min_valley_width_frames: int = 3,
+    frame_indices: list[int] | None = None,
+    min_region_votes: int = 1,
 ) -> list[int]:
     """Find unique split frames where multi-region valleys are detected.
 
@@ -186,10 +190,19 @@ def find_valley_splits_per_region(
         grid_cols: Number of columns in the grid (default 3).
         valley_drop_ratio: Drop ratio threshold for valley detection (default 0.70).
         min_valley_width_frames: Minimum valley width in frames (default 3).
+        frame_indices: Optional source-frame indices corresponding to ``frames``.
+            When omitted, returns scan-sequence indices for backward compatibility.
+        min_region_votes: Minimum number of grid regions that must vote for
+            the same split frame. The default preserves historical behavior.
 
     Returns:
-        Sorted list of unique frame indices where valleys are detected.
+        Sorted list of unique split frame indices where valleys are detected.
     """
+    if frame_indices is not None and len(frame_indices) != len(frames):
+        raise ValueError(
+            f"frame_indices length ({len(frame_indices)}) must equal frames length ({len(frames)})"
+        )
+
     valleys = per_region_valley_detection(
         frames,
         grid_rows=grid_rows,
@@ -198,6 +211,18 @@ def find_valley_splits_per_region(
         min_valley_width_frames=min_valley_width_frames,
     )
 
+    min_votes = max(1, int(min_region_votes))
+    vote_counts = Counter(frame_idx for frame_idx, _, _ in valleys)
+
     # Extract unique frame indices
-    split_frames = sorted(set(frame_idx for frame_idx, _, _ in valleys))
+    if frame_indices is None:
+        split_frames = sorted(
+            frame_idx for frame_idx, votes in vote_counts.items() if votes >= min_votes
+        )
+    else:
+        split_frames = sorted(
+            frame_indices[frame_idx]
+            for frame_idx, votes in vote_counts.items()
+            if votes >= min_votes
+        )
     return split_frames

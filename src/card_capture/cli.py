@@ -416,17 +416,8 @@ def _run_sampler_sessions(args: argparse.Namespace) -> int:
     scan_frames = sampler._scan_video(video_path)
     sampler._scan_frames = scan_frames
 
-    # Compute valley splits from fast-scan signal
-    from .sampler.valley_splits import find_valley_splits
-    sobel_scores = [getattr(f, 'sobel_score', 0.0) for f in scan_frames]
-    delta_scores = [getattr(f, 'delta_score', 0.0) for f in scan_frames]
-    frame_indices = [f.frame_index for f in scan_frames]
-    valley_splits = find_valley_splits(
-        sobel_scores, delta_scores, frame_indices,
-        valley_drop_ratio=sampler.valley_drop_ratio,
-        valley_min_width_frames=sampler.valley_min_width_frames,
-        delta_spike_ratio=sampler.delta_spike_ratio,
-    )
+    # Use the same split computation as the pipeline sampler path.
+    valley_splits = sampler._compute_valley_splits(scan_frames)
     sampler.last_valley_splits = valley_splits
 
     windows = sampler._build_windows(scan_frames, forced_splits=valley_splits)
