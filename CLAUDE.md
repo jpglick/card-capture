@@ -411,7 +411,412 @@ When you have clarified an upgrade path, **append it below** as a new section.
 
 ---
 
-## Appendix: Upgrade Path (To Be Filled In)
+## Appendix A: Upgrade Path — v4 Surgical Fixes + Application Shell
 
-*Awaiting user input on desired improvements and exploration direction.*
+This appendix records the chosen direction after extensive review. It is the
+authoritative roadmap; supersedes any conflicting earlier note.
+
+### A.0 Strategic Position
+
+**Decision: preserve the algorithm library, refactor the orchestration layer,
+build a real application shell on top.** Not a ground-up rewrite, not a
+CLI-only patch.
+
+The empirical justification:
+
+| Layer | Verdict | Why |
+|---|---|---|
+| Algorithm modules (sampler, detectors, scoring, fuser, foil_detection, ECC, deduplicator, presence/, tracking/, gpu_utils, cropper) — 50-470 lines each | **Preserve** | Well-decomposed, encodes hard-won corner-case knowledge (foil detection, valley splits, ECC registration, adaptive thresholds, border purity). Replacing it gains nothing concrete. |
+| `pipeline.py` (2,079 lines, single file) | **Decompose** | Monolithic orchestration. The "clean architecture" is a façade — the control flow is tangled in one giant file. Refactoring into named stages with explicit interfaces is justified independently of any algorithm change. |
+| `storage.py` (574 lines, SQLite) | **Preserve + extend** | Data model is sound (videos, card_instances, card_views, pipeline_events). Wrap in a service layer. |
+| `review.py` + 4 HTML templates | **Replace UI; keep FastAPI** | Stack choice is right; the table-and-dropdown UX is not. |
+| `cli.py` (527 lines) | **Keep alongside UI** | CLI stays for headless/CI; app sits on the same service layer. |
+
+This neutralizes the second-system risk (algorithms preserved, A/B baseline
+intact) while addressing what's actually broken (orchestration tangle, basic
+UX, missing training infrastructure).
+
+### A.1 Phase Plan
+
+Each phase is independently shippable and verifiable against the regression
+harness from Phase 0.
+
+#### Phase 0 — Regression Harness (BLOCKER for everything else)
+
+Nothing in Phases 1+ ships without this. It's the single highest-leverage
+piece of work and it's framework-independent.
+
+Deliverables:
+- Truth-file schema codified (`truth.json` per video): `expected_cards[]`
+  with `card_id`, `front_present`, `back_present`, `approx_front_window_ms`,
+  `approx_back_window_ms`, `physical_card_key`, `is_foil`, `notes`.
+- Metric definitions:
+  - **Card recall:** detected cards / ground-truth cards
+  - **Card precision:** real detections / total detections (phantom rate)
+  - **Side accuracy:** correct front/back assignments / total instances
+  - **Dedup accuracy:** correctly grouped duplicates / ground-truth groups
+    (Adjusted Rand Index or F1 on pairs)
+  - **Image quality:** SSIM / PSNR of fused canonical vs. a hand-picked
+    reference frame
+- `card-capture harness run --against <baseline.json>` CLI subcommand.
+- Web UI: Regression tab (Section A.4.6) shows per-metric deltas with
+  per-video breakdown and highlight on regressions.
+- Initial labeled set: **15 videos minimum**, covering: clean run, glare,
+  foil, hand occlusion, fast swaps, edge-on flips, dark workspace, bright
+  workspace, mixed orientations, partial visibility, multi-card-in-frame.
+
+Acceptance: harness produces stable metrics across 3 consecutive runs on the
+same video (no noise from non-determinism in pipeline).
+
+#### Phase 1 — Application Shell + Labeling UX
+
+Build the operator app and the labeling surfaces in parallel with Phase 0,
+because (a) Phase 0 needs the labeling UX to be efficient, and (b) the app
+shell unblocks all subsequent work.
+
+Deliverables:
+- FastAPI service layer wrapping `Storage` and `VideoProcessor`
+- SSE/WebSocket endpoint for real-time pipeline progress
+- Frontend: pick **Svelte or HTMX + Alpine.js** (low-ceremony, no React
+  build-pipeline). Single-page app, left-nav sections (A.4)
+- Labeling UX (A.3) — filmstrip, three-button verdict, hotkeys, drag-link,
+  Front/Back trainer, dedup-cluster confirmer
+- Real-time run monitor with per-stage progress
+
+Acceptance: a human can label a 5-minute video's truth file in < 10 minutes
+using only mouse + keyboard, no JSON editing.
+
+#### Phase 2 — pipeline.py Decomposition
+
+Break the 2,079-line monolith into named stage modules with explicit
+interfaces. This is pure refactor — behavior preserved, gated by Phase 0.
+
+Deliverables:
+- `pipeline/stages/` directory with one file per stage (s1_sampler,
+  s2_triage, s3_detector, ... s10_dedup_storage)
+- Each stage: `run(input, ctx) -> output` with typed payloads
+- `pipeline/orchestrator.py` — < 300 lines, only stage wiring + IPC
+- All persisted artifacts unchanged; harness must report 0% delta on golden set
+
+Acceptance: harness metrics identical (or within float noise) of pre-refactor
+baseline; orchestrator file under 300 lines.
+
+#### Phase 3 — High-Impact Algorithmic Fixes
+
+These are the expert's prioritized list. Each ships independently and is
+gated by Phase 0 regression metrics.
+
+Order is by expected accuracy delta × implementation cost:
+
+1. **Multi-frame median fusion** (already implemented in v3 `fuser.py`; verify
+   it's enabled, tune frame-count, possibly add residual-region inpainting).
+   *Expected: noticeable glare reduction, especially on non-foil cards.*
+2. **Trained Front/Back classifier** replacing
+   `longest-track-equals-Front` heuristic.
+   - Model: MobileNetV3-Small finetuned on rectified crops
+   - Training data: collected via Labeling UX (A.3.2)
+   - Threshold: confidence < 0.6 → fall back to current heuristic
+   *Expected: biggest win on side correctness, your #1 reported pain point.*
+3. **DINOv2 embeddings + local FAISS for dedup** replacing pHash.
+   - Model: DINOv2 ViT-S/14 (~22M params), CoreML if on Apple, else PyTorch
+   - Index: FAISS in-process, no Qdrant
+   - Threshold: cosine distance, calibrate on labeled dedup groups
+   *Expected: large reduction in both false-positive dedup ("two parallels
+   collapsed") and false-negative dedup ("same card not matched").*
+4. **ByteTrack** (or fixed BoT-SORT) replacing current adapter:
+   - Decision point: BoT-SORT with real-image ReID, or ByteTrack with no ReID
+     (avoid the dummy-image-degraded ReID problem entirely)
+   - Removes hand-tuned shape-change rules
+   *Expected: cleaner tracks, fewer ID switches, less session fragmentation.*
+5. **Corner refinement (RANSAC line-fit) on canonical frames** — sub-pixel
+   accurate corners before rectification.
+   *Expected: sharper rectified crops; marginal but compounds with fusion.*
+
+#### Phase 4 — Speed Wins (no accuracy change expected)
+
+Each is independently shippable; not gated by accuracy regression but by
+"no degradation."
+
+1. YOLOv8-OBB → **YOLO26-OBB on CoreML** (Apple silicon target; PyTorch
+   fallback for Linux/CUDA preserves cross-platform)
+2. Decoder: OpenCV/decord → **VideoToolbox on macOS** (preserve current
+   backends elsewhere)
+3. Perspective warp: Kornia → **vImage on macOS** (Kornia fallback elsewhere)
+
+Cross-platform is preserved by feature-detecting macOS-only paths at startup,
+not by replacing the cross-platform code.
+
+#### Phase 5 — Hard-Case Active Learning Loop
+
+The plumbing exists (`analysis/hard_case_capture.py`). Wire it into the app:
+- Hard cases captured during runs surface in the **Hard Cases** tab
+- Operator one-click "send to training set" → retrains relevant model
+- Track regression metric per model retrain
+
+### A.2 What's Explicitly Skipped (and why)
+
+| Skipped | Why |
+|---|---|
+| `VNDetectRectanglesRequest` (Vision Framework) | Classical CV with known failure modes on low-contrast edges, glare-crossed borders, hand occlusion, foil refraction, severe perspective. YOLO already handles these. |
+| Single-frame neural glare removal (HDNet/ACENet/DRM solvers) | Ill-posed on non-Lambertian surfaces. Holographic cards have specular patterns that ARE the texture — DRM solvers would hallucinate. Multi-frame median is principled and free. |
+| Prefect / Airflow orchestration | Enterprise data-engineering for a single-user batch pipeline. `multiprocessing` + service layer is sufficient. |
+| OpenTelemetry / Prometheus / Grafana | Same — solving a problem that doesn't exist yet. `py-spy` and SQLite telemetry are enough. |
+| Qdrant | FAISS in-process gives sub-ms search for ≤ 100K cards with zero ops burden. |
+| MLX for inference | CoreML on ANE is faster for forward passes. Use MLX only if training is added later. |
+
+### A.3 Labeling UX Spec
+
+#### A.3.1 Per-video truth labeling (replaces `templates/labeling.html`)
+
+**Layout:**
+```
+┌─────────────────────────────────────────────────────────────┐
+│ Video: practice_session_03.mov   [< prev]  [next >]  [save] │
+├─────────────────────────────────────────────────────────────┤
+│  [video scrubber with detected-card markers]                │
+├─────────────────────────────────────────────────────────────┤
+│  Detected instances (12)             [✓ all real]  [✗ all]  │
+│  ┌──┐ ┌──┐ ┌──┐ ┌──┐ ┌──┐ ┌──┐ ┌──┐ ┌──┐ ┌──┐ ┌──┐         │
+│  │F1│ │B1│ │F2│ │B2│ │F3│ │ ? │ │F4│ │F5│ │B5│ │F6│ ←sel    │
+│  └──┘ └──┘ └──┘ └──┘ └──┘ └──┘ └──┘ └──┘ └──┘ └──┘         │
+│   ✓    ✓    ✓    ✓    ✓    ✗?    ✓    ✓    ✓               │
+├─────────────────────────────────────────────────────────────┤
+│  Selected: instance #6                                       │
+│  ┌─────────────────────┐  [✓ Real]  [✗ Phantom]  [🔄 Flip]  │
+│  │   <large preview>   │  Pipeline auto-assigned: Front      │
+│  │  fused canonical    │  Hotkeys: F=Front  B=Back  X=phantom│
+│  └─────────────────────┘  Linked to: (none — drag to link)  │
+├─────────────────────────────────────────────────────────────┤
+│  Missed cards: [+ Add at current scrubber time]              │
+│  • card_missed_1  at 04:23-04:31 [edit][delete]              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Interactions:**
+- Click thumbnail → select instance, large preview loads
+- F/B/X keys → set verdict and auto-advance to next unverified instance
+- Drag instance onto another → mark as same card (visual: shared color border)
+- Right-click → context menu (split group, mark canonical-for-group, view raw frames)
+- Scrubber + "Add missed card" button → fills `card_missed_N` with current
+  timestamp, opens inline form for end-timestamp and side
+
+**Save:** auto-save every 30s + explicit save button; produces same
+`truth.json` schema today's labeling.html produces (backward compatible).
+
+#### A.3.2 Front/Back classifier training UI
+
+**Single-card flash-card mode:**
+```
+┌─────────────────────────────────────────────────────────────┐
+│ Train Front/Back classifier      Labeled: 247 / target 500  │
+│                                                              │
+│         ┌───────────────────────────────┐                   │
+│         │                               │                   │
+│         │     <single rectified card>   │                   │
+│         │     (750×1050, full size)     │                   │
+│         │                               │                   │
+│         └───────────────────────────────┘                   │
+│                                                              │
+│  [F = Front]  [B = Back]  [S = Skip ambiguous]  [U = Undo]  │
+│                                                              │
+│  Source: practice_session_03.mov / instance_42 / frame_1287 │
+│  Auto-retrain after 50 more labels                          │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Interactions:**
+- Single keypress (F/B/S) labels and advances. No mouse needed.
+- Cards drawn from un-labeled high-confidence detections across all videos
+- "U" undoes last label
+- Auto-retrain triggers at configurable interval (default 50 new labels)
+- Validation accuracy reported after each retrain
+
+#### A.3.3 Dedup-cluster confirmation
+
+**Cluster grid mode:**
+```
+┌─────────────────────────────────────────────────────────────┐
+│ Verify dedup clusters    23 clusters, 7 unverified          │
+│                                                              │
+│ Cluster #5 (predicted: 3 instances of same card)            │
+│ ┌──┐ ┌──┐ ┌──┐                                              │
+│ │  │ │  │ │  │   [✓ All same]  [Split selected to new]      │
+│ └──┘ └──┘ └──┘   [+ Add card from inventory]                │
+│  v3   v7   v12                                              │
+│                                                              │
+│ Cluster #6 (predicted: 2 instances) ← unverified            │
+│ ...                                                          │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Interactions:**
+- Click thumbnail to select; multi-select with Shift+click
+- "✓ All same" — confirms cluster, moves to next
+- "Split selected to new" — pulls selected cards into a new cluster
+- Drag-drop a card onto another cluster → merge
+
+### A.4 Application Interface Spec
+
+Left-nav sections, each a single-page route:
+
+#### A.4.1 Inbox
+- Drag-drop video upload (multi-file)
+- Queue: pending, processing, completed, failed
+- One-click "Run pipeline" with config preset selector (fast / balanced / quality)
+- Recent runs summary card with progress
+
+#### A.4.2 Runs
+- List of all runs (video × config × timestamp)
+- Per-run status, cards extracted, elapsed time, comparison-to-baseline badge
+- Click → run detail page (timeline, telemetry, cards, rejection log)
+- "Compare to..." button → A/B view (A.5.2)
+
+#### A.4.3 Cards
+- Grid view of all extracted cards across all runs
+- Filters: run, video, dedup-group, review-state (pending/accepted/rejected),
+  side (front/back), is_foil, confidence range
+- Bulk actions: accept-all-filtered, reject-all-filtered, export
+- Click card → detail (canonical view, fused view, source frames,
+  detection metadata, dedup neighbors)
+
+#### A.4.4 Label
+- Sub-tabs: Per-video truth (A.3.1), Front/Back trainer (A.3.2),
+  Dedup clusters (A.3.3)
+- Top-level progress: "15/30 videos labeled, 247/500 F/B examples,
+  23/30 dedup clusters verified"
+
+#### A.4.5 Train
+- Dataset statistics per model (presence, F/B, future: dedup-similarity)
+- Model status: last trained, validation accuracy, version
+- "Retrain now" button + auto-retrain settings
+- Validation set previews (model wrong here ← click to inspect)
+
+#### A.4.6 Regression
+- Pick a candidate run config and a baseline (default: tagged `baseline_v3`)
+- Run on full golden set, get table of per-video metric deltas
+- Per-metric drill-down (recall, precision, side accuracy, dedup accuracy)
+- Highlight regressions in red; gate "Promote to baseline" button on
+  no-regression
+
+#### A.4.7 Settings
+- Pipeline config presets (fast / balanced / quality / custom)
+- Threshold sliders with tooltips explaining trade-offs
+- Live preview: pick a saved run, drag a threshold → see recomputed
+  rejection/acceptance (uses persisted stage outputs from Phase 2)
+
+### A.5 Dev/Operator Dashboard Spec
+
+#### A.5.1 Run inspection (click any run from A.4.2)
+
+Tabbed view:
+- **Timeline:** v3's existing timeline.html refreshed — sessions, resets
+  (color-coded by reason), instances, valley splits
+- **Cards:** all cards from this run with side-by-side canonical/fused
+- **Telemetry:** per-stage timing chart, throughput, frame counts,
+  rejection breakdown by stage
+- **Events log:** every pipeline_event row with filterable reasons
+  (sampled_frame_gap, valley_split, centroid_jump, reid_shift,
+  novelty_below_threshold, low_confidence)
+- **Rejection log:** every candidate dropped, with stage + reason +
+  thumbnail of the rejected crop. Click to "open in label UI as missed card"
+  if it looks like a false rejection
+- **Hard cases:** auto-captured edge cases from this run; one-click
+  "send to training set"
+
+#### A.5.2 A/B comparison view
+
+- Pick run A and run B (same video, different config or pipeline version)
+- Side-by-side: cards extracted, dedup groups, side assignments
+- Diff highlighting: cards in A but not B (and vice versa),
+  re-assignments, dedup-group changes
+- Metric delta strip at top (recall ±X%, precision ±X%, etc.)
+
+#### A.5.3 Threshold-tuning playground
+
+Useful for: `corner_confidence`, `background_novelty_threshold`,
+`_SAME_CARD_HAMMING_MAX`, `foil_threshold`, `centroid_jump_ratio`,
+`valley_drop_ratio`.
+
+Mechanics:
+- Pick a saved run from A.4.2
+- Drag a threshold slider → backend recomputes downstream stages from
+  persisted intermediate outputs (not re-running detector/sampler)
+- Live updated metrics + thumbnail strip of newly accepted/rejected
+- "Commit as new config preset" button
+
+Requires Phase 2's stage decomposition (persisted per-stage outputs).
+
+### A.6 Service Layer Architecture
+
+```
+┌──────────────────────────────────────────────────────┐
+│  Frontend (Svelte or HTMX+Alpine, served by FastAPI) │
+└──────────────────────┬───────────────────────────────┘
+                       │ REST + SSE
+┌──────────────────────▼───────────────────────────────┐
+│  FastAPI service layer (app/api/)                    │
+│  - /api/videos   /api/runs   /api/cards              │
+│  - /api/label    /api/training  /api/regression      │
+│  - /events/<run_id>  (SSE: per-stage progress)       │
+└──────────────────────┬───────────────────────────────┘
+                       │ in-process calls
+┌──────────────────────▼───────────────────────────────┐
+│  Domain services (app/services/)                     │
+│  - PipelineService (wraps VideoProcessor)            │
+│  - LabelingService (truth.json CRUD)                 │
+│  - TrainingService (model retrain, validation)       │
+│  - RegressionService (harness, metrics, baselines)   │
+└──────────────────────┬───────────────────────────────┘
+                       │
+┌──────────────────────▼───────────────────────────────┐
+│  Existing pipeline + storage (preserved)             │
+│  - src/card_capture/pipeline/* (post-Phase 2 stages) │
+│  - src/card_capture/storage.py (extended schema)     │
+│  - src/card_capture/<algorithm modules>              │
+└──────────────────────────────────────────────────────┘
+```
+
+CLI (`cli.py`) calls the same domain services. Headless / CI workflows
+continue to work.
+
+### A.7 Implementation Order (concrete)
+
+The next 6-8 weeks of work, gated by Phase 0:
+
+1. **Week 1-2:** Phase 0 — truth-file schema, metric definitions, harness
+   CLI command, minimal `Regression` tab. Label 5 videos to bootstrap.
+2. **Week 2-3:** Phase 1 — FastAPI service layer, SSE progress, app shell
+   (left-nav, Inbox, Runs sections), per-video labeling UX (A.3.1).
+3. **Week 3-4:** Phase 1 cont. — F/B trainer UX (A.3.2), dedup cluster UX
+   (A.3.3), Cards section, Train section. Reach 15 labeled videos.
+4. **Week 4-5:** Phase 2 — pipeline.py decomposition, verified by harness
+   showing 0% delta.
+5. **Week 5-6:** Phase 3 #1-2 — multi-frame fusion verification + Front/Back
+   classifier (data already collected during Phase 1).
+6. **Week 6-7:** Phase 3 #3 — DINOv2 + FAISS dedup. Regression run, gate.
+7. **Week 7-8:** Phase 3 #4-5 — tracker swap, corner refinement.
+   Phase 4 speed wins as time allows.
+
+Phase 5 is ongoing once Phase 1 ships.
+
+### A.8 Open Questions for Future Sessions
+
+These were flagged but not yet decided:
+
+1. **Frontend framework:** Svelte vs HTMX+Alpine? Svelte gives a richer
+   labeling UX (drag-drop, real-time updates) but adds a build step.
+   HTMX+Alpine keeps the FastAPI Jinja-template flow and is enough for
+   tables + forms but constrained for the filmstrip/drag UX.
+2. **DINOv2 variant:** ViT-S/14 (recommended for speed, ~22M params) vs
+   ViT-B/14 (better accuracy, ~86M params). Decide after benchmarking on
+   labeled dedup groups.
+3. **Tracker choice:** BoT-SORT-with-real-ReID (more work, better
+   discrimination on visual identity) vs ByteTrack-no-ReID (simpler,
+   relies on spatial + appearance-via-Front-Back).
+4. **Training infra:** local-only retrain on Apple silicon? Cloud GPU
+   for retrain? Decide once dataset sizes are known.
+5. **Apple-specific path:** YOLO26-CoreML, VideoToolbox, vImage are
+   macOS-only. Confirm we want a feature-detected fast-path vs a
+   universal slow-path, or hold these until cross-platform consensus.
+
 
