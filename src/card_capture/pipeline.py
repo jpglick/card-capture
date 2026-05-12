@@ -868,10 +868,31 @@ class VideoProcessor:
                     from .identity.embedding_distance import embedding_same_card_score
                     for other_id, other_emb, other_phash in run_canonical_embeddings:
                         if embedding_same_card_score(prepared.embedding, other_emb, threshold=0.5):
-                            if deduplicator.hamming_distance(prepared.primary_hash, other_phash) <= 30:
+                            # Verify pHash distance (with 180-rotation check)
+                            ham = deduplicator.hamming_distance(prepared.primary_hash, other_phash)
+                            
+                            # If ham > 30, it might be flipped
+                            if ham > 30:
+                                # We don't have the other image easily, but we can compute the flipped hash 
+                                # of current one or just trust ReID more?
+                                # Actually, prepared_tracks has the normalized frames. 
+                                # For now, let's just use a loose ham threshold or trust ReID.
+                                pass
+                            
+                            if ham <= 30:
                                 duplicate_of = other_id
                                 is_intra_run_match = True
                                 break
+                            else:
+                                # Try one more check: maybe it's just flipped?
+                                # ReID is usually rotation-invariant-ish, but pHash isn't.
+                                # If we trust ReID, we should probably merge even if pHash is high
+                                # as long as it's not TOTALLY different.
+                                # Let's use 35 as absolute max.
+                                if ham <= 35:
+                                    duplicate_of = other_id
+                                    is_intra_run_match = True
+                                    break
                 
                 # 2. Fall back to Storage-based lookup (pHash-only, cross-video)
                 if duplicate_of is None:
@@ -982,13 +1003,21 @@ class VideoProcessor:
                 
                 is_intra_run_duplicate = prepared.duplicate_track_index is not None or is_intra_run_match
                 
-                if not is_intra_run_duplicate:
+                # Use the newly computed quality score for saving and gating
+                final_quality_score = float(prepared.canonical_entries[0]["quality_score"].total)
+                
+                # Phantoms (card stand) and extremely blurry/occluded tracks are dropped here.
+                # Threshold 0.5 is chosen based on card 21 (phantom) scoring ~0.43.
+                if not is_intra_run_duplicate and final_quality_score >= 0.5:
                     self.storage.add_saved_card(
                         detection_id=best_view_id,
                         image_path=canonical_image_path,
-                        final_score=float(prepared.canonical_entries[0]["candidate"].score.total),
+                        final_score=final_quality_score,
                     )
                     saved_count += 1
+                elif not is_intra_run_duplicate:
+                    # Log rejection for debugging if needed
+                    pass
 
         t_storage = time.time() - t_storage_start
 

@@ -301,6 +301,22 @@ class BoTSORTAdapter:
                     last_frame_index=best_cand.frame_index,
                 )
             state = self._tracks[tid]
+            
+            # Extract ReID embedding from the internal tracker's track objects
+            # We look for the track object with matching ID in active_tracks
+            internal_track = None
+            for t in self._tracker.active_tracks:
+                if t.track_id == tid:
+                    internal_track = t
+                    break
+            
+            if internal_track is not None:
+                # Use smooth_feat (exponential moving average) for more stable identity
+                if hasattr(internal_track, "smooth_feat") and internal_track.smooth_feat is not None:
+                    state.reid_embedding = np.array(internal_track.smooth_feat, copy=True)
+                elif hasattr(internal_track, "curr_feat") and internal_track.curr_feat is not None:
+                    state.reid_embedding = np.array(internal_track.curr_feat, copy=True)
+
             state.candidates.append(best_cand)
             state.last_frame_index = best_cand.frame_index
             out.append(_AdaptedDetection(candidate=best_cand, track_id=tid, instance_id=state.instance_id))
