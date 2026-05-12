@@ -491,31 +491,45 @@ using only mouse + keyboard, no JSON editing.
 Break the 2,079-line monolith into named stage modules with explicit
 interfaces. This is pure refactor — behavior preserved, gated by Phase 0.
 
-**Orchestration choice: custom Stage protocol (~250 LOC), not a library.**
+**Orchestration choice: Metaflow.**
 
-Rationale: Our pipeline is (a) single-user, single-machine, linear DAG with
-no parallelism, (b) stream subsystem (Stages 1–3) + batch DAG (Stages 4–10),
-and (c) needs per-stage artifact persistence for the threshold-tuning
-playground. A lightweight Stage protocol with in-process artifact store
-matches this shape exactly; heavyweight orchestrators (Prefect, Airflow,
-Metaflow) add ceremony with no payoff. Metaflow is documented as the exit
-ramp if future work requires distributed compute or richer artifact lineage.
+Rationale: Any non-trivial parallelism (e.g. per-track fusion in a thread
+pool, parallel stage runs for A/B config testing) will force a migration
+anyway. Metaflow's `@step` decorator model gives us artifact persistence,
+resume from a step, and local-first execution with zero infrastructure today
+— and a clean path to distributed compute later without changing the pipeline
+shape. The ceremony cost is low relative to the payoff across the full phase
+plan.
+
+Key Metaflow properties we rely on:
+- **Artifact persistence:** every `self.<name> = value` on a step is
+  automatically snapshotted. This is the backbone of the threshold-tuning
+  playground (§A.5.3) — recompute from any persisted step without re-running
+  the detector or sampler.
+- **Resume:** `python pipeline_flow.py resume` re-runs from the first failed
+  or modified step, skipping expensive upstream steps.
+- **Local-first:** no infrastructure needed. `python pipeline_flow.py run`
+  executes on the local machine. Cloud compute (AWS Batch, Kubernetes) is an
+  opt-in future step.
+- **Parallel steps:** `@parallel` and `foreach` branches give us per-track
+  fusion parallelism in Phase 3 with no IPC boilerplate.
+
+Streaming subsystem (Stages 1–3) still uses internal `multiprocessing` +
+bounded `Queue` — Metaflow doesn't help with frame-level streaming, so that
+block is wrapped as a single `@step`.
 
 Deliverables:
-- `pipeline/stage.py` — Stage protocol (input → output), StageContext
-  (run_id, config, artifacts store, telemetry), Pipeline class (run with
-  optional resume_from parameter)
-- `pipeline/orchestrator.py` — < 100 lines, only stage sequencing + timing
-- `pipeline/artifact_store.py` — persist stage outputs to `<run_dir>/artifacts/<stage_name>`
-- `pipeline/stages/` directory with one file per stage (s1_streaming,
-  s2_triage, s3_detector, ... s10_dedup_storage). Stages 1–3 wrapped as
-  single "streaming" stage with internal multiprocessing; Stages 4–10 are
-  individual stages
+- `pipeline/card_capture_flow.py` — top-level `FlowSpec` with one `@step`
+  per logical stage group
+- Stages 1–3 wrapped as `@step detect(self)` with internal multiprocessing
+- Stages 4–10 as individual `@step` methods; Stage 9 (per-track fusion) as
+  `foreach` for parallelism
+- `pipeline/steps/` — one module per step with the actual logic (keeps
+  `card_capture_flow.py` < 200 lines)
 - All persisted artifacts unchanged; harness must report 0% delta on golden set
 
-Acceptance: harness metrics identical of pre-refactor baseline; orchestrator
-code < 100 lines; Stage protocol self-documents the pipeline shape; resume
-from any stage works and skips re-runs.
+Acceptance: harness metrics identical to pre-refactor baseline; flow file
+< 200 lines; resume from any step works; per-track fusion runs in parallel.
 
 #### Phase 3 — High-Impact Algorithmic Fixes
 
@@ -817,26 +831,26 @@ Phase 5 is ongoing once Phase 1 ships.
 
 ### A.8 Orchestration Library Decision
 
-**Chosen: custom Stage protocol (~250 LOC in-tree), not a framework.**
+**Chosen: Metaflow.**
 
-Considered: Metaflow (strong library candidate; artifact persistence + resume
-are native), Hamilton (lighter but less stream-friendly), Kedro (too
-ceremonious), Luigi/Snakemake (file-driven, awkward for frames), Ray/Dask
-(distributed overkill), Prefect/Airflow (explicitly ruled out as too heavy).
+Considered: custom Stage protocol (~250 LOC), Hamilton, Kedro,
+Luigi/Snakemake, Ray/Dask, Prefect/Airflow.
 
-**Why custom Stage protocol wins for this problem:**
-1. Pipeline shape (linear DAG, no parallelism, stream subsystem + batch DAG)
-   is specific enough that a lightweight protocol matches exactly.
-2. Artifact persistence is load-bearing for the threshold-tuning playground
-   (§A.5.3); we need it persisted per-stage anyway, so no external dependency.
-3. Resume capability (skip re-runs from a given stage) is ~30 extra lines in
-   the Pipeline class.
-4. Zero framework lock-in; we control the entire orchestration shape.
+**Why Metaflow:**
+- Any non-trivial parallelism (per-track fusion, A/B config runs) would force
+  a migration from a custom protocol anyway — better to pay the adoption cost
+  once.
+- Artifact persistence (`self.<name> = value` auto-snapshotted per step) is
+  the backbone of the threshold-tuning playground (§A.5.3).
+- Resume (`python flow.py resume`) skips expensive upstream steps (decoder,
+  YOLO) when iterating on Stages 4–10.
+- Local-first: no infrastructure needed today; AWS Batch / Kubernetes is an
+  opt-in path, not a requirement.
+- `foreach` + `@parallel` give per-track fusion parallelism in Phase 3 with
+  no IPC boilerplate.
 
-**Exit ramp:** If future work requires distributed compute or richer
-artifact lineage (multi-branch DAGs, fan-out/fan-in), the Stage protocol can
-be adapted to `@step` decorators in Metaflow with minimal migration. Document
-this as the intended evolution path in Phase 2.
+Streaming subsystem (Stages 1–3) remains `multiprocessing` + bounded `Queue`
+internally — wrapped as a single `@step` so Metaflow sees it as one unit.
 
 ### A.9 Open Questions for Future Sessions
 
