@@ -19,11 +19,24 @@ import warnings
 
 
 def _open_capture(path: "str | Path") -> cv2.VideoCapture:
-    """Open a VideoCapture with VideoToolbox hardware acceleration on macOS.
+    """Open a VideoCapture with hardware acceleration.
 
-    Falls back to software decode if the hardware-accelerated open fails,
-    and emits a warning so the performance regression is visible.
+    Priority:
+    1. VideoToolbox via AVFoundation (macOS native)
+    2. HW Acceleration via FFMPEG (Any)
+    3. Software fallback
     """
+    import platform
+    is_macos = platform.system() == "Darwin"
+
+    # 1. macOS Native (AVFoundation)
+    if is_macos:
+        cap = cv2.VideoCapture(str(path), cv2.CAP_AVFOUNDATION)
+        if cap.isOpened():
+            return cap
+        cap.release()
+
+    # 2. FFMPEG HW
     cap = cv2.VideoCapture(
         str(path),
         cv2.CAP_FFMPEG,
@@ -32,8 +45,10 @@ def _open_capture(path: "str | Path") -> cv2.VideoCapture:
     if cap.isOpened():
         return cap
     cap.release()
+
+    # 3. Software Fallback
     warnings.warn(
-        f"Hardware-accelerated video decode (VideoToolbox) unavailable for "
+        f"Hardware-accelerated video decode unavailable for "
         f"{path!r}; falling back to software decode. Performance will be reduced.",
         RuntimeWarning,
         stacklevel=2,

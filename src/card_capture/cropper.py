@@ -77,6 +77,15 @@ class PrecisionNormalizer:
         self.safety_margin = safety_margin
 
     def normalize(self, image: np.ndarray, corners: Sequence[Point], rotate_180: bool = True) -> np.ndarray:
+        # 1. Try vImage (macOS native)
+        from .ml.inference.vimage_warp import vimage_warp_perspective
+        vimg = vimage_warp_perspective(image, corners, (self.width, self.height))
+        if vimg is not None:
+            if rotate_180:
+                vimg = cv2.rotate(vimg, cv2.ROTATE_180)
+            return vimg
+
+        # 2. Standard OpenCV path
         ordered = order_points_clockwise(corners)
         oriented = _orient_for_target_canvas(ordered, self.width, self.height)
         pts = np.array(oriented, dtype="float32")
