@@ -63,11 +63,13 @@ def run(ctx: RunContext, detect_out: DetectOutput) -> NoveltyOutput:
             img = cv2.imread(row["source_frame_path"])
             if img is not None:
                 corners = [(float(x), float(y)) for x, y in row["corners"]]
-                novelty = quad_novelty(
+                novelty_val = quad_novelty(
                     img, corners, bg_model,
                     color_space="lab", lab_weights=(1.0, 0.5, 0.5),
                 )
-                scored_row["novelty_score"] = float(novelty)
+                scored_row["novelty_score"] = float(novelty_val)
+                # SOLE COLLECTION POINT: Collect novelty scores for adaptive thresholding
+                ctx.observed_novelty_scores.append(float(novelty_val))
 
         scored_rows.append(scored_row)
 

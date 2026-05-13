@@ -37,6 +37,7 @@ class Storage:
                     track_id TEXT NOT NULL,
                     session_id TEXT,
                     visual_hash TEXT,
+                    reid_embedding BLOB,
                     is_duplicate_of INTEGER REFERENCES card_instances(id),
                     angle TEXT,
                     fused_image_path TEXT,
@@ -134,6 +135,7 @@ class Storage:
             self._ensure_column(conn, "card_instances", "angle", "TEXT")
             self._ensure_column(conn, "card_instances", "session_id", "TEXT")
             self._ensure_column(conn, "card_instances", "fused_image_path", "TEXT")
+            self._ensure_column(conn, "card_instances", "reid_embedding", "BLOB")
             self._ensure_column(conn, "card_views", "glare_x", "REAL")
             self._ensure_column(conn, "card_views", "glare_y", "REAL")
             self._ensure_column(conn, "card_views", "sharpness", "REAL")
@@ -217,29 +219,40 @@ class Storage:
         track_id: str,
         angle: Optional[str] = None,
         session_id: Optional[str] = None,
+        reid_embedding: Optional[bytes] = None,
     ) -> int:
         with self._connect() as conn:
             cursor = conn.execute(
                 """
-                INSERT INTO card_instances (video_id, track_id, angle, session_id)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO card_instances (video_id, track_id, angle, session_id, reid_embedding)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (video_id, track_id, angle, session_id),
+                (video_id, track_id, angle, session_id, reid_embedding),
             )
             return int(cursor.lastrowid)
 
     def update_instance_deduplication(
-        self, instance_id: int, visual_hash: str, duplicate_of_id: Optional[int] = None
+        self, instance_id: int, visual_hash: str, duplicate_of_id: Optional[int] = None, reid_embedding: Optional[bytes] = None
     ) -> None:
         with self._connect() as conn:
-            conn.execute(
-                """
-                UPDATE card_instances
-                SET visual_hash = ?, is_duplicate_of = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-                """,
-                (visual_hash, duplicate_of_id, instance_id),
-            )
+            if reid_embedding is not None:
+                conn.execute(
+                    """
+                    UPDATE card_instances
+                    SET visual_hash = ?, is_duplicate_of = ?, reid_embedding = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (visual_hash, duplicate_of_id, reid_embedding, instance_id),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE card_instances
+                    SET visual_hash = ?, is_duplicate_of = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (visual_hash, duplicate_of_id, instance_id),
+                )
 
     def update_instance_fusion(self, instance_id: int, fused_path: str) -> None:
         with self._connect() as conn:

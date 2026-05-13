@@ -213,6 +213,18 @@ def run(ctx: RunContext, novelty_out: NoveltyOutput) -> TrackOutput:
     for track in tracks:
         candidate_ids = [c.detection_id for c in track.candidates]
         first_frame = -1 if not track.candidates or track.candidates[0].frame_index is None else int(track.candidates[0].frame_index)
+        
+        # Collect intra-track Hamming distances for adaptive thresholding
+        from card_capture.deduplicator import VisualDeduplicator
+        dedup = VisualDeduplicator()
+        hashes = [c.visual_hash for c in track.candidates if hasattr(c, "visual_hash") and c.visual_hash]
+        # In v4, ScoredCandidate might not have visual_hash yet if it's computed later?
+        # Actually _build_candidates in pipeline.py computes phash.
+        
+        for i in range(1, len(hashes)):
+            dist = dedup.hamming_distance(hashes[i-1], hashes[i])
+            ctx.observed_intra_track_distances.append(float(dist))
+
         tracks_data.append({
             "instance_id": track.instance_id,
             "track_id": getattr(track, "track_id", 0),

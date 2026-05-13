@@ -87,6 +87,7 @@ def run(ctx: RunContext, prepared_track: Dict[str, Any]) -> FuseOutput:
             "best_canonical_detection_id": prepared_track["best_canonical_detection_id"],
             "duplicate_track_index": prepared_track.get("duplicate_track_index"),
             "first_frame_index": prepared_track.get("first_frame_index", -1),
+            "reid_embedding": prepared_track.get("reid_embedding"),
         }
     )
 
@@ -113,5 +114,6 @@ def _return_single_frame(ctx: RunContext, instance_id: str, best_path: str, prep
             "best_canonical_detection_id": prepared_track.get("best_canonical_detection_id"),
             "duplicate_track_index": prepared_track.get("duplicate_track_index"),
             "first_frame_index": prepared_track.get("first_frame_index", -1),
+            "reid_embedding": prepared_track.get("reid_embedding"),
         }
     )

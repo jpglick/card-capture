@@ -42,6 +42,8 @@ def run(ctx: RunContext, score_out: ScoreOutput) -> ResolveOutput:
     import numpy as np
     from card_capture.deduplicator import VisualDeduplicator
     from card_capture.identity.embedding_distance import embedding_same_card_score
+    from card_capture.calibration.per_video_adaptive import AdaptiveThresholdComputer
+    from card_capture.analysis.hard_case_capture import is_hard_case, capture_hard_case
     from card_capture.pipeline import (
         _compute_quality_weighted_score,
         _side_textiness_score,
@@ -53,6 +55,7 @@ def run(ctx: RunContext, score_out: ScoreOutput) -> ResolveOutput:
     
     # We need a deduplicator for Hamming distances (fallback)
     deduplicator = VisualDeduplicator()
+    adaptive_computer = AdaptiveThresholdComputer()
 
     # Sort tracks into sessions
     by_session: Dict[int, List[Dict[str, Any]]] = {}
@@ -65,6 +68,11 @@ def run(ctx: RunContext, score_out: ScoreOutput) -> ResolveOutput:
     for sid, session_tracks in by_session.items():
         if not session_tracks:
             continue
+
+        # Data for hard-case capture
+        session_hamming_values = []
+        session_confidences = []
+        session_purity_scores = []
 
         # Compute side_score and appearance_vector for each track if missing
         # (Usually they are derived from the best canonical image)
@@ -95,6 +103,12 @@ def run(ctx: RunContext, score_out: ScoreOutput) -> ResolveOutput:
         primary = session_tracks[0]
         primary["angle"] = "Front"
         primary["duplicate_track_index"] = None
+        
+        # Collect confidence and purity for hard-case detection
+        session_confidences.append(primary.get("quality_score", 0.0))
+        if primary.get("frame_entries"):
+            purity = primary["frame_entries"][0].get("triage_metrics", {}).get("border_purity", 1.0)
+            session_purity_scores.append(purity)
 
         # Compare others to the primary
         for other in session_tracks[1:]:
@@ -114,7 +128,14 @@ def run(ctx: RunContext, score_out: ScoreOutput) -> ResolveOutput:
                 phash2 = other.get("frame_entries", [{}])[0].get("visual_hash")
                 if phash1 and phash2:
                     ham = deduplicator.hamming_distance(phash1, phash2)
-                    same_card = ham <= 15 # _SAME_CARD_HAMMING_MAX
+                    session_hamming_values.append(float(ham))
+                    
+                    # Use ADAPTIVE threshold if available
+                    adaptive_ham = adaptive_computer.compute_hamming_threshold(
+                        ctx.observed_intra_track_distances,
+                        global_threshold=15.0 # _SAME_CARD_HAMMING_MAX
+                    )
+                    same_card = ham <= adaptive_ham
 
             if same_card:
                 # Same card → it's a "Back" (or another Front if textiness too high, but usually Back)
@@ -122,13 +143,27 @@ def run(ctx: RunContext, score_out: ScoreOutput) -> ResolveOutput:
                 other["angle"] = "Back"
             else:
                 # Different card? In the same session? 
-                # Legacy code says: "likely a different side of same card" 
-                # but let's just stick to the angle logic.
                 other["duplicate_track_index"] = None
                 other["angle"] = "Front"
+                
+                # Collect confidence and purity for the new "Front" candidate
+                session_confidences.append(other.get("quality_score", 0.0))
+                if other.get("frame_entries"):
+                    purity = other["frame_entries"][0].get("triage_metrics", {}).get("border_purity", 1.0)
+                    session_purity_scores.append(purity)
 
-    # Capture hard cases for active learning (Ported from legacy _capture_hard_cases_from_sessions)
-    _capture_hard_cases(active_tracks, score_out.video_id, Path(ctx.output_dir))
+        # Active Learning: Check if this session is a "hard case"
+        session_data = {
+            "video_id": score_out.video_id,
+            "session_id": str(sid),
+            "front_tracks": session_tracks,
+            "hamming_values": session_hamming_values,
+            "confidence_scores": session_confidences,
+            "border_purity_scores": session_purity_scores,
+        }
+        reason = is_hard_case(session_data)
+        if reason:
+            capture_hard_case(session_data, reason, output_file=str(Path(ctx.output_dir) / "hard_cases.jsonl"))
 
     return ResolveOutput(
         prepared_tracks=active_tracks,

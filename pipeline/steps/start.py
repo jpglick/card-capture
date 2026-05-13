@@ -54,6 +54,10 @@ class RunContext:
     corner_refinement: bool = False
     telemetry_scope: str = "canonical"
 
+    # Per-video adaptive distributions (collected during run)
+    observed_novelty_scores: list[float] = field(default_factory=list)
+    observed_intra_track_distances: list[float] = field(default_factory=list)
+
     # Filled in after storage registration
     video_id: Optional[int] = None
 
