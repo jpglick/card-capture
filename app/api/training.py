@@ -1,19 +1,15 @@
-"""FastAPI router for ``/api/v1/training/*`` endpoints.
+"""Training routes — `/api/v1/training`.
 
-Mount this router in :mod:`app.main` under the prefix ``/api/v1/training``.
-All handlers obtain the :class:`~app.services.training_service.TrainingService`
+Handlers obtain the :class:`~app.services.training_service.TrainingService`
 instance from ``request.app.state.training_service``.
 """
+from __future__ import annotations
+
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
 
 from app.services.training_service import TrainingService
 
 router = APIRouter()
-
-
-class RetrainRequest(BaseModel):
-    dry_run: bool = False
 
 
 def _svc(request: Request) -> TrainingService:
@@ -27,9 +23,9 @@ def list_datasets(request: Request):
 
 
 @router.post("/retrain/{model_name}", status_code=202)
-def retrain(model_name: str, body: RetrainRequest, request: Request):
+def retrain(model_name: str, request: Request):
     """Enqueue a retrain job and return ``{"job_id": ..., "status": "queued"}``."""
-    job = _svc(request).start_retrain(model_name, dry_run=body.dry_run)
+    job = _svc(request).start_retrain(model_name)
     return {"job_id": job.job_id, "status": job.status}
 
 
