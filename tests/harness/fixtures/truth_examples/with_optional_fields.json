@@ -1,0 +1,16 @@
+{
+  "video_id": "v2",
+  "schema_version": 1,
+  "expected_cards": [
+    {
+      "card_id": "c1",
+      "front_present": true,
+      "back_present": true,
+      "physical_card_key": "k1",
+      "is_foil": true,
+      "approx_front_window_ms": [1000, 2500],
+      "approx_back_window_ms": [3000, 4200],
+      "notes": "occluded by hand at 1.7s"
+    }
+  ]
+}
