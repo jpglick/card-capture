@@ -34,6 +34,7 @@ class Storage:
                 CREATE TABLE IF NOT EXISTS card_instances (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     video_id INTEGER NOT NULL REFERENCES videos(id),
+                    run_id TEXT,
                     track_id TEXT NOT NULL,
                     session_id TEXT,
                     visual_hash TEXT,
@@ -124,18 +125,25 @@ class Storage:
                 CREATE TABLE IF NOT EXISTS pipeline_events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     video_id INTEGER NOT NULL REFERENCES videos(id),
+                    run_id TEXT,
+                    stage_id TEXT,
                     frame_index INTEGER NOT NULL,
                     timestamp_ms INTEGER NOT NULL,
                     event_type TEXT NOT NULL,
                     data_json TEXT,
+                    artifact_ref TEXT,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
                 """
             )
             self._ensure_column(conn, "card_instances", "angle", "TEXT")
             self._ensure_column(conn, "card_instances", "session_id", "TEXT")
+            self._ensure_column(conn, "card_instances", "run_id", "TEXT")
             self._ensure_column(conn, "card_instances", "fused_image_path", "TEXT")
             self._ensure_column(conn, "card_instances", "reid_embedding", "BLOB")
+            self._ensure_column(conn, "pipeline_events", "run_id", "TEXT")
+            self._ensure_column(conn, "pipeline_events", "stage_id", "TEXT")
+            self._ensure_column(conn, "pipeline_events", "artifact_ref", "TEXT")
             self._ensure_column(conn, "card_views", "glare_x", "REAL")
             self._ensure_column(conn, "card_views", "glare_y", "REAL")
             self._ensure_column(conn, "card_views", "sharpness", "REAL")
@@ -202,15 +210,23 @@ class Storage:
             )
 
     def add_pipeline_event(
-        self, video_id: int, frame_index: int, timestamp_ms: int, event_type: str, data: Optional[Dict[str, Any]] = None
+        self, 
+        video_id: int, 
+        frame_index: int, 
+        timestamp_ms: int, 
+        event_type: str, 
+        data: Optional[Dict[str, Any]] = None,
+        run_id: Optional[str] = None,
+        stage_id: Optional[str] = None,
+        artifact_ref: Optional[str] = None
     ) -> None:
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO pipeline_events (video_id, frame_index, timestamp_ms, event_type, data_json)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO pipeline_events (video_id, run_id, stage_id, frame_index, timestamp_ms, event_type, data_json, artifact_ref)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (video_id, frame_index, timestamp_ms, event_type, json.dumps(data) if data else None),
+                (video_id, run_id, stage_id, frame_index, timestamp_ms, event_type, json.dumps(data) if data else None, artifact_ref),
             )
 
     def add_card_instance(
@@ -220,14 +236,15 @@ class Storage:
         angle: Optional[str] = None,
         session_id: Optional[str] = None,
         reid_embedding: Optional[bytes] = None,
+        run_id: Optional[str] = None,
     ) -> int:
         with self._connect() as conn:
             cursor = conn.execute(
                 """
-                INSERT INTO card_instances (video_id, track_id, angle, session_id, reid_embedding)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO card_instances (video_id, run_id, track_id, angle, session_id, reid_embedding)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (video_id, track_id, angle, session_id, reid_embedding),
+                (video_id, run_id, track_id, angle, session_id, reid_embedding),
             )
             return int(cursor.lastrowid)
 

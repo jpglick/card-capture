@@ -44,6 +44,8 @@ def run(ctx: RunContext, score_out: ScoreOutput) -> ResolveOutput:
     from card_capture.identity.embedding_distance import embedding_same_card_score
     from card_capture.calibration.per_video_adaptive import AdaptiveThresholdComputer
     from card_capture.analysis.hard_case_capture import is_hard_case, capture_hard_case
+    from card_capture.ml.inference.fb_predict import FBPredictor
+    from card_capture.ml.registry import get_latest
     from card_capture.pipeline import (
         _compute_quality_weighted_score,
         _side_textiness_score,
@@ -56,6 +58,19 @@ def run(ctx: RunContext, score_out: ScoreOutput) -> ResolveOutput:
     # We need a deduplicator for Hamming distances (fallback)
     deduplicator = VisualDeduplicator()
     adaptive_computer = AdaptiveThresholdComputer()
+    
+    # Initialize F/B predictor if enabled
+    fb_predictor = None
+    if ctx.use_fb_classifier:
+        try:
+            latest_fb = get_latest(db_path=Path(ctx.db_path), model_name="fb_classifier")
+            if latest_fb:
+                fb_predictor = FBPredictor(checkpoint_path=latest_fb.checkpoint_path)
+            else:
+                # Fallback to pretrained ResNet head
+                fb_predictor = FBPredictor()
+        except Exception as e:
+            print(f"Failed to initialize F/B predictor: {e}")
 
     # Sort tracks into sessions
     by_session: Dict[int, List[Dict[str, Any]]] = {}
@@ -89,6 +104,24 @@ def run(ctx: RunContext, score_out: ScoreOutput) -> ResolveOutput:
 
         # Find max candidates in session for normalized_length computation
         max_length = max(len(t["frame_entries"]) for t in session_tracks)
+
+        # NEW: Use F/B classifier to refine side assignment
+        if fb_predictor:
+            for t in session_tracks:
+                try:
+                    # Use the best canonical image for classification
+                    side, conf = fb_predictor.predict(t["best_canonical_image_path"])
+                    # If high confidence, override textiness-based side_score
+                    if conf > 0.8:
+                        # Normalize side_score: "front" -> 1.0, "back" -> 0.0
+                        # But we keep it as a float for sorting. 
+                        # We'll just shift it high or low.
+                        if side == "front":
+                            t["side_score"] = 0.8 + (conf * 0.2)
+                        else:
+                            t["side_score"] = 0.2 - (conf * 0.2)
+                except Exception as e:
+                    print(f"F/B classification failed for {t['instance_id'][:8]}: {e}")
 
         # Primary sort: by side_score (descending) - high textiness first.
         # Secondary tie-breaker: quality-weighted composite score (descending)

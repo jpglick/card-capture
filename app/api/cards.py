@@ -14,7 +14,7 @@ def _svc(request: Request):
     return request.app.state.card_service
 
 
-@router.get("", response_model=list[Card])
+@router.get("", response_model=dict[str, Any])
 def list_cards(
     request: Request,
     run_id: Optional[str] = None,
@@ -28,7 +28,12 @@ def list_cards(
     page: int = 1,
     page_size: int = 50,
 ):
-    return _svc(request).list_cards(run_id=run_id, video_id=video_id)
+    return _svc(request).list_cards(
+        run_id=run_id, 
+        video_id=video_id,
+        page=page,
+        page_size=page_size
+    )
 
 
 @router.get("/{card_id}", response_model=CardDetail)

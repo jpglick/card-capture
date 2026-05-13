@@ -623,7 +623,7 @@ def test_pipeline_processing_options_has_tracker_backend():
     from card_capture.pipeline import ProcessingOptions
     from pathlib import Path
     opts = ProcessingOptions(output_dir=Path("/tmp"))
-    assert opts.tracker_backend == "botsort"
+    assert opts.tracker_backend == "bytetrack"
     assert opts.centroid_jump_ratio == 0.30
     assert opts.centroid_jump_frames == 3
 

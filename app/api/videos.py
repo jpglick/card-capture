@@ -24,7 +24,8 @@ def list_videos(request: Request):
 
 @router.post("", response_model=Video, status_code=201)
 def create_video(payload: VideoCreate, request: Request):
-    video_id = _svc(request).add_video(payload.source_path)
+    path = payload.file_path or payload.filename
+    video_id = _svc(request).add_video(path)
     return _svc(request).get_video(video_id)
 
 

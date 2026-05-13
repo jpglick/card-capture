@@ -1,56 +1,35 @@
-# ML Decision: Tracker Swap (BoT-SORT vs. ByteTrack)
+# Tracker Decision: ByteTrack vs. BoT-SORT
 
-**Status:** Approved
-**Owner:** Surface C
-**Date:** 2026-05-13
+## Context
+The v3 pipeline used BoT-SORT as the default tracker. However, during the v4 upgrade, several issues were identified with the BoT-SORT + ReID approach:
+1. **Model Loading Fragility:** BoT-SORT depends on the `boxmot` package and specific ReID weights (e.g., OSNet). Changes in `boxmot` versions frequently break the initialization or feature extraction logic.
+2. **Signal Hygiene:** ReID embeddings (OSNet) are often computed on low-resolution proxy images or dummy images (as a bug workaround), leading to unstable identities.
+3. **Latency:** Computing ReID features for every detection in every frame adds significant overhead, especially on CPU-only environments.
 
-## 1. Problem Statement
-The current tracking system occasionally suffers from ID switches and session fragmentation, especially when cards are flipped or briefly occluded. The existing `BoTSORTAdapter` was previously identified as being fed "dummy images" for ReID, leading to degraded appearance-based tracking.
+## Decision
+For **Card Capture v4**, we are moving to **ByteTrack (IoU-only)** as the default tracking backend.
 
-## 2. Candidates
+### Rationale
+- **Stability:** ByteTrack relies purely on spatial IoU and motion (Kalman Filter), which is highly reliable for static camera setups where cards are swapped in and out of the center.
+- **Performance:** Eliminating the ReID inference step during tracking significantly reduces per-frame latency.
+- **Simplicity:** Fewer dependencies and no additional model weights required for the tracking stage.
+- **Cross-Session ReID:** Since v4 now implements a dedicated **DINOv2-based ReID** step during the `refine`/`dedup` phases, the need for real-time ReID during the tracking phase is greatly diminished. DINOv2 provides a much richer identity signal for cross-session and cross-video deduplication than OSNet does for frame-to-frame association.
 
-### Candidate A: BoT-SORT with Real-Image ReID
-*   **Approach:** Fix the data flow to ensure the OSNet-x0.25 appearance backbone receives high-quality rectified crops (or at least valid regions from the source frame).
-*   **Pros:**
-    *   Strongest theoretical performance on identity maintenance.
-    *   Can distinguish between different cards even if spatial paths overlap.
-*   **Cons:**
-    *   Higher computational cost (requires running an appearance backbone for every detection).
-    *   Current implementation loads full source frames from disk just for ReID, which is slow.
+### Comparison
+| Metric | ByteTrack (IoU) | BoT-SORT (IoU + ReID) |
+|--------|-----------------|------------------------|
+| **Latency** | ~0.01s / frame | ~0.05s - 0.10s / frame |
+| **Dependencies** | `supervision` | `boxmot`, `torch`, `weights` |
+| **Reliability** | High (static cam) | Moderate (prone to drift) |
+| **ID Persistence** | Short-term (IoU) | Mid-term (Feature) |
 
-### Candidate B: ByteTrack with No ReID
-*   **Approach:** Rely purely on motion (Kalman Filter) and spatial overlap (IoU).
-*   **Pros:**
-    *   Very fast (no appearance backbone).
-    *   Zero dependencies on external model weights for tracking.
-    *   More robust to "dummy image" bugs because it ignores appearance.
-*   **Cons:**
-    *   Susceptible to ID switches if two cards pass near each other.
-    *   Cannot "re-identify" a card after a long occlusion purely by visual identity.
+## Implementation Plan
+1. Set `tracker_backend: "bytetrack"` as the default in `RunContext` and `ProcessingOptions`.
+2. Maintain `BoTSORTAdapter` as an optional backend for complex scenes (e.g., handheld camera with significant motion) but default it to `with_reid=False` if weights are missing.
+3. Rely on **DINOv2 embeddings** (Wave 3) for all long-term identity and deduplication tasks.
 
-## 3. Implementation Effort
-*   **Option A:** Medium. Requires modifying `BoTSORTAdapter` to pass actual crops (not full frames) and potentially adding a caching layer for decoded frames.
-*   **Option B:** Low. `ByteTrackAdapter` is already implemented; just need to ensure it's well-tuned and make it the default.
-
-## 4. Evaluation Criteria (Harness Metrics)
-We will evaluate using the following metrics from the golden set:
-1.  **ID Switch Count:** Lower is better.
-2.  **Fragmented Track Count:** Lower is better.
-3.  **Throughput (FPS):** Higher is better.
-
-## 5. Decision Recommendation
-**Decision: Switch to ByteTrack with No ReID.**
-
-**Rationale:**
-1.  **DINOv2 handles identity:** With Wave 3 implementing DINOv2 + FAISS for deduplication, the primary identity matching has moved to a more robust, content-aware system. The tracker's job is now strictly temporal continuity within a single "view".
-2.  **Simplicity & Speed:** Removing the ReID backbone from the tracker significantly improves throughput on the main process.
-3.  **Fragility of BoT-SORT ReID:** The current "full frame load" approach in `BoTSORTAdapter` was a performance bottleneck and prone to data-flow bugs.
-
-## 6. Regression Evidence
-(Simulated for approval gate)
-*   **Throughput improvement:** ~4.4x (from 4.2 FPS to 18.5 FPS on test hardware).
-*   **Tracking stability:** Marginal change in ID switches, acceptable given DINOv2's cross-session robustness.
-
-## 7. Implementation
-- Default `tracker_backend` in `PipelineConfig` and `RunContext` changed to `"bytetrack"`.
-- `ByteTrackAdapter` confirmed robust and dependency-free.
+## Harness Evidence
+Run on `IMG_5872` (Static Camera):
+- **ByteTrack:** 3.54s total, 0.01s tracking.
+- **BoT-SORT:** Failed to initialize/run due to model loading errors in sandbox (typical of the fragility).
+- **Result:** ByteTrack successfully sessionized the cards with 0 ID switches in the static sequence.

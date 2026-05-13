@@ -52,6 +52,8 @@ class RunContext:
     enable_foil_aware_fusion: bool = True
     fusion_target_frames: int = 4
     corner_refinement: bool = False
+    use_fb_classifier: bool = True
+    use_dino_dedup: bool = True
     telemetry_scope: str = "canonical"
 
     # Per-video adaptive distributions (collected during run)

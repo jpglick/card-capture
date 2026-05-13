@@ -80,7 +80,17 @@ def image_quality(
     matched = [p for p in pairs if p.gt_card_id is not None and p.detection_id is not None]
     for pair in matched:
         matched_count += 1
-        ref_path = ref_dir / f"{pair.gt_card_id}.png"
+        
+        # Try side-aware reference frame first
+        ref_path = None
+        if pair.expected_side:
+            side_name = pair.expected_side.lower()
+            ref_path = ref_dir / f"{pair.gt_card_id}_{side_name}.png"
+            
+        if ref_path is None or not ref_path.exists():
+            # Fallback to generic card_id.png
+            ref_path = ref_dir / f"{pair.gt_card_id}.png"
+            
         if not ref_path.exists():
             continue
 

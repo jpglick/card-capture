@@ -16,7 +16,7 @@ class StoreOutput:
     """Outputs of the store step."""
     final_cards: List[Dict[str, Any]]
 
-def run(ctx: RunContext, groups: List[Dict[str, Any]], fused: List[Dict[str, Any]], prepared_tracks: List[Dict[str, Any]]) -> StoreOutput:
+def run(ctx: RunContext, groups: List[Dict[str, Any]], fused: List[Dict[str, Any]], prepared_tracks: List[Dict[str, Any]], run_id: Optional[str] = None) -> StoreOutput:
     """Persist results to the SQLite database.
 
     Args:
@@ -65,6 +65,7 @@ def run(ctx: RunContext, groups: List[Dict[str, Any]], fused: List[Dict[str, Any
             angle=f["angle"],
             session_id=str(f["session_id"]),
             reid_embedding=embedding_bytes,
+            run_id=run_id,
         )
         id_map[iid] = row_id
         
@@ -111,12 +112,22 @@ def run(ctx: RunContext, groups: List[Dict[str, Any]], fused: List[Dict[str, Any
 
     # 3. Store deduplication links
     for group in groups:
-...
         canonical_iid = group["canonical_instance_id"]
         canonical_row_id = id_map[canonical_iid]
         
+        # Cross-video link (from a previous video)
+        cross_video_parent = group.get("cross_video_parent_id")
+        if cross_video_parent:
+            storage.update_instance_deduplication(
+                canonical_row_id, 
+                fused_map[canonical_iid]["primary_hash"], 
+                cross_video_parent
+            )
+
+        # Intra-run links (duplicates within this video)
         for duplicate_iid in group["duplicate_instance_ids"]:
             duplicate_row_id = id_map[duplicate_iid]
+            # Link to the canonical in THIS run
             storage.update_instance_deduplication(
                 duplicate_row_id, 
                 fused_map[duplicate_iid]["primary_hash"], 

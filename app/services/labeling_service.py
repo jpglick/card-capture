@@ -70,20 +70,29 @@ class LabelingService:
             return cur.lastrowid
 
     def next_fb_candidate(self) -> Optional[dict[str, Any]]:
-        """Find the next high-confidence unlabeled detection for the F/B trainer."""
+        """Find the next high-confidence unlabeled detection for the F/B trainer.
+        
+        Returns:
+            dict: The candidate data, or None if no unlabeled candidates remain.
+        """
         with sqlite3.connect(str(self.db_path)) as conn:
             conn.row_factory = sqlite3.Row
-            # Join card_views with fb_labels to find unlabeled instances
+            # Join card_views with fb_labels to find unlabeled instances.
+            # We join card_views -> card_instances -> videos to get run_id/video_id.
             row = conn.execute(
                 """
                 SELECT
-                    cv.card_instance_id AS instance_id,
+                    ci.track_id AS instance_id,
                     cv.frame_index,
-                    cv.image_path,
-                    cv.confidence
+                    cv.rectified_path AS canonical_url,
+                    v.source_path AS video_id,
+                    ci.session_id AS run_id
                 FROM card_views cv
-                LEFT JOIN fb_labels fl ON fl.instance_id = cv.card_instance_id
-                WHERE fl.label_id IS NULL
+                JOIN card_instances ci ON ci.id = cv.card_instance_id
+                JOIN videos v ON v.id = ci.video_id
+                LEFT JOIN fb_labels fl ON fl.instance_id = ci.track_id
+                WHERE cv.is_canonical = 1 
+                  AND fl.label_id IS NULL
                 ORDER BY cv.confidence DESC
                 LIMIT 1
                 """
@@ -92,12 +101,14 @@ class LabelingService:
         if not row:
             return None
             
-        return {
-            "instance_id": row["instance_id"],
-            "frame_index": row["frame_index"],
-            "image_path": row["image_path"],
-            "confidence": float(row["confidence"]),
-        }
+        # Get progress stats
+        with sqlite3.connect(str(self.db_path)) as conn:
+            labels_collected = conn.execute("SELECT COUNT(*) FROM fb_labels").fetchone()[0]
+
+        res = dict(row)
+        res["labels_collected"] = labels_collected
+        res["labels_target"] = 500  # Default target
+        return res
 
     def list_clusters(self, status: Optional[str] = None) -> list[dict[str, Any]]:
         """List dedup clusters, optionally filtered by status."""

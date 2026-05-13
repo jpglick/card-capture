@@ -53,6 +53,7 @@ class MatchPair:
     gt_card_id: Optional[str]
     detection_id: Optional[int]  # card_instances.id
     side_match: bool
+    expected_side: Optional[str] = None
 
 
 @dataclass
@@ -222,11 +223,17 @@ def _match(detections: list[_Detection], slots: list[_Slot]) -> list[MatchPair]:
                     gt_card_id=slot.gt_card_id,
                     detection_id=best.instance_id,
                     side_match=side_match,
+                    expected_side=slot.expected_side,
                 )
             )
         else:
             pairs.append(
-                MatchPair(gt_card_id=slot.gt_card_id, detection_id=None, side_match=False)
+                MatchPair(
+                    gt_card_id=slot.gt_card_id,
+                    detection_id=None,
+                    side_match=False,
+                    expected_side=slot.expected_side,
+                )
             )
 
     # Phase 2 — windowless ordering fallback
@@ -239,11 +246,17 @@ def _match(detections: list[_Detection], slots: list[_Slot]) -> list[MatchPair]:
                     gt_card_id=slot.gt_card_id,
                     detection_id=det.instance_id,
                     side_match=side_match,
+                    expected_side=slot.expected_side,
                 )
             )
         else:
             pairs.append(
-                MatchPair(gt_card_id=slot.gt_card_id, detection_id=None, side_match=False)
+                MatchPair(
+                    gt_card_id=slot.gt_card_id,
+                    detection_id=None,
+                    side_match=False,
+                    expected_side=slot.expected_side,
+                )
             )
 
     # Phase 3 — remaining detections are phantoms

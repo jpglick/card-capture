@@ -12,46 +12,70 @@ class RunService:
         self.db_path = db_path
 
     def list_runs(self, video_id: Optional[int] = None) -> List[dict[str, Any]]:
-        """Return a list of pipeline runs, optionally filtered by video."""
+        """Return a list of pipeline runs, newest first."""
         with sqlite3.connect(str(self.db_path)) as conn:
             conn.row_factory = sqlite3.Row
             
-            query = "SELECT DISTINCT run_id FROM pipeline_events"
+            # Select distinct runs. We use COALESCE to handle legacy null run_ids.
+            query = """
+                SELECT 
+                    COALESCE(run_id, 'legacy-' || video_id) as run_id,
+                    video_id,
+                    MIN(created_at) as created_at
+                FROM pipeline_events
+                GROUP BY 1
+                ORDER BY created_at DESC
+            """
             params = []
             if video_id:
-                # We can try to find run_ids that have events associated with this video
-                # In v4, we can assume artifacts store video_id
-                pass
+                query = """
+                    SELECT 
+                        COALESCE(run_id, 'legacy-' || video_id) as run_id,
+                        video_id,
+                        MIN(created_at) as created_at
+                    FROM pipeline_events
+                    WHERE video_id = ?
+                    GROUP BY 1
+                    ORDER BY created_at DESC
+                """
+                params.append(video_id)
                 
             rows = conn.execute(query, params).fetchall()
             
             runs = []
             for r in rows:
                 run_id = r["run_id"]
+                vid = r["video_id"]
                 
-                # Get summary info from events
-                summary = conn.execute(
-                    "SELECT timestamp as created_at FROM pipeline_events WHERE run_id = ? AND event_name = 'run_started'",
-                    (run_id,)
-                ).fetchone()
-                
+                # Get latest status for this run
                 status_row = conn.execute(
-                    "SELECT event_name FROM pipeline_events WHERE run_id = ? AND event_name IN ('run_completed', 'run_failed') ORDER BY timestamp DESC LIMIT 1",
-                    (run_id,)
+                    """
+                    SELECT event_type 
+                    FROM pipeline_events 
+                    WHERE (run_id = ? OR (run_id IS NULL AND 'legacy-' || video_id = ?))
+                      AND event_type IN ('run_completed', 'run_failed') 
+                    ORDER BY created_at DESC LIMIT 1
+                    """,
+                    (run_id, run_id)
                 ).fetchone()
                 
                 # Count cards extracted for this run
-                # (This is tricky since card_instances doesn't have run_id yet)
-                # For now, let's just return 0 or query by video_id if available
-                card_count = 0
+                card_count = conn.execute(
+                    "SELECT COUNT(*) FROM card_instances WHERE run_id = ? OR (run_id IS NULL AND 'legacy-' || video_id = ?)",
+                    (run_id, run_id)
+                ).fetchone()[0]
+                
+                # Get video filename
+                video_row = conn.execute("SELECT source_path FROM videos WHERE id = ?", (vid,)).fetchone()
+                video_id_str = Path(video_row["source_path"]).stem if video_row else str(vid)
                 
                 runs.append({
                     "run_id": run_id,
-                    "video_id": "unknown", # To be filled if possible
-                    "status": status_row["event_name"].replace("run_", "") if status_row else "running",
+                    "video_id": video_id_str,
+                    "status": status_row["event_type"].replace("run_", "") if status_row else "running",
                     "cards_extracted": card_count,
-                    "elapsed_ms": 0,
-                    "created_at": summary["created_at"] if summary else "unknown",
+                    "elapsed_ms": 0, # To be computed if start/end events exist
+                    "created_at": r["created_at"],
                 })
             return runs
 
@@ -60,27 +84,37 @@ class RunService:
         with sqlite3.connect(str(self.db_path)) as conn:
             conn.row_factory = sqlite3.Row
             events = conn.execute(
-                "SELECT * FROM pipeline_events WHERE run_id = ? ORDER BY timestamp ASC",
-                (run_id,)
+                """
+                SELECT * FROM pipeline_events 
+                WHERE (run_id = ? OR (run_id IS NULL AND 'legacy-' || video_id = ?))
+                ORDER BY created_at ASC
+                """,
+                (run_id, run_id)
             ).fetchall()
             
             if not events:
                 return None
-                
+            
             # Get latest status
             status_row = conn.execute(
-                "SELECT event_name FROM pipeline_events WHERE run_id = ? AND event_name IN ('run_completed', 'run_failed') ORDER BY timestamp DESC LIMIT 1",
-                (run_id,)
+                """
+                SELECT event_type 
+                FROM pipeline_events 
+                WHERE (run_id = ? OR (run_id IS NULL AND 'legacy-' || video_id = ?))
+                  AND event_type IN ('run_completed', 'run_failed') 
+                ORDER BY created_at DESC LIMIT 1
+                """,
+                (run_id, run_id)
             ).fetchone()
             
-            created_at = "unknown"
-            if events:
-                created_at = events[0]["timestamp"]
+            vid = events[0]["video_id"]
+            video_row = conn.execute("SELECT source_path FROM videos WHERE id = ?", (vid,)).fetchone()
+            video_id_str = Path(video_row["source_path"]).stem if video_row else str(vid)
 
             return {
                 "run_id": run_id,
-                "video_id": "unknown",
-                "status": status_row["event_name"].replace("run_", "") if status_row else "running",
-                "created_at": created_at,
+                "video_id": video_id_str,
+                "status": status_row["event_type"].replace("run_", "") if status_row else "running",
+                "created_at": events[0]["created_at"],
                 "events": [dict(e) for e in events],
             }

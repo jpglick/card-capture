@@ -4,6 +4,7 @@ Mount this router in :mod:`app.main` under the prefix ``/api/v1/training``.
 All handlers obtain the :class:`~app.services.training_service.TrainingService`
 instance from ``request.app.state.training_service``.
 """
+from typing import Optional
 from fastapi import APIRouter, HTTPException, Request
 from app.schemas.v1 import DatasetSummary, RetrainRequest, TrainingJobSummary, TrainingJobDetail
 from app.services.training_service import TrainingService
@@ -24,7 +25,11 @@ def list_datasets(request: Request):
 @router.post("/retrain/{model_name}", status_code=202, response_model=TrainingJobSummary)
 def retrain(model_name: str, body: RetrainRequest, request: Request):
     """Enqueue a retrain job."""
-    job = _svc(request).start_retrain(model_name, epochs=body.epochs, learning_rate=body.learning_rate)
+    try:
+        job = _svc(request).start_retrain(model_name, epochs=body.epochs, learning_rate=body.learning_rate)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    
     return {
         "job_id": job.job_id,
         "model_name": job.model_name,

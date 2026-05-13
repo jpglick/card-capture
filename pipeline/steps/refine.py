@@ -61,6 +61,7 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
     from card_capture.selector import ScoredCandidate
     from card_capture.models import QualityScore
     from card_capture.storage import Storage
+    from card_capture.ml.models.dino_embedder import DinoEmbedder
 
     video_path = _Path(ctx.video_path)
     crops_dir = _Path(ctx.crops_dir)
@@ -84,7 +85,6 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
     decoded_images: Dict[int, np.ndarray] = {}
     if canonical_indices:
         sampler_telemetry = track_out.sampler_telemetry
-        valley_split_frames = set(sampler_telemetry.get("last_valley_splits") or [])
         capture = _open_capture(video_path)
         try:
             curr_idx = 0
@@ -115,6 +115,13 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
     deduplicator = VisualDeduplicator()
     scorer = QualityScorer()
     storage = Storage(_Path(ctx.db_path))
+    
+    # Set up DINOv2 embedder (ONCE per video run)
+    try:
+        embedder = DinoEmbedder(variant="vits14")
+    except Exception as e:
+        print(f"Failed to load DINOv2 embedder: {e}")
+        embedder = None
 
     # Load background model if available
     bg_model = None
@@ -216,7 +223,6 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
 
         # Build ScoredCandidate-like objects for _select_canonical_entries
         from card_capture.selector import ScoredCandidate as _SC
-        from card_capture.models import QualityScore as _QS
 
         def _to_scored(entry):
             c = entry["candidate"]
@@ -296,6 +302,15 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
         if best_image_path is None and frame_entry_paths:
             best_image_path = frame_entry_paths[0]["image_path"]
 
+        # Compute ReID embedding for the best canonical image (v4 Wave 3)
+        reid_embedding = None
+        if embedder and best_image_path:
+            try:
+                emb_tensor = embedder.embed_image(best_image_path)
+                reid_embedding = emb_tensor.cpu().numpy().tolist()[0]
+            except Exception as e:
+                print(f"Embedding failed for {instance_id}: {e}")
+
         refined_tracks.append({
             "instance_id": instance_id,
             "track_id": track_dict.get("track_id", 0),
@@ -306,7 +321,7 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
             "canonical_detection_ids": list(canonical_detection_ids),
             "best_canonical_detection_id": best_canonical["candidate"].detection_id,
             "best_canonical_image_path": best_image_path or "",
-            "reid_embedding": track_dict.get("reid_embedding"),
+            "reid_embedding": reid_embedding,
         })
 
     t_refine = time.time() - t_refine_start

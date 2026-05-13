@@ -16,5 +16,5 @@ def list_baselines(request: Request):
 
 
 @router.get("/compare", response_model=RegressionCompare)
-def compare(a: str, b: str, request: Request):
+def compare(a: int, b: int, request: Request):
     return _svc(request).compare(a, b)

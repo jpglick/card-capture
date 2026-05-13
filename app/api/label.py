@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 
-from app.schemas.v1 import DedupCluster, LabelFB, LabelTruth
+from app.schemas.v1 import DedupCluster, LabelFB, LabelTruth, LabelFBNext
 
 router = APIRouter()
 
@@ -28,9 +28,12 @@ def put_truth(video_id: str, body: LabelTruth, request: Request):
     _svc(request).put_truth(video_id, body.model_dump())
 
 
-@router.get("/fb/next")
+@router.get("/fb/next", response_model=LabelFBNext)
 def get_next_fb(request: Request):
-    return _svc(request).next_fb_candidate() or {}
+    candidate = _svc(request).next_fb_candidate()
+    if candidate is None:
+        return Response(status_code=204)
+    return candidate
 
 
 @router.post("/fb", status_code=201)

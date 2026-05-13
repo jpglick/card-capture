@@ -48,12 +48,8 @@ class VideoCreate(BaseModel):
     file_path: Optional[str] = None
 
 
-class VideoList(BaseModel):
-    model_config = ConfigDict(
-        json_schema_extra={"example": {"items": []}}
-    )
-
-    items: list[Video]
+# VideoList removed - Contract 2 specifies a JSON array [Video, ...] for GET /api/v1/videos
+# class VideoList(BaseModel): ...
 
 
 # ---------------------------------------------------------------------------

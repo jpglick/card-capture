@@ -61,16 +61,26 @@ class TrainingService:
         ]
 
     def start_retrain(self, model_name: str, epochs: int, learning_rate: float) -> TrainingJob:
-        """Enqueue a retrain job."""
+        """Enqueue a retrain job.
+        
+        Raises:
+            ValueError: If a job for this model is already queued or running.
+        """
         from datetime import datetime
-        job_id = f"retrain-{model_name}-{int(datetime.now().timestamp())}"
-        job = TrainingJob(
-            job_id=job_id,
-            model_name=model_name,
-            status="queued",
-            created_at=datetime.now().isoformat()
-        )
+        
         with self._lock:
+            # Check for existing active jobs for this model
+            for job in self._jobs.values():
+                if job.model_name == model_name and job.status in ("queued", "running"):
+                    raise ValueError(f"A training job for {model_name!r} is already in progress.")
+
+            job_id = f"retrain-{model_name}-{int(datetime.now().timestamp())}"
+            job = TrainingJob(
+                job_id=job_id,
+                model_name=model_name,
+                status="queued",
+                created_at=datetime.now().isoformat()
+            )
             self._jobs[job_id] = job
         
         # In a real app we'd pop this from a queue, but here we just thread it

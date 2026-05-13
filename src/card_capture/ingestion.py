@@ -18,6 +18,28 @@ class FrameReader(Protocol):
 import warnings
 
 
+def probe_video(path: str | Path) -> dict:
+    """Return video metadata (width, height, fps, duration_ms, frame_count)."""
+    cap = _open_capture(path)
+    try:
+        if not cap.isOpened():
+            return {}
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        duration_ms = int((count / fps) * 1000) if fps > 0 else 0
+        return {
+            "width": w,
+            "height": h,
+            "fps": fps,
+            "frame_count": count,
+            "duration_ms": duration_ms
+        }
+    finally:
+        cap.release()
+
+
 def _open_capture(path: "str | Path") -> cv2.VideoCapture:
     """Open a VideoCapture with hardware acceleration.
 

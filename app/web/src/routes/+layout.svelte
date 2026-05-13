@@ -12,6 +12,7 @@
             <li><a href="/runs">Runs</a></li>
             <li><a href="/cards">Cards</a></li>
             <li><a href="/label">Label</a></li>
+            <li><a href="/training">Training</a></li>
             <li><a href="/regression">Regression</a></li>
             <li><a href="/settings">Settings</a></li>
         </ul>

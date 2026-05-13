@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import click
 
@@ -81,13 +81,22 @@ def run(
     b = get_baseline(db_path=db, name=baseline)
     deltas = _compute_deltas(report.metrics, b.metrics)
 
+    # Load current pipeline config
+    config = {}
+    config_path = Path("card_capture_config.json")
+    if config_path.exists():
+        try:
+            config = json.loads(config_path.read_text())
+        except Exception:
+            pass
+
     # Persist the run
     code_sha = _get_git_sha()
     run_id = persist_run(
         db_path=db,
         baseline_name=baseline,
         code_sha=code_sha,
-        config={},  # TODO: load current pipeline config
+        config=config,
         metrics=_to_dict(report.metrics),
         per_video=[_to_dict(pv) for pv in report.per_video],
     )
@@ -150,12 +159,21 @@ def freeze(name: str, db: Path, truth_dir: Path, videos: Optional[str]):
     click.echo(f"Freezing baseline '{name}' using {len(video_ids)} videos...")
     report = run_metrics(db_path=db, truth_dir=truth_dir, videos=video_ids)
 
+    # Load current pipeline config
+    config = {}
+    config_path = Path("card_capture_config.json")
+    if config_path.exists():
+        try:
+            config = json.loads(config_path.read_text())
+        except Exception:
+            pass
+
     code_sha = _get_git_sha()
     freeze_baseline(
         db_path=db,
         name=name,
         code_sha=code_sha,
-        config={},  # TODO: load current pipeline config
+        config=config,
         metrics=_to_dict(report.metrics),
         per_video=[_to_dict(pv) for pv in report.per_video],
     )
@@ -243,3 +261,7 @@ def _to_dict(obj: Any) -> Any:
     if isinstance(obj, dict):
         return {k: _to_dict(v) for k, v in obj.items()}
     return obj
+
+
+if __name__ == "__main__":
+    harness()

@@ -202,7 +202,7 @@ class ProcessingOptions:
     kornia_device: str = "auto"
     triage_keep_percentile: float = 0.05
     rotate_180: bool = True
-    tracker_backend: str = "botsort"
+    tracker_backend: str = "bytetrack"
     centroid_jump_ratio: float = 0.30
     centroid_jump_frames: int = 3
     foil_threshold: float = 50.0
@@ -925,6 +925,7 @@ class VideoProcessor:
                     assert prepared.fused_canonical is not None, \
                         "fused_canonical must be set for best_canonical_detection_id"
                     cv2.imwrite(str(rectified_path), prepared.fused_canonical)
+                    self.storage.update_instance_fusion(instance_id, str(rectified_path))
                 else:
                     cv2.imwrite(str(rectified_path), entry["normalized"])
                 rectified_paths[candidate.detection_id] = str(rectified_path)

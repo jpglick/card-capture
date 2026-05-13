@@ -16,13 +16,13 @@ class VideoService:
         with sqlite3.connect(str(self.db_path)) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
-                "SELECT id, source_path, status, created_at FROM videos ORDER BY created_at DESC"
+                "SELECT id, source_path, status, duration_ms, created_at FROM videos ORDER BY created_at DESC"
             ).fetchall()
             return [
                 {
                     "video_id": str(r["id"]),
                     "filename": Path(r["source_path"]).name,
-                    "duration_ms": 0, # Placeholder
+                    "duration_ms": r["duration_ms"],
                     "status": r["status"],
                     "created_at": r["created_at"]
                 }
@@ -34,7 +34,7 @@ class VideoService:
         with sqlite3.connect(str(self.db_path)) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
-                "SELECT id, source_path, status, created_at FROM videos WHERE id = ?",
+                "SELECT id, source_path, status, duration_ms, created_at FROM videos WHERE id = ?",
                 (video_id,),
             ).fetchone()
             if not row:
@@ -43,7 +43,7 @@ class VideoService:
                 "video_id": str(row["id"]),
                 "filename": Path(row["source_path"]).name,
                 "source_path": row["source_path"],
-                "duration_ms": 0, # Placeholder
+                "duration_ms": row["duration_ms"],
                 "status": row["status"],
                 "created_at": row["created_at"]
             }
@@ -51,16 +51,29 @@ class VideoService:
     def add_video(self, source_path: str) -> int:
         """Register a new video for processing."""
         from card_capture.storage import Storage
+        from card_capture.ingestion import probe_video
+
+        path = Path(source_path)
+        if not path.exists():
+            # If relative, try to find it in data/videos or golden_set/videos
+            candidates = [
+                Path("data/videos") / source_path,
+                Path("golden_set/videos") / source_path,
+            ]
+            for cand in candidates:
+                if cand.exists():
+                    path = cand
+                    break
+
+        metadata = probe_video(path) if path.exists() else {}
+
         storage = Storage(self.db_path)
-        
-        # We don't have metadata yet, so we pass defaults
-        # Real metadata should be probed before calling this if possible
         video_id = storage.add_video(
-            source_path=source_path,
+            source_path=str(path),
             file_hash="pending", # To be computed by pipeline
-            duration_ms=0,
-            width=0,
-            height=0,
+            duration_ms=metadata.get("duration_ms", 0),
+            width=metadata.get("width", 0),
+            height=metadata.get("height", 0),
         )
         return video_id
 

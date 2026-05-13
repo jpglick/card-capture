@@ -23,6 +23,7 @@ def apply_migrations(db_path: Path) -> None:
             if sql_file.name in applied:
                 continue
             sql = sql_file.read_text()
+            all_ok = True
             for statement in _split_statements(sql):
                 try:
                     conn.execute(statement)
@@ -30,18 +31,17 @@ def apply_migrations(db_path: Path) -> None:
                     msg = str(exc)
                     if "duplicate column name" in msg:
                         continue  # idempotency for ADD COLUMN
-                    # ALTER TABLE or CREATE INDEX on a pre-existing table that
-                    # hasn't been created yet in this fresh DB (e.g. pipeline_events
-                    # is managed by storage.py, not this migration). Skip gracefully;
-                    # the column/index will be applied once the table exists via the
-                    # next pipeline_events-aware startup call.
-                    upper = statement.upper()
-                    if "no such table" in msg and (
-                        "ALTER TABLE" in upper or "CREATE INDEX" in upper
-                    ):
+                    
+                    # If a table is missing, we can't apply the migration.
+                    # We skip the statement but mark all_ok = False so we don't
+                    # record this file as applied yet.
+                    if "no such table" in msg:
+                        all_ok = False
                         continue
                     raise
-            conn.execute("INSERT INTO _migrations(filename) VALUES (?)", (sql_file.name,))
+            
+            if all_ok:
+                conn.execute("INSERT INTO _migrations(filename) VALUES (?)", (sql_file.name,))
         conn.commit()
 
 

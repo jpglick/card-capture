@@ -86,7 +86,13 @@ class CardCaptureFlow(FlowSpec):
 
     @step
     def store(self):
-        self.store_out = store.run(self.run_context, self.dedup_out.dedup_groups, self.fused_canonicals)
+        self.store_out = store.run(
+            self.run_context, 
+            self.dedup_out.dedup_groups, 
+            self.fused_canonicals,
+            prepared_tracks=self.resolve_out.prepared_tracks,
+            run_id=self.run_id
+        )
         self.next(self.end)
 
     @step
