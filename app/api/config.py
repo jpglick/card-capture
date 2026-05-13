@@ -4,7 +4,7 @@ Stubs only for playground; preset listing returns the three built-in presets.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from app.schemas.v1 import ConfigPlayground, ConfigPreset
 
@@ -60,6 +60,25 @@ def create_preset(payload: ConfigPreset):
 
 
 @router.get("/playground/{run_id}", response_model=ConfigPlayground)
-def get_playground(run_id: str):
-    # TODO: implement playground
-    raise HTTPException(status_code=501, detail="not implemented yet")
+def get_playground(run_id: str, request: Request):
+    """Load initial playground data for a run."""
+    svc = request.app.state.playground_service
+    artifacts = svc.get_run_artifacts(run_id)
+    ctx = artifacts["run_context"]
+    
+    # Extract interesting thresholds
+    config = {
+        "corner_confidence_threshold": ctx.corner_confidence_threshold,
+        "background_novelty_threshold": ctx.background_novelty_threshold,
+        "centroid_jump_ratio": ctx.centroid_jump_ratio,
+        "min_track_length": ctx.min_track_length,
+    }
+    
+    return ConfigPlayground(run_id=run_id, config=config)
+
+
+@router.post("/playground/{run_id}/recompute")
+def recompute_playground(run_id: str, body: dict, request: Request):
+    """Recompute metrics based on new thresholds."""
+    svc = request.app.state.playground_service
+    return svc.recompute(run_id, body)

@@ -16,6 +16,7 @@ from app.services.regression_service import RegressionService
 from app.services.video_service import VideoService
 from app.services.runs_service import RunService
 from app.services.cards_service import CardService
+from app.services.playground_service import PlaygroundService
 
 
 def create_app(db_path: Optional[Path] = None) -> FastAPI:
@@ -56,6 +57,7 @@ def create_app(db_path: Optional[Path] = None) -> FastAPI:
     app.state.video_service = VideoService(db_path=db_path)
     app.state.run_service = RunService(db_path=db_path)
     app.state.card_service = CardService(db_path=db_path)
+    app.state.playground_service = PlaygroundService(db_path=db_path)
 
     # Include routers
     app.include_router(videos.router, prefix="/api/v1/videos", tags=["videos"])
