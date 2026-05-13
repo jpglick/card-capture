@@ -45,7 +45,7 @@ class RunContext:
     kornia_device: str = "auto"
     triage_keep_percentile: float = 0.05
     rotate_180: bool = True
-    tracker_backend: str = "botsort"
+    tracker_backend: str = "bytetrack"
     centroid_jump_ratio: float = 0.30
     centroid_jump_frames: int = 3
     foil_threshold: float = 50.0

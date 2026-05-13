@@ -28,7 +28,7 @@ class PipelineConfig:
     null_patience_frames: int = 6
     background_threshold: float = 15.0
     rotate_180: bool = False
-    tracker_backend: str = "botsort"
+    tracker_backend: str = "bytetrack"
     fast_scan_fps: float = 15.0
     confirm_scan_fps: float = 5.0
     valley_drop_ratio: float = 0.40
