@@ -746,8 +746,21 @@ class VideoProcessor:
             best_canonical = max(canonical_entries, key=lambda e: e["quality_score"].total)
             phash = best_canonical["visual_hash"]
 
-            # Use the single best canonical frame directly (Stage 9 Fusion removed due to ghosting)
-            fused_canonical = best_canonical["normalized"]
+            # Perform multi-frame fusion (Wave 4)
+            from .fuser import MultiFrameFuser
+            fuser = MultiFrameFuser()
+            
+            # Load images for fusion
+            canonical_images = [e["normalized"] for e in canonical_entries]
+            
+            try:
+                # Use foil_threshold from options if enabled
+                foil_t = options.foil_threshold if options.enable_foil_aware_fusion else None
+                fused_canonical = fuser.fuse(canonical_images, foil_threshold=foil_t)
+            except Exception as e:
+                print(f"[Stage: Fusion] | Fusion failed for {track.instance_id[:8]}: {e}")
+                # Fallback to single best canonical frame directly
+                fused_canonical = best_canonical["normalized"]
 
             candidate_hashes: list[str] = []
             for entry in canonical_entries:
