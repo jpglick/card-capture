@@ -1,9 +1,29 @@
+from typing import Literal, Optional
 import cv2
 import numpy as np
 
 class VisualDeduplicator:
-    def __init__(self, threshold: int = 6):
+    def __init__(
+        self, 
+        threshold: int = 6, 
+        backend: Literal["phash", "dino"] = "phash",
+        dino_threshold: float = 0.92,
+        dino_variant: str = "vits14"
+    ):
         self.threshold = threshold
+        self.backend = backend
+        self.dino_threshold = dino_threshold
+        self.dino_variant = dino_variant
+        self._dino_deduper = None
+
+    def _get_dino(self):
+        if self._dino_deduper is None:
+            from .ml.inference.dino_dedup import DinoDeduplicator
+            self._dino_deduper = DinoDeduplicator(
+                variant=self.dino_variant, 
+                threshold=self.dino_threshold
+            )
+        return self._dino_deduper
 
     def compute_phash(self, image: np.ndarray) -> str:
         if image is None or image.size == 0:
