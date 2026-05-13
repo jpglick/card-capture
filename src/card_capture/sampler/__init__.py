@@ -70,6 +70,37 @@ class _ScanFrame:
     sobel_score: float
     delta_score: float = 0.0
 
+
+def _valley_split_merge_window_frames(
+    frame_indices: list[int],
+    valley_min_width_frames: int,
+) -> int:
+    diffs = [
+        curr - prev
+        for prev, curr in zip(frame_indices, frame_indices[1:])
+        if curr > prev
+    ]
+    if not diffs:
+        return max(1, valley_min_width_frames)
+    scan_stride = max(1, int(round(float(np.median(diffs)))))
+    merge_window_scan_frames = max(5, valley_min_width_frames * 2)
+    return scan_stride * merge_window_scan_frames
+
+
+def _coalesce_nearby_split_frames(
+    split_frames: list[int],
+    merge_window_frames: int,
+) -> list[int]:
+    if not split_frames:
+        return []
+    coalesced = [split_frames[0]]
+    for frame_index in split_frames[1:]:
+        if frame_index - coalesced[-1] <= merge_window_frames:
+            continue
+        coalesced.append(frame_index)
+    return coalesced
+
+
 class VideoSampler:
     def __init__(self, reader_backend: str = "auto"):
         self.reader_backend = _resolve_reader_backend(reader_backend)
@@ -729,11 +760,18 @@ class AdaptivePresenceSampler:
             grid_cols=3,
             valley_drop_ratio=0.70,
             min_valley_width_frames=self.valley_min_width_frames,
+            frame_indices=frame_indices,
+            min_region_votes=5,
         )
 
         # Combine both signals: global + regional splits
         all_splits = sorted(set(global_splits) | set(regional_splits))
-        return all_splits
+        return _coalesce_nearby_split_frames(
+            all_splits,
+            merge_window_frames=_valley_split_merge_window_frames(
+                frame_indices, self.valley_min_width_frames
+            ),
+        )
 
     def _find_presence_windows(self) -> list[PresenceWindow]:
         video_path = self._resolve_video_path(None)
@@ -747,15 +785,31 @@ class AdaptivePresenceSampler:
         self.last_valley_splits = self._compute_valley_splits(self._scan_frames)
         windows = self._build_windows(self._scan_frames, forced_splits=self.last_valley_splits)
 
-        # Collect background proxies: frames with the lowest presence scores
+        # Collect background proxies: prioritize frames from detected valley splits
         bg_candidates: list[tuple[float, int, np.ndarray]] = []  # (-score, frame_index, image)
-        for record in self._scan_frames:
-            score = record.presence_score
-            if score < self._bg_safety_threshold:
-                if len(bg_candidates) < self._max_bg_proxies:
-                    heapq.heappush(bg_candidates, (-score, record.frame_index, record.image.copy()))
-                elif score < -bg_candidates[0][0]:
-                    heapq.heapreplace(bg_candidates, (-score, record.frame_index, record.image.copy()))
+        
+        # 1. First, try to pick from valley splits (most reliable empty workspace)
+        if self.last_valley_splits:
+            # Sort splits to find intervals between them or near them
+            # For simplicity, let's just pick frames immediately following split points
+            # (which usually represent the start of an empty window)
+            for split_idx in self.last_valley_splits[:self._max_bg_proxies]:
+                # Find the record for this split or near it
+                for record in self._scan_frames:
+                    if record.frame_index >= split_idx:
+                        heapq.heappush(bg_candidates, (-record.presence_score, record.frame_index, record.image.copy()))
+                        break
+        
+        # 2. If we don't have enough from valleys, pick from lowest presence scores globally
+        if len(bg_candidates) < self._max_bg_proxies:
+            for record in self._scan_frames:
+                score = record.presence_score
+                # Be more conservative if we already have some or if score is high
+                if score < self._bg_safety_threshold:
+                    if len(bg_candidates) < self._max_bg_proxies:
+                        heapq.heappush(bg_candidates, (-score, record.frame_index, record.image.copy()))
+                    elif score < -bg_candidates[0][0]:
+                        heapq.heapreplace(bg_candidates, (-score, record.frame_index, record.image.copy()))
 
         # Sort by score ascending (lowest first)
         bg_candidates.sort(key=lambda x: -x[0])

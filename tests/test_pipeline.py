@@ -150,15 +150,15 @@ def test_pipeline_persists_v21_rows_and_result_counts(tmp_path: Path):
     assert result.frame_count == 3
     assert result.accepted_frame_count == 3
     assert result.detection_count == 3
-    # v4.1: FakeBatchDetector with min_track_length=3 and only 3 total frames doesn't form tracks
-    # (tracker needs activation thresholds met). Expect 0 instances in this test scenario.
-    assert result.saved_instance_count == 0
-    assert result.telemetry["tracker_event_count"] == 0
+    # BoT-SORT emits tentative tracks immediately; the pipeline-level
+    # min_track_length gate is the single confirmation gate.
+    assert result.saved_instance_count == 1
+    assert result.telemetry["tracker_event_count"] == 3
     assert Path(result.telemetry["tracker_association_events_path"]).exists()
 
-    assert _row_count(storage, "card_instances") == 0
-    assert _row_count(storage, "card_views") == 0
-    assert _row_count(storage, "evidence_frames") == 0
+    assert _row_count(storage, "card_instances") == 1
+    assert _row_count(storage, "card_views") == 3
+    assert _row_count(storage, "evidence_frames") == 3
 
 
 def test_corner_confidence_threshold_filters_detections(tmp_path: Path):
@@ -688,6 +688,43 @@ def test_candidate_filter_drops_background_quads(tmp_path):
     assert kept_ids == [1], kept_ids
 
 
+def test_candidate_novelty_collection_does_not_drop_pre_tracking_candidates(tmp_path):
+    from card_capture.pipeline import _collect_candidate_novelty_scores, PipelineContext
+    from card_capture.presence.background_novelty import BackgroundModel
+    import cv2
+
+    bg_arr = np.full((200, 200, 3), 128, dtype=np.uint8)
+    bg_path = tmp_path / "bg.jpg"
+    cv2.imwrite(str(bg_path), bg_arr)
+
+    card_arr = bg_arr.copy()
+    card_arr[40:160, 40:160] = 20
+    card_path = tmp_path / "card.jpg"
+    cv2.imwrite(str(card_path), card_arr)
+
+    cands = [
+        ScoredCandidate(
+            detection_id=0, timestamp_ms=0, image_path=str(bg_path),
+            score=QualityScore(total=0.8, components={}),
+            corners=[(40, 40), (160, 40), (160, 160), (40, 160)],
+            frame_index=0,
+        ),
+        ScoredCandidate(
+            detection_id=1, timestamp_ms=33, image_path=str(card_path),
+            score=QualityScore(total=0.8, components={}),
+            corners=[(40, 40), (160, 40), (160, 160), (40, 160)],
+            frame_index=1,
+        ),
+    ]
+
+    context = PipelineContext()
+    scored = _collect_candidate_novelty_scores(cands, BackgroundModel.from_frames([bg_arr]), context)
+
+    assert scored == 2
+    assert len(cands) == 2
+    assert len(context.observed_novelty_scores) == 2
+
+
 def test_prune_empty_workspace_tracks_drops_low_novelty_tracks(tmp_path):
     """A finalized track whose medoid frame's quad matches the background is removed."""
     from card_capture.pipeline import _prune_empty_workspace_tracks, _PreparedTrack
@@ -743,3 +780,57 @@ def test_prune_empty_workspace_tracks_drops_low_novelty_tracks(tmp_path):
     kept = _prune_empty_workspace_tracks(prepared, bg, threshold=0.08)
     kept_ids = [pt.track.instance_id for pt in kept]
     assert kept_ids == ["card"], kept_ids
+
+
+class SingleFrameSampler:
+    def sample(self, video_path, sample_fps):
+        image = np.full((100, 100, 3), 128, dtype=np.uint8)
+        image[20:80, 20:80] = 30 # A "card"
+        yield FrameSample(frame_index=0, timestamp_ms=0, image=image, width=100, height=100)
+
+# Detector returns one detection
+class SingleDetectionDetector:
+    runtime = "fake"
+    model_name = "fake"
+    def detect_batch(self, frames, threshold=None, confidence_threshold=None):
+        return [DetectionPacket(
+            frame_index=0, timestamp_ms=0, width=100, height=100,
+            corner_detection=CornerDetection(
+                corners=((20.0, 20.0), (80.0, 20.0), (80.0, 80.0), (20.0, 80.0)),
+                confidence=0.9, metadata={}
+            )
+        )]
+
+def test_pipeline_integrates_novelty_score(tmp_path):
+    """Pipeline must compute novelty and store it in card_views quality_score_json."""
+    from card_capture.pipeline import VideoProcessor, ProcessingOptions
+    from card_capture.storage import Storage
+    import cv2
+    import json
+
+    video_path = tmp_path / "input.mov"
+    video_path.write_bytes(b"fake video content")
+    storage = Storage(tmp_path / "cards.sqlite")
+    storage.initialize()
+
+    # Pre-warm background with different content
+    bg_image = np.full((100, 100, 3), 128, dtype=np.uint8)
+    sampler = SingleFrameSampler()
+    sampler.background_proxies = [bg_image]
+
+    processor = VideoProcessor(storage=storage, sampler=sampler, detector=SingleDetectionDetector())
+    processor.process(video_path, ProcessingOptions(
+        output_dir=tmp_path / "output",
+        background_frames=1,
+        min_track_length=1,
+        triage_keep_percentile=1.0,
+    ))
+    # Check the database for the novelty score in quality_score_json
+    with storage._connect() as conn:
+        row = conn.execute("SELECT quality_score_json FROM card_views").fetchone()
+    
+    assert row is not None
+    quality_score = json.loads(row["quality_score_json"])
+    assert "novelty" in quality_score
+    # Novelty should be > 0 because we have a painted patch vs flat background
+    assert quality_score["novelty"] > 0

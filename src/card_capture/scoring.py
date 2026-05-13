@@ -9,7 +9,7 @@ from .models import QualityScore
 from .occlusion_residual import compute_occlusion_residual_score
 
 CARD_ASPECT_RATIO: float = 63.5 / 88.9  # ≈ 0.714 (width / height, standard trading card)
-ASPECT_TOLERANCE: float = 0.25
+ASPECT_TOLERANCE: float = 0.15
 
 
 def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
@@ -25,6 +25,7 @@ class QualityScorer:
         image: np.ndarray,
         detection_confidence: float,
         prior_frames: Optional[Sequence[np.ndarray]] = None,
+        novelty: float = 1.0,
     ) -> QualityScore:
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
 
@@ -65,14 +66,15 @@ class QualityScorer:
         confidence = _clamp(float(detection_confidence))
 
         total = (
-            sharpness * 0.25
-            + glare * 0.12
-            + aspect_ratio * 0.15
-            + size * 0.10
-            + complexity * 0.03
-            + border_purity * 0.20
+            sharpness * 0.35
+            + aspect_ratio * 0.20
+            + novelty * 0.15
+            + glare * 0.10
+            + border_purity * 0.10
+            + size * 0.05
             + spatial_glare * 0.05
-            + occlusion * 0.10
+            + complexity * 0.00
+            + occlusion * 0.00
         )
         components = {
             "sharpness": round(sharpness, 6),
@@ -83,6 +85,8 @@ class QualityScorer:
             "border_purity": round(border_purity, 6),
             "spatial_glare": round(spatial_glare, 6),
             "occlusion": round(occlusion, 6),
+            "confidence": round(confidence, 6),
+            "novelty": round(novelty, 6),
         }
         return QualityScore(total=round(total, 6), components=components)
 

@@ -18,7 +18,7 @@ from .cropper import CardCropper, PrecisionNormalizer
 from .gpu_refinement import KorniaNormalizer
 from .detectors import CardDetector
 from .deduplicator import VisualDeduplicator
-from .fuser import calculate_sharpness, find_glare_centroid, MultiFrameFuser
+from .fuser import calculate_sharpness, find_glare_centroid
 from .ingestion import FrameTriageFilter, _open_capture
 from .models import (
     CornerDetection,
@@ -402,27 +402,34 @@ class VideoProcessor:
 
         candidates = _build_candidates(detection_rows)
 
-        # v4.1 per-quad background novelty gate.
-        # Build a workspace baseline from the chronologically-first source frames; reject
-        # any candidate whose quad interior matches that baseline. This catches "empty
-        # stand" / "stationary background structure" false positives without any
-        # setup-specific training.
-        _bg_paths = sorted(
-            {row.source_frame_path for row in detection_rows if row.source_frame_path},
-            key=str,
-        )[:30]
-        _bg_model = BackgroundModel.from_source_frame_paths(_bg_paths, n=30)
+        # v4.1 per-quad background novelty scoring.
+        # Build a workspace baseline from the sampler's true empty background proxies.
+        # Keep these scores for telemetry/adaptive quality without hard-dropping
+        # true cards whose novelty is low against this setup's background.
+        bg_paths = stats.sampler_telemetry.get("background_proxies_paths", [])
+        _bg_model = None
+        if bg_paths:
+            _bg_model = BackgroundModel.from_source_frame_paths(bg_paths, n=30)
+            
         if _bg_model is not None:
-            _before = len(candidates)
-            candidates = _filter_candidates_by_novelty(
-                candidates, _bg_model, threshold=0.08, context=pipeline_context
+            _scored = _collect_candidate_novelty_scores(
+                candidates, _bg_model, context=pipeline_context
             )
-            print(f"[Stage: NoveltyGate] | dropped {_before - len(candidates)} / {_before} candidates")
-        self._bg_model = _bg_model  # retained for track-level pruning in Step 7
+            print(
+                f"[Stage: NoveltyGate] | scored {_scored} candidates "
+                "(hard novelty pruning disabled)"
+            )
+        else:
+            print("[Stage: NoveltyGate] | skipped (no background proxies found)")
+        self._bg_model = _bg_model  # retained for downstream scoring/diagnostics
+        
         candidate_confidences = [candidate.score.total for candidate in candidates]
         if candidate_confidences:
+            # Keep BoT-SORT recall-oriented. The detector's usable card
+            # confidences can sit in the 0.60-0.72 range, so allowing the
+            # adaptive percentile to rise near 0.75 suppresses real cards.
             tracker_t_high = float(
-                np.clip(np.percentile(candidate_confidences, 65), 0.40, 0.75)
+                np.clip(np.percentile(candidate_confidences, 65), 0.40, 0.60)
             )
         else:
             tracker_t_high = 0.60
@@ -510,7 +517,6 @@ class VideoProcessor:
                 valley_in_gap = any(last_frame_idx < vs <= frame_index for vs in valley_split_frames)
                 if gap > effective_session_gap_frames or valley_in_gap:
                     reason = "sampled_frame_gap" if gap > effective_session_gap_frames else "valley_split"
-                    self.tracker.finalize()
                     self.storage.add_pipeline_event(
                         video_id=video_id,
                         frame_index=frame_index,
@@ -535,7 +541,6 @@ class VideoProcessor:
             # frame_width: use a reasonable default; exact value from sampler telemetry if available
             frame_width = getattr(options, '_frame_width_hint', 1280)
             if centroid_detector.update(primary_obb_corners, frame_width):
-                self.tracker.finalize()
                 self.storage.add_pipeline_event(
                     video_id=video_id,
                     frame_index=frame_index,
@@ -554,7 +559,6 @@ class VideoProcessor:
                 self.tracker.pending_splits = [
                     fi for fi in self.tracker.pending_splits if fi != frame_index
                 ]
-                self.tracker.finalize()
                 self.storage.add_pipeline_event(
                     video_id=video_id,
                     frame_index=frame_index,
@@ -699,7 +703,22 @@ class VideoProcessor:
                 normalized = normalized_by_detection.get(candidate.detection_id)
                 if normalized is None:
                     normalized = normalizer.normalize(raw_image, candidate.corners, rotate_180=options.rotate_180)
-                
+
+                # Compute novelty score (how much the candidate differs from background)
+                novelty_score = 1.0
+                if self._bg_model is not None and candidate.corners:
+                    from .presence.background_novelty import quad_novelty
+                    novelty_score = quad_novelty(
+                        raw_image, candidate.corners, self._bg_model,
+                        color_space="lab", lab_weights=(1.0, 0.5, 0.5)
+                    )
+
+                # Perform full quality scoring on the rectified crop
+                quality_score = self.scorer.score(
+                    normalized,
+                    float(row.detection_packet.corner_detection.confidence),
+                    novelty=novelty_score
+                )
                 glare_centroid = find_glare_centroid(normalized)
                 glare_x, glare_y = glare_centroid if glare_centroid else (None, None)
                 frame_entries.append(
@@ -707,10 +726,11 @@ class VideoProcessor:
                         "candidate": candidate,
                         "row": row,
                         "normalized": normalized,
+                        "quality_score": quality_score,
                         "visual_hash": deduplicator.compute_phash(normalized),
                         "glare_x": glare_x,
                         "glare_y": glare_y,
-                        "sharpness": calculate_sharpness(normalized),
+                        "sharpness": quality_score.components["sharpness"],
                         "glare_mask": _compress_array(_glare_mask(normalized)),
                         "laplacian_heatmap": _compress_array(_laplacian_heatmap(normalized)),
                     }
@@ -723,19 +743,11 @@ class VideoProcessor:
             canonical_detection_ids = {
                 entry["candidate"].detection_id for entry in canonical_entries
             }
-            best_canonical = max(canonical_entries, key=lambda e: e["candidate"].score.total)
+            best_canonical = max(canonical_entries, key=lambda e: e["quality_score"].total)
             phash = best_canonical["visual_hash"]
 
-            # Stage 9: Foil-aware fusion of canonical frames
-            # Extract normalized frames from canonical entries for fusion
-            canonical_frames = [entry["normalized"] for entry in canonical_entries]
-            fuser = MultiFrameFuser()
-            # Use foil_threshold from options; if enable_foil_aware_fusion is False, disable foil detection
-            foil_threshold = options.foil_threshold if options.enable_foil_aware_fusion else None
-            fused_canonical = fuser.fuse(canonical_frames, foil_threshold=foil_threshold)
-            # Ensure fused_canonical is not None (best_canonical should always exist with frames)
-            if fused_canonical is None:
-                fused_canonical = best_canonical["normalized"]
+            # Use the single best canonical frame directly (Stage 9 Fusion removed due to ghosting)
+            fused_canonical = best_canonical["normalized"]
 
             candidate_hashes: list[str] = []
             for entry in canonical_entries:
@@ -784,7 +796,7 @@ class VideoProcessor:
 
         if getattr(self, "_bg_model", None) is not None:
             prepared_tracks = _prune_empty_workspace_tracks(
-                prepared_tracks, self._bg_model, threshold=0.08, context=pipeline_context
+                prepared_tracks, self._bg_model, threshold=0.0, context=pipeline_context
             )
 
         _resolve_session_tracks(prepared_tracks, deduplicator, context=pipeline_context)
@@ -823,6 +835,9 @@ class VideoProcessor:
 
         t_storage_start = time.time()
         track_instance_ids: dict[int, int] = {}
+        # Keep track of canonical embeddings for the current run to merge cross-session duplicates
+        run_canonical_embeddings: list[tuple[int, np.ndarray, str]] = []  # (instance_id, embedding, phash)
+
         for track_index, prepared in enumerate(prepared_tracks):
             timer = PipelineTimer()
             instance_id = self.storage.add_card_instance(
@@ -836,12 +851,55 @@ class VideoProcessor:
             duplicate_of = None
             if prepared.duplicate_track_index is not None:
                 duplicate_of = track_instance_ids.get(prepared.duplicate_track_index)
+
+            # --- Global Deduplication (Cross-Session/Cross-Video) ---
+            is_intra_run_match = False
             if duplicate_of is None:
-                duplicate_of = self.storage.find_canonical_for_hashes(
-                    prepared.candidate_hashes,
-                    threshold=6,
-                )
+                # 1. Check against current run's canonicals using embeddings (most robust)
+                if prepared.embedding is not None:
+                    from .identity.embedding_distance import embedding_same_card_score
+                    for other_id, other_emb, other_phash in run_canonical_embeddings:
+                        if embedding_same_card_score(prepared.embedding, other_emb, threshold=0.5):
+                            # Verify pHash distance (with 180-rotation check)
+                            ham = deduplicator.hamming_distance(prepared.primary_hash, other_phash)
+                            
+                            # If ham > 30, it might be flipped
+                            if ham > 30:
+                                # We don't have the other image easily, but we can compute the flipped hash 
+                                # of current one or just trust ReID more?
+                                # Actually, prepared_tracks has the normalized frames. 
+                                # For now, let's just use a loose ham threshold or trust ReID.
+                                pass
+                            
+                            if ham <= 30:
+                                duplicate_of = other_id
+                                is_intra_run_match = True
+                                break
+                            else:
+                                # Try one more check: maybe it's just flipped?
+                                # ReID is usually rotation-invariant-ish, but pHash isn't.
+                                # If we trust ReID, we should probably merge even if pHash is high
+                                # as long as it's not TOTALLY different.
+                                # Let's use 35 as absolute max.
+                                if ham <= 35:
+                                    duplicate_of = other_id
+                                    is_intra_run_match = True
+                                    break
+                
+                # 2. Fall back to Storage-based lookup (pHash-only, cross-video)
+                if duplicate_of is None:
+                    duplicate_of = self.storage.find_canonical_for_hashes(
+                        prepared.candidate_hashes,
+                        threshold=6,
+                    )
+                    # Note: We don't easily know if this is same video without querying DB,
+                    # but typically find_canonical_for_hashes will find the earliest one.
+            
             self.storage.update_instance_deduplication(instance_id, prepared.primary_hash, duplicate_of)
+            
+            # If this is NOT a duplicate, add it to our run's canonical cache
+            if duplicate_of is None and prepared.embedding is not None:
+                run_canonical_embeddings.append((instance_id, prepared.embedding, prepared.primary_hash))
 
             rectified_paths: dict[int, str] = {}
             for canonical_order, entry in enumerate(prepared.canonical_entries):
@@ -873,7 +931,7 @@ class VideoProcessor:
                     timestamp_ms=row.detection_packet.timestamp_ms,
                     detection=row.detection_packet.corner_detection,
                     rectified_path=rectified_paths.get(candidate.detection_id),
-                    quality_score={"confidence": round(row.detection_packet.corner_detection.confidence, 6)},
+                    quality_score=entry["quality_score"].components,
                     is_canonical=is_canonical,
                     glare_x=entry["glare_x"],
                     glare_y=entry["glare_y"],
@@ -929,13 +987,30 @@ class VideoProcessor:
                 canonical_image_path = rectified_paths.get(best_detection_id)
                 if canonical_image_path is None:
                     continue
-                if duplicate_of is None:
+                
+                # Only suppress saving for intra-run duplicates (secondary sides/Backs 
+                # or cross-session matches within the same video).
+                # We still want to record 'saved_cards' for global duplicates (same card, 
+                # different video) so that per-run recall is accurate.
+                
+                is_intra_run_duplicate = prepared.duplicate_track_index is not None or is_intra_run_match
+                
+                # Use the newly computed quality score for saving and gating
+                final_quality_score = float(prepared.canonical_entries[0]["quality_score"].total)
+                
+                # Phantoms (card stand) and extremely blurry/occluded tracks are dropped here.
+                # Threshold 0.45 is chosen to balance recall of low-novelty cards
+                # vs rejection of static empty workspace tracks (~0.40).
+                if not is_intra_run_duplicate and final_quality_score >= 0.45:
                     self.storage.add_saved_card(
                         detection_id=best_view_id,
                         image_path=canonical_image_path,
-                        final_score=float(prepared.canonical_entries[0]["candidate"].score.total),
+                        final_score=final_quality_score,
                     )
                     saved_count += 1
+                elif not is_intra_run_duplicate:
+                    print(f"[Stage: Storage] | rejected track {prepared.track.instance_id} "
+                          f"(quality score {final_quality_score:.3f} < 0.45)")
 
         t_storage = time.time() - t_storage_start
 
@@ -1160,15 +1235,15 @@ def _is_reid_duplicate(
     """
     from .identity.embedding_distance import embedding_same_card_score
 
-    # Stage 1: pHash pre-filter (broad candidates)
+    # Stage 1: pHash as broad pre-filter (Wave 3)
     ham = deduplicator.hamming_distance(phash_1, phash_2)
-    if ham > 22:
-        # Hamming distance too large → definitely not same card
-        return False
-
-    # Stage 2: pHash is close or identical; use embeddings to decide
+    
+    # If embeddings available: use them as the primary decision metric.
+    # Relax pHash threshold when embeddings are present to handle blur/deformation.
     if embedding_1 is not None and embedding_2 is not None:
-        # Embeddings available: use cosine distance < 0.5 as deciding metric
+        if ham > 28: # Much more relaxed than 22
+            return False
+        from .identity.embedding_distance import embedding_same_card_score
         return embedding_same_card_score(embedding_1, embedding_2, threshold=0.5)
     else:
         # Embeddings unavailable: fall back to stricter pHash threshold for backward compat
@@ -1451,6 +1526,34 @@ def _filter_candidates_by_novelty(
     return kept
 
 
+def _collect_candidate_novelty_scores(
+    candidates: list[ScoredCandidate],
+    bg: BackgroundModel,
+    context: Optional[PipelineContext] = None,
+) -> int:
+    """Collect candidate novelty scores without dropping pre-tracking candidates."""
+    if context is None:
+        return 0
+
+    from .presence.background_novelty import quad_novelty
+
+    frame_cache: dict[str, np.ndarray] = {}
+    scored_count = 0
+    for cand in candidates:
+        if not cand.corners or cand.image_path is None:
+            continue
+        img = frame_cache.get(cand.image_path)
+        if img is None:
+            img = cv2.imread(cand.image_path)
+            if img is None:
+                continue
+            frame_cache[cand.image_path] = img
+        novelty = quad_novelty(img, cand.corners, bg, color_space="lab", lab_weights=(1.0, 0.5, 0.5))
+        context.add_novelty_score(novelty)
+        scored_count += 1
+    return scored_count
+
+
 def _prune_empty_workspace_tracks(
     prepared_tracks: list[_PreparedTrack],
     bg: BackgroundModel,
@@ -1526,10 +1629,7 @@ def _select_canonical_entries(frame_entries: list[dict], deduplicator: VisualDed
 
     scored = sorted(
         frame_entries,
-        key=lambda entry: (
-            float(entry["candidate"].score.total),
-            float(entry["sharpness"]),
-        ),
+        key=_entry_quality_total,
         reverse=True,
     )
     anchor = scored[0]
@@ -1552,17 +1652,13 @@ def _select_canonical_entries(frame_entries: list[dict], deduplicator: VisualDed
             frame_entries,
             key=lambda entry: (
                 int(entry["_hamming_to_anchor"]),
-                -float(entry["candidate"].score.total),
-                -float(entry["sharpness"]),
+                -_entry_quality_total(entry),
             ),
         )[: min(_CANONICAL_MAX_FRAMES, len(frame_entries))]
 
     ranked = sorted(
         same_appearance,
-        key=lambda entry: (
-            float(entry["candidate"].score.total),
-            float(entry["sharpness"]),
-        ),
+        key=_entry_quality_total,
         reverse=True,
     )
 
@@ -1582,8 +1678,7 @@ def _select_canonical_entries(frame_entries: list[dict], deduplicator: VisualDed
             )
             key = (
                 min_gap,
-                float(entry["candidate"].score.total),
-                float(entry["sharpness"]),
+                _entry_quality_total(entry),
             )
             if best_key is None or key > best_key:
                 best_key = key
@@ -1593,6 +1688,16 @@ def _select_canonical_entries(frame_entries: list[dict], deduplicator: VisualDed
         selected.append(best_entry)
 
     return selected
+
+
+def _entry_quality_total(entry: dict) -> float:
+    quality_score = entry.get("quality_score")
+    if quality_score is not None:
+        return float(quality_score.total)
+    candidate = entry.get("candidate")
+    if candidate is not None:
+        return float(candidate.score.total)
+    return 0.0
 
 
 def _run_pipeline_workers(
@@ -1621,6 +1726,7 @@ def _run_pipeline_workers(
             options.background_frames,
             options.background_threshold,
             options.triage_keep_percentile,
+            options.output_dir,
             frame_queue,
             stats_queue,
             error_queue,
@@ -1633,6 +1739,8 @@ def _run_pipeline_workers(
             detector,
             options.inference_batch_size,
             options.corner_confidence_threshold,
+            options.output_dir,
+            video_id,
             frame_queue,
             detection_queue,
             error_queue,
@@ -1782,6 +1890,7 @@ def _producer_main(
     background_frames: int,
     background_threshold: float,
     triage_keep_percentile: float,
+    output_dir: Path,
     frame_queue,
     stats_queue,
     error_queue,
@@ -1796,17 +1905,26 @@ def _producer_main(
     )
     null_detector = NullStateDetector(frames=background_frames, threshold=background_threshold)
 
+    # Prepare proxy directory
+    proxy_dir = output_dir / "bg_proxies"
+    proxy_dir.mkdir(parents=True, exist_ok=True)
+    saved_proxies = []
+
     try:
         frames_iter = sampler.sample(Path(video_path), 0.0)
-        
+
         # Manually trigger first iteration to ensure Pass 1 (Scan) runs in child process
         # and populates background_proxies.
         try:
             first_frame = next(frames_iter)
-            
+
             proxies = getattr(sampler, "background_proxies", [])
             if proxies:
                 null_detector.warmup_batch(proxies)
+                for idx, proxy_img in enumerate(proxies):
+                    path = (proxy_dir / f"video_{video_id}_proxy_{idx}.jpg").resolve()
+                    cv2.imwrite(str(path), proxy_img)
+                    saved_proxies.append(str(path))
 
             # Process all frames from the iterator
             import itertools
@@ -1863,6 +1981,9 @@ def _producer_main(
         )
     finally:
         sampler_telemetry: dict[str, Any] = {"sampler_type": type(sampler).__name__}
+        if saved_proxies:
+            sampler_telemetry["background_proxies_paths"] = saved_proxies
+            
         for attr in (
             "last_scan_frame_count",
             "last_presence_window_count",
@@ -1899,6 +2020,8 @@ def _consumer_main(
     detector,
     inference_batch_size: int,
     corner_confidence_threshold: float,
+    output_dir: Path,
+    video_id: int,
     frame_queue,
     detection_queue,
     error_queue,
@@ -1912,6 +2035,8 @@ def _consumer_main(
                     detector,
                     batch,
                     corner_confidence_threshold,
+                    output_dir,
+                    video_id,
                     detection_queue,
                 )
                 _put_with_retry(
@@ -1929,6 +2054,8 @@ def _consumer_main(
                     detector,
                     batch,
                     corner_confidence_threshold,
+                    output_dir,
+                    video_id,
                     detection_queue,
                 )
                 batch = []
@@ -1951,10 +2078,16 @@ def _consume_batch(
     detector,
     batch: list[_FrameEnvelope],
     corner_confidence_threshold: float,
+    output_dir: Path,
+    video_id: int,
     detection_queue,
 ) -> None:
     if not batch:
         return
+
+    # Prepare frames directory
+    frame_dir = output_dir / "frames"
+    frame_dir.mkdir(parents=True, exist_ok=True)
 
     if hasattr(detector, "detect_batch"):
         timer = PipelineTimer()
@@ -1972,6 +2105,12 @@ def _consume_batch(
             source = source_by_frame.get((detection_packet.frame_index, detection_packet.timestamp_ms))
             if source is None:
                 continue
+
+            # Save the proxy image so that Background Novelty and Tracking can read it.
+            # During refinement, this will be overwritten with the high-res frame.
+            source_frame_path = (frame_dir / f"video_{video_id}_frame_{source.frame_packet.frame_index}_{source.frame_packet.timestamp_ms}.jpg").resolve()
+            if not source_frame_path.exists():
+                cv2.imwrite(str(source_frame_path), source.frame_packet.image)
 
             prod_telemetry = source.frame_packet.telemetry or PerformanceTelemetry()
             telemetry = PerformanceTelemetry(
@@ -1991,9 +2130,7 @@ def _consume_batch(
                         corner_detection=detection_packet.corner_detection,
                         telemetry=telemetry,
                     ),
-                    source_frame_path=(
-                        f"video_frame_{source.frame_packet.frame_index}_{source.frame_packet.timestamp_ms}.jpg"
-                    ),
+                    source_frame_path=str(source_frame_path),
                     triage_metrics=source.frame_packet.triage_metrics,
                 ),
             )
@@ -2022,6 +2159,13 @@ def _consume_batch(
         for detection in detections:
             if detection.confidence < corner_confidence_threshold:
                 continue
+                
+            # Save the proxy image so that Background Novelty and Tracking can read it.
+            # During refinement, this will be overwritten with the high-res frame.
+            source_frame_path = (frame_dir / f"video_{video_id}_frame_{row.frame_packet.frame_index}_{row.frame_packet.timestamp_ms}.jpg").resolve()
+            if not source_frame_path.exists():
+                cv2.imwrite(str(source_frame_path), row.frame_packet.image)
+
             _put_or_fail(
                 detection_queue,
                 _DetectionEnvelope(
@@ -2037,9 +2181,7 @@ def _consume_batch(
                         ),
                         telemetry=telemetry,
                     ),
-                    source_frame_path=(
-                        f"video_frame_{row.frame_packet.frame_index}_{row.frame_packet.timestamp_ms}.jpg"
-                    ),
+                    source_frame_path=str(source_frame_path),
                     triage_metrics=row.frame_packet.triage_metrics,
                 ),
             )

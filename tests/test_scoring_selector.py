@@ -85,14 +85,26 @@ def test_quality_scorer_complexity_rewards_textured_image():
     assert textured_score.components["complexity"] > uniform_score.components["complexity"]
 
 
-def test_quality_scorer_has_six_components():
-    """Score components dict must contain all eight keys after the rebalance.
-    v4.1 adds border_purity to penalize occluded crops.
-    Wave 1 Task 8 adds spatial_glare for connected-component blob analysis."""
+def test_quality_scorer_has_all_components():
+    """Score components dict must contain all ten keys after adding novelty."""
     image = np.full((88, 63, 3), 128, dtype=np.uint8)
     scorer = QualityScorer(target_pixels=88 * 63)
     score = scorer.score(image, detection_confidence=1.0)
 
     assert set(score.components.keys()) == {
-        "sharpness", "glare", "aspect_ratio", "size", "complexity", "border_purity", "spatial_glare", "confidence"
+        "sharpness", "glare", "aspect_ratio", "size", "complexity", 
+        "border_purity", "spatial_glare", "occlusion", "confidence", "novelty"
     }
+
+
+def test_quality_scorer_incorporates_novelty():
+    """Higher novelty should lead to a higher total score, all else being equal."""
+    image = np.full((100, 100, 3), 128, dtype=np.uint8)
+    scorer = QualityScorer(target_pixels=100 * 100)
+
+    score_low_novelty = scorer.score(image, detection_confidence=0.9, novelty=0.1)
+    score_high_novelty = scorer.score(image, detection_confidence=0.9, novelty=0.9)
+
+    assert "novelty" in score_high_novelty.components
+    assert score_high_novelty.components["novelty"] == 0.9
+    assert score_high_novelty.total > score_low_novelty.total

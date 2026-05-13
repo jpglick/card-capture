@@ -155,9 +155,14 @@ class BoTSORTAdapter:
             device=device,
             half=half,
             track_high_thresh=track_activation_threshold,
+            track_low_thresh=max(0.1, track_activation_threshold - 0.20),
+            new_track_thresh=track_activation_threshold,
             track_buffer=lost_track_buffer,
             match_thresh=minimum_matching_threshold,
             cmc_method=None,  # Disable camera motion compensation (assumes static camera setup)
+            # The pipeline applies min_track_length after sessionization; keep
+            # BoT-SORT from hiding short but valid sessions before that gate.
+            min_hits=1,
         )
         self.min_track_length = min_track_length
         self._tracks: dict[int, TrackState] = {}
@@ -178,9 +183,14 @@ class BoTSORTAdapter:
             device=device,
             half=half,
             track_high_thresh=self._track_activation_threshold,
+            track_low_thresh=max(0.1, self._track_activation_threshold - 0.20),
+            new_track_thresh=self._track_activation_threshold,
             track_buffer=self._lost_track_buffer,
             match_thresh=self._minimum_matching_threshold,
             cmc_method=None,  # Disable camera motion compensation (assumes static camera setup)
+            # The pipeline applies min_track_length after sessionization; keep
+            # BoT-SORT from hiding short but valid sessions before that gate.
+            min_hits=1,
         )
         self.pending_splits = []
 
@@ -234,37 +244,82 @@ class BoTSORTAdapter:
         if not boxes:
             return []
 
-        det = Detections(
-            xyxy=np.array(boxes, dtype=np.float32),
-            confidence=np.array(confidences, dtype=np.float32),
-            class_id=np.zeros(len(boxes), dtype=int),
-        )
+        # boxmot's trackers expect a numpy array of shape (N, 6)
+        # Format: [x1, y1, x2, y2, conf, class_id]
+        dets_array = []
+        for b, c in zip(boxes, confidences):
+            dets_array.append([b[0], b[1], b[2], b[3], c, 0])
+        det_input = np.array(dets_array, dtype=np.float32)
 
         # BotSort v0.17+ requires an image parameter.
         # Try to decode real frame from path reference; fall back to zeros if not available.
         frame_img = self._decode_frame_for_reid(candidates)
-        self._tracker.update(det, frame_img)
+        
+        # boxmot's trackers return an ndarray of shape (N, 8) 
+        # [x1, y1, x2, y2, track_id, conf, class_id, ...]
+        tracks = self._tracker.update(det_input, frame_img)
+        # print(f"DEBUG: tracker.update returned {len(tracks)} tracks. input was {len(det_input)}")
 
         out: List[_AdaptedDetection] = []
-        if det.tracker_id is None:
+        if tracks is None or len(tracks) == 0:
             return out
 
-        for i, track_id in enumerate(det.tracker_id):
-            if track_id is None or int(track_id) == -1:
+        for track in tracks:
+            tid = int(track[4])
+            if tid == -1:
                 continue
-            tid = int(track_id)
-            cand = valid_candidates[i]
+                
+            # Match back to candidate using IoU since detections might be re-ordered
+            box = track[:4]
+            best_cand = None
+            best_iou = -1
+            for cand in valid_candidates:
+                xs = [p[0] for p in cand.corners]
+                ys = [p[1] for p in cand.corners]
+                cx1, cy1 = min(xs), min(ys)
+                cx2, cy2 = max(xs), max(ys)
+                
+                ix1, iy1 = max(box[0], cx1), max(box[1], cy1)
+                ix2, iy2 = min(box[2], cx2), min(box[3], cy2)
+                iw, ih = max(0, ix2 - ix1), max(0, iy2 - iy1)
+                if iw > 0 and ih > 0:
+                    inter = iw * ih
+                    uni = (box[2]-box[0])*(box[3]-box[1]) + (cx2-cx1)*(cy2-cy1) - inter
+                    iou = inter / uni
+                    if iou > best_iou:
+                        best_iou = iou
+                        best_cand = cand
+                        
+            if best_cand is None:
+                continue
+                
             if tid not in self._tracks:
                 self._tracks[tid] = TrackState(
                     instance_id=str(uuid.uuid4()),
                     candidates=[],
                     last_centroid=None,
-                    last_frame_index=cand.frame_index,
+                    last_frame_index=best_cand.frame_index,
                 )
             state = self._tracks[tid]
-            state.candidates.append(cand)
-            state.last_frame_index = cand.frame_index
-            out.append(_AdaptedDetection(candidate=cand, track_id=tid, instance_id=state.instance_id))
+            
+            # Extract ReID embedding from the internal tracker's track objects
+            # We look for the track object with matching ID in active_tracks
+            internal_track = None
+            for t in self._tracker.active_tracks:
+                if t.track_id == tid:
+                    internal_track = t
+                    break
+            
+            if internal_track is not None:
+                # Use smooth_feat (exponential moving average) for more stable identity
+                if hasattr(internal_track, "smooth_feat") and internal_track.smooth_feat is not None:
+                    state.reid_embedding = np.array(internal_track.smooth_feat, copy=True)
+                elif hasattr(internal_track, "curr_feat") and internal_track.curr_feat is not None:
+                    state.reid_embedding = np.array(internal_track.curr_feat, copy=True)
+
+            state.candidates.append(best_cand)
+            state.last_frame_index = best_cand.frame_index
+            out.append(_AdaptedDetection(candidate=best_cand, track_id=tid, instance_id=state.instance_id))
 
         return out
 

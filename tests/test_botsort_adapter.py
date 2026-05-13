@@ -89,6 +89,16 @@ def test_pending_splits_starts_empty(adapter):
     assert adapter.pending_splits == []
 
 
+def test_botsort_internal_confirmation_does_not_hide_short_sessions(adapter):
+    assert adapter._BoTSORT.call_args.kwargs["min_hits"] == 1
+    assert adapter._BoTSORT.call_args.kwargs["new_track_thresh"] == adapter._track_activation_threshold
+    assert adapter._BoTSORT.call_args.kwargs["track_low_thresh"] == 0.1
+    adapter.reset()
+    assert adapter._BoTSORT.call_args.kwargs["min_hits"] == 1
+    assert adapter._BoTSORT.call_args.kwargs["new_track_thresh"] == adapter._track_activation_threshold
+    assert adapter._BoTSORT.call_args.kwargs["track_low_thresh"] == 0.1
+
+
 def test_finalize_returns_track_states(adapter):
     for i in range(3):
         adapter.process([_candidate(i, i, x=100, y=100)])
