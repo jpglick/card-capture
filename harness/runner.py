@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from harness.metrics.card_precision import card_precision
 from harness.metrics.card_recall import card_recall
@@ -127,7 +127,7 @@ def _find_truth(truth_dir: Path, video_id: str) -> Path:
     )
 
 
-def _avg_or_none(vals: list[float | None]) -> float | None:
+def _avg_or_none(vals: list[Optional[float]]) -> Optional[float]:
     non_null = [v for v in vals if v is not None]
     return sum(non_null) / len(non_null) if non_null else None
 

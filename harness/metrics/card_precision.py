@@ -8,11 +8,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from typing import Optional
+
 from harness.match import match_detections_to_truth
 from harness.schema import TruthFile
 
 
-def card_precision(*, db_path: Path, truth_path: Path, video_id: str) -> float | None:
+def card_precision(*, db_path: Path, truth_path: Path, video_id: str) -> Optional[float]:
     """Compute card precision for one video.
 
     Parameters

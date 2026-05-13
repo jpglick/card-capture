@@ -1,0 +1,219 @@
+"""v4 regression harness CLI.
+
+Provides commands for running the harness, managing baselines, and
+validating truth files.
+"""
+from __future__ import annotations
+
+import json
+import subprocess
+from pathlib import Path
+from typing import Optional
+
+import click
+
+from harness.baseline import freeze_baseline, get_baseline, persist_run
+from harness.runner import run_metrics
+from harness.validator import validate_file
+
+
+@click.group()
+def harness():
+    """v4 regression harness commands."""
+    pass
+
+
+@harness.command()
+@click.option("--baseline", required=True, help="Baseline name to compare against.")
+@click.option(
+    "--db",
+    type=click.Path(exists=True, path_type=Path),
+    default=Path("cards.sqlite"),
+    help="Path to cards.sqlite database.",
+)
+@click.option(
+    "--truth-dir",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+    help="Directory containing ground-truth files.",
+)
+@click.option(
+    "--videos",
+    help="Comma-separated list of video IDs to run. Defaults to all in truth-dir.",
+)
+@click.option(
+    "--out",
+    type=click.Path(path_type=Path),
+    help="Optional path to save the full JSON report.",
+)
+def run(
+    baseline: str,
+    db: Path,
+    truth_dir: Path,
+    videos: Optional[str],
+    out: Optional[Path],
+):
+    """Run regression metrics and compare against a baseline."""
+    if videos:
+        video_ids = [v.strip() for v in videos.split(",") if v.strip()]
+    else:
+        # Fallback: find all .truth.json files in truth_dir
+        video_ids = [
+            p.name.replace(".truth.json", "")
+            for p in truth_dir.glob("*.truth.json")
+        ]
+        # Also check subdirectories
+        video_ids.extend([
+            p.parent.name
+            for p in truth_dir.glob("**/truth.json")
+            if p.parent != truth_dir
+        ])
+        video_ids = sorted(list(set(video_ids)))
+
+    if not video_ids:
+        click.echo("Error: No videos specified and none found in truth-dir.", err=True)
+        return
+
+    click.echo(f"Running metrics for {len(video_ids)} videos...")
+    report = run_metrics(db_path=db, truth_dir=truth_dir, videos=video_ids)
+
+    # Compare to baseline
+    b = get_baseline(db_path=db, name=baseline)
+    deltas = _compute_deltas(report.metrics, b.metrics)
+
+    # Persist the run
+    code_sha = _get_git_sha()
+    run_id = persist_run(
+        db_path=db,
+        baseline_name=baseline,
+        code_sha=code_sha,
+        config={},  # TODO: load current pipeline config
+        metrics=_to_dict(report.metrics),
+        per_video=[_to_dict(pv) for pv in report.per_video],
+    )
+
+    result = {
+        "run_id": run_id,
+        "baseline": baseline,
+        "metrics": report.metrics,
+        "deltas": deltas,
+        "per_video": [_to_dict(pv) for pv in report.per_video],
+    }
+
+    if out:
+        out.write_text(json.dumps(result, indent=2, default=str))
+        click.echo(f"Report saved to {out}")
+
+    # Print summary
+    click.echo("\nRegression Summary vs. " + baseline)
+    click.echo("-" * 40)
+    for k, v in report.metrics.items():
+        if isinstance(v, (int, float)):
+            delta = deltas.get(k)
+            delta_str = f" ({delta:+.4f})" if delta is not None else ""
+            click.echo(f"{k:20}: {v:.4f}{delta_str}")
+        elif hasattr(v, "__dict__"):
+            # ImageQuality, DedupAccuracy
+            click.echo(f"{k:20}: {v}")
+
+
+@harness.group()
+def baseline():
+    """Manage regression baselines."""
+    pass
+
+
+@baseline.command("freeze")
+@click.option("--name", required=True, help="Unique name for the baseline.")
+@click.option(
+    "--db",
+    type=click.Path(exists=True, path_type=Path),
+    default=Path("cards.sqlite"),
+)
+@click.option(
+    "--truth-dir",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+)
+@click.option("--videos", help="Comma-separated list of video IDs.")
+def freeze(name: str, db: Path, truth_dir: Path, videos: Optional[str]):
+    """Run metrics on the current pipeline and freeze as a baseline."""
+    if videos:
+        video_ids = [v.strip() for v in videos.split(",") if v.strip()]
+    else:
+        video_ids = [
+            p.name.replace(".truth.json", "")
+            for p in truth_dir.glob("*.truth.json")
+        ]
+        video_ids = sorted(list(set(video_ids)))
+
+    click.echo(f"Freezing baseline '{name}' using {len(video_ids)} videos...")
+    report = run_metrics(db_path=db, truth_dir=truth_dir, videos=video_ids)
+
+    code_sha = _get_git_sha()
+    freeze_baseline(
+        db_path=db,
+        name=name,
+        code_sha=code_sha,
+        config={},  # TODO: load current pipeline config
+        metrics=_to_dict(report.metrics),
+        per_video=[_to_dict(pv) for pv in report.per_video],
+    )
+    click.echo(f"Baseline '{name}' frozen @ {code_sha}")
+
+
+@harness.command()
+@click.argument("paths", nargs=-1, type=click.Path(exists=True, path_type=Path))
+def validate(paths: list[Path]):
+    """Validate truth.json files against the schema."""
+    exit_code = 0
+    for p in paths:
+        res = validate_file(p)
+        if res == 0:
+            click.echo(f"{p}: valid")
+        else:
+            exit_code = 1
+    if exit_code != 0:
+        raise click.Abort()
+
+
+def _compute_deltas(current: dict, baseline: dict) -> dict:
+    deltas = {}
+    for k, v in current.items():
+        bv = baseline.get(k)
+        if isinstance(v, (int, float)) and isinstance(bv, (int, float)):
+            deltas[k] = v - bv
+        elif hasattr(v, "ari") and hasattr(bv, "ari"):
+            # DedupAccuracy
+            deltas[k] = {
+                "ari": (v.ari - bv.ari) if v.ari is not None and bv.ari is not None else None,
+                "pair_f1": (v.pair_f1 - bv.pair_f1) if v.pair_f1 is not None and bv.pair_f1 is not None else None,
+            }
+        elif hasattr(v, "mean_ssim") and hasattr(bv, "mean_ssim"):
+            # ImageQuality
+            deltas[k] = {
+                "mean_ssim": (v.mean_ssim - bv.mean_ssim) if v.mean_ssim is not None and bv.mean_ssim is not None else None,
+                "coverage": v.coverage - bv.coverage,
+            }
+    return deltas
+
+
+def _get_git_sha() -> str:
+    try:
+        return (
+            subprocess.check_output(["git", "rev-parse", "HEAD"])
+            .decode()
+            .strip()
+        )
+    except Exception:
+        return "unknown"
+
+
+def _to_dict(obj: Any) -> Any:
+    if hasattr(obj, "__dict__"):
+        return {k: _to_dict(v) for k, v in obj.__dict__.items()}
+    if isinstance(obj, list):
+        return [_to_dict(v) for v in obj]
+    if isinstance(obj, dict):
+        return {k: _to_dict(v) for k, v in obj.items()}
+    return obj

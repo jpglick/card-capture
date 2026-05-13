@@ -34,6 +34,7 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 
 from harness.schema import ExpectedCard, TruthFile
 
@@ -49,8 +50,8 @@ class MatchPair:
       angle equals the expected side for this GT slot.
     """
 
-    gt_card_id: str | None
-    detection_id: int | None  # card_instances.id
+    gt_card_id: Optional[str]
+    detection_id: Optional[int]  # card_instances.id
     side_match: bool
 
 
@@ -59,7 +60,7 @@ class _Detection:
     """Internal representation of one detected card_instance."""
 
     instance_id: int
-    angle: str | None
+    angle: Optional[str]
     start_ms: int  # min timestamp across card_views
     end_ms: int  # max timestamp across card_views
 
@@ -69,8 +70,8 @@ class _Slot:
     """Internal representation of one GT matching slot."""
 
     gt_card_id: str
-    expected_side: str | None  # "Front", "Back", or None (ordering fallback)
-    window: tuple[int, int] | None  # (start_ms, end_ms) or None
+    expected_side: Optional[str]  # "Front", "Back", or None (ordering fallback)
+    window: Optional[tuple[int, int]]  # (start_ms, end_ms) or None
 
 
 def match_detections_to_truth(
