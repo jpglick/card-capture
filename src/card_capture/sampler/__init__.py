@@ -785,15 +785,31 @@ class AdaptivePresenceSampler:
         self.last_valley_splits = self._compute_valley_splits(self._scan_frames)
         windows = self._build_windows(self._scan_frames, forced_splits=self.last_valley_splits)
 
-        # Collect background proxies: frames with the lowest presence scores
+        # Collect background proxies: prioritize frames from detected valley splits
         bg_candidates: list[tuple[float, int, np.ndarray]] = []  # (-score, frame_index, image)
-        for record in self._scan_frames:
-            score = record.presence_score
-            if score < self._bg_safety_threshold:
-                if len(bg_candidates) < self._max_bg_proxies:
-                    heapq.heappush(bg_candidates, (-score, record.frame_index, record.image.copy()))
-                elif score < -bg_candidates[0][0]:
-                    heapq.heapreplace(bg_candidates, (-score, record.frame_index, record.image.copy()))
+        
+        # 1. First, try to pick from valley splits (most reliable empty workspace)
+        if self.last_valley_splits:
+            # Sort splits to find intervals between them or near them
+            # For simplicity, let's just pick frames immediately following split points
+            # (which usually represent the start of an empty window)
+            for split_idx in self.last_valley_splits[:self._max_bg_proxies]:
+                # Find the record for this split or near it
+                for record in self._scan_frames:
+                    if record.frame_index >= split_idx:
+                        heapq.heappush(bg_candidates, (-record.presence_score, record.frame_index, record.image.copy()))
+                        break
+        
+        # 2. If we don't have enough from valleys, pick from lowest presence scores globally
+        if len(bg_candidates) < self._max_bg_proxies:
+            for record in self._scan_frames:
+                score = record.presence_score
+                # Be more conservative if we already have some or if score is high
+                if score < self._bg_safety_threshold:
+                    if len(bg_candidates) < self._max_bg_proxies:
+                        heapq.heappush(bg_candidates, (-score, record.frame_index, record.image.copy()))
+                    elif score < -bg_candidates[0][0]:
+                        heapq.heapreplace(bg_candidates, (-score, record.frame_index, record.image.copy()))
 
         # Sort by score ascending (lowest first)
         bg_candidates.sort(key=lambda x: -x[0])

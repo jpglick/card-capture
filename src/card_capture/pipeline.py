@@ -18,7 +18,7 @@ from .cropper import CardCropper, PrecisionNormalizer
 from .gpu_refinement import KorniaNormalizer
 from .detectors import CardDetector
 from .deduplicator import VisualDeduplicator
-from .fuser import calculate_sharpness, find_glare_centroid, MultiFrameFuser
+from .fuser import calculate_sharpness, find_glare_centroid
 from .ingestion import FrameTriageFilter, _open_capture
 from .models import (
     CornerDetection,
@@ -746,16 +746,8 @@ class VideoProcessor:
             best_canonical = max(canonical_entries, key=lambda e: e["quality_score"].total)
             phash = best_canonical["visual_hash"]
 
-            # Stage 9: Foil-aware fusion of canonical frames
-            # Extract normalized frames from canonical entries for fusion
-            canonical_frames = [entry["normalized"] for entry in canonical_entries]
-            fuser = MultiFrameFuser()
-            # Use foil_threshold from options; if enable_foil_aware_fusion is False, disable foil detection
-            foil_threshold = options.foil_threshold if options.enable_foil_aware_fusion else None
-            fused_canonical = fuser.fuse(canonical_frames, foil_threshold=foil_threshold)
-            # Ensure fused_canonical is not None (best_canonical should always exist with frames)
-            if fused_canonical is None:
-                fused_canonical = best_canonical["normalized"]
+            # Use the single best canonical frame directly (Stage 9 Fusion removed due to ghosting)
+            fused_canonical = best_canonical["normalized"]
 
             candidate_hashes: list[str] = []
             for entry in canonical_entries:
@@ -1007,8 +999,9 @@ class VideoProcessor:
                 final_quality_score = float(prepared.canonical_entries[0]["quality_score"].total)
                 
                 # Phantoms (card stand) and extremely blurry/occluded tracks are dropped here.
-                # Threshold 0.5 is chosen based on card 21 (phantom) scoring ~0.43.
-                if not is_intra_run_duplicate and final_quality_score >= 0.5:
+                # Threshold 0.45 is chosen to balance recall of low-novelty cards
+                # vs rejection of static empty workspace tracks (~0.40).
+                if not is_intra_run_duplicate and final_quality_score >= 0.45:
                     self.storage.add_saved_card(
                         detection_id=best_view_id,
                         image_path=canonical_image_path,
@@ -1016,8 +1009,8 @@ class VideoProcessor:
                     )
                     saved_count += 1
                 elif not is_intra_run_duplicate:
-                    # Log rejection for debugging if needed
-                    pass
+                    print(f"[Stage: Storage] | rejected track {prepared.track.instance_id} "
+                          f"(quality score {final_quality_score:.3f} < 0.45)")
 
         t_storage = time.time() - t_storage_start
 
