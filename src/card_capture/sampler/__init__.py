@@ -210,9 +210,11 @@ class StabilityBasedSampler:
 
 class SyntheticSampler:
     def sample(self, video_path: Path, sample_fps: float) -> Iterator[FrameSample]:
-        image = np.zeros((120, 90, 3), dtype=np.uint8)
-        image[15:105, 10:80] = 180
-        yield FrameSample(frame_index=0, timestamp_ms=0, image=image, width=90, height=120)
+        # Yield 10 identical frames so the tracker can form a stable track
+        for i in range(10):
+            image = np.zeros((120, 90, 3), dtype=np.uint8)
+            image[15:105, 10:80] = 180
+            yield FrameSample(frame_index=i, timestamp_ms=i * 100, image=image, width=90, height=120)
 
 class ContrastBasedSampler:
     def __init__(self, video_path: str, scan_fps: float = 5.0, scan_width: int = 160, contrast_threshold: float = 600.0, min_presence_frames: int = 3, candidates_per_window: int = 3, device: str = "auto", window_merge_gap: int = 5, motion_threshold: float = 8.0, histogram_sigma: float = 1.5, edge_density_threshold: float = 0.15, sobel_magnitude_threshold: float = 50.0, detection_metrics: list[str] = None):

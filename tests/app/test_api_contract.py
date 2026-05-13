@@ -68,9 +68,19 @@ def test_stub_routes_return_501():
         "/api/v1/videos": {"filename": "test.mov"},
     }
 
+    implemented = {
+        "/api/v1/config/presets",
+        "/api/v1/videos",
+        "/api/v1/runs",
+        "/api/v1/cards",
+        "/api/v1/label/fb/next",
+        "/api/v1/training/datasets",
+        "/api/v1/regression/baselines",
+    }
+
     for method, path in ROUTES_REQUIRED:
-        if path == "/api/v1/config/presets":
-            continue  # this one is implemented
+        if path in implemented:
+            continue
         func = getattr(client, method.lower())
         kwargs: dict = {}
         if method == "POST" and path in post_bodies:

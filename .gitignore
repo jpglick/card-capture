@@ -19,6 +19,10 @@ sample_run_*/
 # but allow committed test fixtures
 !tests/**/*.sqlite
 !tests/**/*.sqlite3
+.metaflow/
+sweep_k*/
+fusion_sweep.json
+IMG_5872.truth.json
 
 # Large Media Files
 *.MOV
