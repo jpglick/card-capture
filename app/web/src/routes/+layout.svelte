@@ -11,7 +11,7 @@
             <li><a href="/videos">Videos</a></li>
             <li><a href="/runs">Runs</a></li>
             <li><a href="/cards">Cards</a></li>
-            <li><a href="/labeling">Labeling</a></li>
+            <li><a href="/label">Label</a></li>
             <li><a href="/regression">Regression</a></li>
         </ul>
     </nav>

@@ -163,18 +163,44 @@ def freeze(name: str, db: Path, truth_dir: Path, videos: Optional[str]):
 
 
 @harness.command()
-@click.argument("paths", nargs=-1, type=click.Path(exists=True, path_type=Path))
-def validate(paths: list[Path]):
-    """Validate truth.json files against the schema."""
-    exit_code = 0
-    for p in paths:
-        res = validate_file(p)
-        if res == 0:
-            click.echo(f"{p}: valid")
-        else:
-            exit_code = 1
-    if exit_code != 0:
-        raise click.Abort()
+@click.option(
+    "--db",
+    type=click.Path(exists=True, path_type=Path),
+    default=Path("cards.sqlite"),
+)
+@click.option(
+    "--out-dir",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Directory to save exported truth.json files.",
+)
+@click.option("--videos", help="Comma-separated video IDs to export.")
+def export(db: Path, out_dir: Path, videos: Optional[str]):
+    """Export truth.json files from the database."""
+    import sqlite3
+    
+    out_dir.mkdir(parents=True, exist_ok=True)
+    
+    video_ids = [v.strip() for v in videos.split(",")] if videos else []
+    
+    with sqlite3.connect(str(db)) as conn:
+        conn.row_factory = sqlite3.Row
+        query = "SELECT video_id, payload_json FROM truth_files"
+        params = []
+        if video_ids:
+            query += " WHERE video_id IN (" + ",".join(["?"] * len(video_ids)) + ")"
+            params = video_ids
+            
+        rows = conn.execute(query, params).fetchall()
+        
+        for r in rows:
+            vid = r["video_id"]
+            payload = r["payload_json"]
+            
+            # Save as <vid>.truth.json
+            p = out_dir / f"{vid}.truth.json"
+            p.write_text(payload)
+            click.echo(f"Exported {p}")
 
 
 def _compute_deltas(current: dict, baseline: dict) -> dict:
