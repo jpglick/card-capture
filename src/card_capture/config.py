@@ -37,6 +37,8 @@ class PipelineConfig:
     centroid_jump_ratio: float = 0.30
     centroid_jump_frames: int = 3
     reid_distance_threshold: float = 0.6
+    fusion_target_frames: int = 4
+    corner_refinement: bool = False
     debug: DebugConfig = field(default_factory=DebugConfig)
 
 def load_config(path: Path) -> PipelineConfig:

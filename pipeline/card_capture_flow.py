@@ -18,12 +18,18 @@ class CardCaptureFlow(FlowSpec):
     db = Parameter("db", help="SQLite database path", required=True)
     detector = Parameter("detector", help="Detector backend", default="docaligner")
     config_preset = Parameter("config-preset", default="balanced")
+    fusion_target_frames = Parameter("fusion-target-frames", default=4, type=int)
+    corner_refinement = Parameter("corner-refinement", default=False, type=bool)
 
     @step
     def start(self):
         from pipeline.steps.start import init_run
-        self.run_context = init_run(self.video, self.output_dir, self.db,
-                                    self.detector, self.config_preset)
+        self.run_context = init_run(
+            self.video, self.output_dir, self.db,
+            self.detector, self.config_preset,
+            fusion_target_frames=self.fusion_target_frames,
+            corner_refinement=self.corner_refinement
+        )
         self.next(self.detect)
 
     @step

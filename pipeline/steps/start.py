@@ -50,6 +50,8 @@ class RunContext:
     centroid_jump_frames: int = 3
     foil_threshold: float = 50.0
     enable_foil_aware_fusion: bool = True
+    fusion_target_frames: int = 4
+    corner_refinement: bool = False
     telemetry_scope: str = "canonical"
 
     # Filled in after storage registration
@@ -62,6 +64,7 @@ def init_run(
     db_path: str,
     detector: str = "docaligner",
     config_preset: str = "balanced",
+    fusion_target_frames: int = 4,
     **kwargs,
 ) -> RunContext:
     """Create output directories, initialise the database, and return a RunContext.
@@ -72,6 +75,7 @@ def init_run(
         db_path:      Path to the SQLite database (created if absent).
         detector:     Detector backend key (``"fake"`` or ``"docaligner"``).
         config_preset: Named config preset (``"balanced"``, ``"fast"``, ``"quality"``).
+        fusion_target_frames: Target number of frames for multi-frame fusion.
         **kwargs:     Override any ``RunContext`` field by keyword.
 
     Returns:
@@ -92,6 +96,7 @@ def init_run(
         config_preset=config_preset,
         frame_dir=str(frame_dir),
         crops_dir=str(crops_dir),
+        fusion_target_frames=fusion_target_frames,
         **kwargs,
     )
 

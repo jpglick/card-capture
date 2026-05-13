@@ -134,6 +134,17 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
         # Sort by score and take top 8 for canonical selection
         scored_candidates = sorted(candidates_data, key=lambda c: c["score_total"], reverse=True)[:8]
 
+        # Apply RANSAC corner refinement if enabled
+        if ctx.corner_refinement:
+            from card_capture.ml.inference.corner_refinement import refine_corners
+            for c in scored_candidates:
+                raw = decoded_images.get(c["frame_index"])
+                if raw is not None and c["corners"]:
+                    try:
+                        c["corners"] = refine_corners(raw, c["corners"])
+                    except Exception as e:
+                        print(f"Corner refinement failed for {instance_id}: {e}")
+
         # Batch Kornia warp if available
         normalized_by_detection: Dict[int, np.ndarray] = {}
         if kornia_normalizer is not None and scored_candidates:
