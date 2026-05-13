@@ -1,1 +1,0 @@
-{"flow_id": "CardCaptureFlow", "run_number": "1778644160148952", "step_name": "detect", "task_id": "2", "field_name": "ds-type", "type": "ds-type", "value": "local", "tags": ["attempt_id:0"], "user_name": "josh", "ts_epoch": 1778644161690}

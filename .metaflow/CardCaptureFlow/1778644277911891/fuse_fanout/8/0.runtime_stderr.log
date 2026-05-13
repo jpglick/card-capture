@@ -1,5 +1,0 @@
-[MFLOG|0|2026-05-13T03:51:26.801186Z|runtime|790bd661-8cea-4a7b-80a6-c78abd6942d0]<flow CardCaptureFlow step fuse_fanout> failed:
-[MFLOG|0|2026-05-13T03:51:26.806695Z|runtime|46a05517-8ee4-473d-a9fe-3a1b1bfc6d27]    Invalid self.next() transition detected on line 62:
-[MFLOG|0|2026-05-13T03:51:26.806776Z|runtime|4edb816c-1a68-44d4-a687-aacd186d52c8]    Foreach iterator over fanout in step fuse_fanout produced zero splits. Check your variable.
-[MFLOG|0|2026-05-13T03:51:26.827981Z|runtime|41fbfb75-3564-4f02-bed1-27fb4b4b7200]
-[MFLOG|0|2026-05-13T03:51:26.828567Z|runtime|5b1d0e21-5187-4c8c-a9ec-3a795a55834c]Task failed.

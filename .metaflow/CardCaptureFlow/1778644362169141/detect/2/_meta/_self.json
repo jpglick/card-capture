@@ -1,1 +1,0 @@
-{"run_number": "1778644362169141", "step_name": "detect", "task_id": "2", "flow_id": "CardCaptureFlow", "user_name": "josh", "tags": [], "system_tags": ["metaflow_version:2.19.29", "user:josh", "python_version:3.9.6", "runtime:dev"], "ts_epoch": 1778644363157}

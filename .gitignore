@@ -16,6 +16,10 @@ v3_output/
 sample_run_*/
 *.sqlite
 *.sqlite3
+.metaflow/
+sweep_k*/
+fusion_sweep.json
+IMG_5872.truth.json
 
 # Large Media Files
 *.MOV
