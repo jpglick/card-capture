@@ -1,6 +1,10 @@
 numpy
 opencv-python
-kornia
+supervision<0.28,>=0.21
+torchvision
+
+[harness]
+pydantic>=2
 
 [model]
 huggingface-hub
@@ -9,6 +13,7 @@ ultralytics
 [pipeline_v21]
 av
 onnxruntime
+boxmot>=0.14.0
 
 [review]
 fastapi

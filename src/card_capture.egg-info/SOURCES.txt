@@ -83,3 +83,6 @@ tests/test_storage_migration.py
 tests/test_valley_splits.py
 tests/test_warnings_filter.py
 tests/test_wave1_robustness.py
+tests/test_wave2_robustness.py
+tests/test_wave3_calibration.py
+tests/test_wave4_foil.py
