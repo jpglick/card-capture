@@ -1,48 +1,54 @@
-"""Label routes — `/api/v1/label`.
-
-Stubs only — Surface D fills in real implementations.
+"""API endpoints for labeling operations.
 """
-from __future__ import annotations
-
-from fastapi import APIRouter, HTTPException
-
-from app.schemas.v1 import (
-    DedupCluster,
-    DedupClusterUpdate,
-    LabelFB,
-    LabelFBNext,
-    LabelFBResult,
-    LabelTruth,
-)
+from typing import Optional
+from fastapi import APIRouter, Request, HTTPException
+from app.schemas.v1 import LabelTruth, LabelFB, DedupCluster
 
 router = APIRouter()
 
 
-@router.get("/truth/{video_id}", response_model=LabelTruth)
-def get_truth(video_id: str):
-    raise HTTPException(status_code=501, detail="not implemented yet")
+def _svc(request: Request):
+    return request.app.state.labeling_service
 
 
-@router.put("/truth/{video_id}", response_model=LabelTruth)
-def put_truth(video_id: str, payload: LabelTruth):
-    raise HTTPException(status_code=501, detail="not implemented yet")
+@router.get("/truth/{video_id}", response_model=Optional[LabelTruth])
+def get_truth(video_id: str, request: Request):
+    payload = _svc(request).get_truth(video_id)
+    return payload
 
 
-@router.get("/fb/next", response_model=LabelFBNext)
-def get_fb_next():
-    raise HTTPException(status_code=501, detail="not implemented yet")
+@router.put("/truth/{video_id}", status_code=204)
+def put_truth(video_id: str, body: LabelTruth, request: Request):
+    if body.video_id and body.video_id != video_id:
+        raise HTTPException(status_code=400, detail="video_id mismatch")
+    _svc(request).put_truth(video_id, body.model_dump())
 
 
-@router.post("/fb", response_model=LabelFBResult, status_code=201)
-def post_fb_label(payload: LabelFB):
-    raise HTTPException(status_code=501, detail="not implemented yet")
+@router.get("/fb/next")
+def get_next_fb(request: Request):
+    return _svc(request).next_fb_candidate() or {}
 
 
 @router.get("/clusters", response_model=list[DedupCluster])
-def list_clusters(status: str | None = None, page: int = 1, page_size: int = 20):
-    raise HTTPException(status_code=501, detail="not implemented yet")
+def list_clusters(request: Request, status: Optional[str] = None):
+
+    label_id = _svc(request).post_fb_label(
+        instance_id=body.instance_id,
+        frame_index=body.frame_index,
+        side=body.side,
+    )
+    return {"label_id": label_id}
 
 
-@router.patch("/clusters/{cluster_id}", response_model=DedupCluster)
-def update_cluster(cluster_id: int, payload: DedupClusterUpdate):
-    raise HTTPException(status_code=501, detail="not implemented yet")
+@router.get("/clusters", response_model=list[DedupCluster])
+def list_clusters(request: Request, status: Optional[str] = None):
+    return _svc(request).list_clusters(status=status)
+
+
+@router.patch("/clusters/{cluster_id}", status_code=204)
+def patch_cluster(cluster_id: int, body: dict, request: Request):
+    _svc(request).patch_cluster(
+        cluster_id,
+        status=body.get("status"),
+        confirmed=body.get("confirmed"),
+    )

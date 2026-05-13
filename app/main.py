@@ -1,38 +1,39 @@
 """Card Capture v4 — FastAPI application factory.
-
-Usage (development):
-    uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
-
-Usage (production-ish):
-    python -m app.main
 """
 from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from typing import Optional
 
 from fastapi import FastAPI
 
 from app.api import cards, config, events, label, regression, runs, training, videos
 from app.services.event_bus import EventBus
 from app.services.training_service import TrainingService
+from app.services.labeling_service import LabelingService
+from app.services.regression_service import RegressionService
 
 
-def create_app(db_path: Path | None = None) -> FastAPI:
+def create_app(db_path: Optional[Path] = None) -> FastAPI:
     """Create and configure the FastAPI application.
-
-    Args:
-        db_path: Path to the SQLite database.  Defaults to ``cards.sqlite`` in
-                 the current working directory.
-
-    All configuration is injected here so tests can call ``create_app()``
-    with a clean state every time.
     """
     if db_path is None:
         db_path = Path("cards.sqlite")
 
+    # Ensure the database file exists.
     if not db_path.exists():
+        db_path.parent.mkdir(parents=True, exist_ok=True)
         sqlite3.connect(db_path).close()
+
+    # 1. Initialise storage tables (creates pipeline_events, card_instances, etc. if needed)
+    from card_capture.storage import Storage
+    storage = Storage(db_path)
+    storage.initialize()
+
+    # 2. Run migrations (applies v4 schema: truth_files, regression_baselines, etc.)
+    from migrations.run_migrations import apply_migrations
+    apply_migrations(db_path)
 
     app = FastAPI(
         title="Card Capture v4",
@@ -43,9 +44,13 @@ def create_app(db_path: Path | None = None) -> FastAPI:
         ),
     )
 
+    # Initialize services
     app.state.event_bus = EventBus()
     app.state.training_service = TrainingService(db_path=db_path)
+    app.state.labeling_service = LabelingService(db_path=db_path)
+    app.state.regression_service = RegressionService(db_path=db_path)
 
+    # Include routers
     app.include_router(videos.router, prefix="/api/v1/videos", tags=["videos"])
     app.include_router(runs.router, prefix="/api/v1/runs", tags=["runs"])
     app.include_router(cards.router, prefix="/api/v1/cards", tags=["cards"])
@@ -63,5 +68,4 @@ app = create_app()
 
 if __name__ == "__main__":
     import uvicorn
-
     uvicorn.run("app.main:app", host="127.0.0.1", port=8000, reload=True)

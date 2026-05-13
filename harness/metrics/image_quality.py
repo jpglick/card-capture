@@ -25,6 +25,7 @@ import logging
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 
@@ -38,8 +39,8 @@ logger = logging.getLogger(__name__)
 class ImageQuality:
     """Result of the image_quality metric."""
 
-    mean_ssim: float | None
-    mean_psnr: float | None
+    mean_ssim: Optional[float]
+    mean_psnr: Optional[float]
     coverage: float  # 0.0 – 1.0
 
 
@@ -88,8 +89,14 @@ def image_quality(
             continue
         fused_path = Path(fused_path_str)
         if not fused_path.exists():
-            logger.warning("Fused image not found: %s", fused_path)
-            continue
+            # Robust fallback for fixtures: try relative to the database directory
+            # assuming the standard v4 structure: <db_dir>/crops/<name>
+            fallback_path = db_path.parent / "crops" / fused_path.name
+            if fallback_path.exists():
+                fused_path = fallback_path
+            else:
+                logger.warning("Fused image not found: %s", fused_path)
+                continue
 
         ref_img = _load_grey(ref_path)
         fused_img = _load_grey(fused_path)
@@ -131,7 +138,7 @@ def image_quality(
     )
 
 
-def _load_fused_paths(db_path: Path) -> dict[int, str | None]:
+def _load_fused_paths(db_path: Path) -> dict[int, Optional[str]]:
     """Return mapping from card_instance.id → fused_image_path."""
     with sqlite3.connect(str(db_path)) as conn:
         conn.row_factory = sqlite3.Row

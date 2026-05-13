@@ -47,24 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
     review.add_argument("--port", type=int, default=8000)
 
     harness_p = subparsers.add_parser("harness", help="Run regression harness against golden corpus")
-    harness_sub = harness_p.add_subparsers(dest="harness_command", required=True)
-
-    harness_run = harness_sub.add_parser("run", help="Run pipeline on corpus and write report")
-    harness_run.add_argument("--corpus", type=Path, default=Path("tests/fixtures/golden_corpus"))
-    harness_run.add_argument("--db", type=Path, default=Path("card_capture_output/cards.sqlite"))
-    harness_run.add_argument("--output-dir", type=Path, default=Path("card_capture_output"))
-    harness_run.add_argument("--reports-dir", type=Path, default=Path("reports"))
-    harness_run.add_argument("--baseline", type=Path, default=None,
-                              help="Optional baseline JSON report to compute deltas against")
-    harness_run.add_argument(
-        "--presence-threshold", type=float, default=None,
-        help="Classifier confidence threshold for card presence (0–1). Default: 0.5.",
-    )
-
-    harness_compare = harness_sub.add_parser("compare", help="Compare two existing reports")
-    harness_compare.add_argument("baseline", type=Path)
-    harness_compare.add_argument("current", type=Path)
-    harness_compare.add_argument("--out", type=Path, default=None)
+    harness_p.add_argument("harness_args", nargs=argparse.REMAINDER)
 
     # dataset subcommand
     dataset_p = subparsers.add_parser("dataset", help="Training dataset utilities")
@@ -260,82 +243,25 @@ def _run_review(args: argparse.Namespace) -> int:
 
 
 def _run_harness(args: argparse.Namespace) -> int:
-    if args.harness_command == "run":
-        return _run_harness_run(args)
-    if args.harness_command == "compare":
-        return _run_harness_compare(args)
-    return 2
-
-
-def _run_harness_run(args: argparse.Namespace) -> int:
-    import json
-    import subprocess
+    from harness.cli import harness as harness_group
     import sys
-    from pathlib import Path as _P
-    # Ensure project root is on sys.path so `tests` package is importable from the CLI
-    _project_root = str(_P(__file__).parent.parent.parent)
-    if _project_root not in sys.path:
-        sys.path.insert(0, _project_root)
-    from tests.regression.harness import HarnessConfig, run_corpus
-    from tests.regression.report import write_json_report, write_markdown_report, AggregateReport
-    from tests.regression.metrics import VideoMetrics
-    from tests.regression.cross_video import DedupMetrics
-
+    
+    # We find where 'harness' appeared in sys.argv and pass everything after it to click.
     try:
-        sha = subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"],
-            stderr=subprocess.DEVNULL
-        ).decode().strip()
-    except Exception:
-        sha = "unknown"
-
-    cfg = HarnessConfig(
-        corpus_dir=args.corpus,
-        output_dir=args.output_dir,
-        git_sha=sha,
-        db_path=args.db,
-        presence_threshold=getattr(args, "presence_threshold", None) or 0.5,
-    )
-    report = run_corpus(cfg)
-
-    args.reports_dir.mkdir(parents=True, exist_ok=True)
-    json_path = args.reports_dir / f"{sha}.json"
-    md_path = args.reports_dir / f"{sha}.md"
-
-    baseline_report = None
-    if args.baseline and args.baseline.exists():
-        raw = json.loads(args.baseline.read_text())
-        baseline_report = AggregateReport(
-            git_sha=raw["git_sha"],
-            per_video=tuple(VideoMetrics(**v) for v in raw["per_video"]),
-            dedup=DedupMetrics(**raw["dedup"]),
-        )
-
-    write_json_report(report, json_path)
-    write_markdown_report(report, md_path, baseline=baseline_report)
-    print(f"Wrote {json_path} and {md_path}")
-    return 0
-
-
-def _run_harness_compare(args: argparse.Namespace) -> int:
-    import json
-    from tests.regression.report import AggregateReport, write_markdown_report
-    from tests.regression.metrics import VideoMetrics
-    from tests.regression.cross_video import DedupMetrics
-
-    def _load(path: Path) -> AggregateReport:
-        raw = json.loads(path.read_text())
-        return AggregateReport(
-            git_sha=raw["git_sha"],
-            per_video=tuple(VideoMetrics(**v) for v in raw["per_video"]),
-            dedup=DedupMetrics(**raw["dedup"]),
-        )
-
-    baseline = _load(args.baseline)
-    current = _load(args.current)
-    out = args.out or args.current.with_suffix(".compare.md")
-    write_markdown_report(current, out, baseline=baseline)
-    print(f"Wrote {out}")
+        harness_idx = sys.argv.index("harness")
+        click_args = sys.argv[harness_idx + 1:]
+    except ValueError:
+        click_args = []
+        
+    try:
+        # Use standalone_mode=False so it doesn't sys.exit(0) on success
+        harness_group.main(args=click_args, standalone_mode=False)
+    except Exception as e:
+        # Click's Abort or Exit might be caught here if not handled by standalone_mode
+        if hasattr(e, "exit_code") and e.exit_code == 0: # type: ignore
+            return 0
+        print(f"Harness error: {e}")
+        return 1
     return 0
 
 

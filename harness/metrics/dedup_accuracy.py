@@ -22,6 +22,7 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 from harness.match import match_detections_to_truth
 from harness.schema import TruthFile
@@ -31,8 +32,8 @@ from harness.schema import TruthFile
 class DedupAccuracy:
     """Result of the dedup_accuracy metric."""
 
-    ari: float | None
-    pair_f1: float | None
+    ari: Optional[float]
+    pair_f1: Optional[float]
 
 
 def dedup_accuracy(
@@ -93,7 +94,7 @@ def _build_predicted_clusters(db_path: Path) -> dict[int, int]:
         ).fetchall()
 
     # Build parent map
-    parent: dict[int, int | None] = {
+    parent: dict[int, Optional[int]] = {
         int(r["id"]): (int(r["is_duplicate_of"]) if r["is_duplicate_of"] is not None else None)
         for r in rows
     }
