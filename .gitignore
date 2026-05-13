@@ -16,6 +16,9 @@ v3_output/
 sample_run_*/
 *.sqlite
 *.sqlite3
+# but allow committed test fixtures
+!tests/**/*.sqlite
+!tests/**/*.sqlite3
 
 # Large Media Files
 *.MOV
