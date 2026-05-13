@@ -4,7 +4,7 @@ See docs/contracts/truth-schema.md for the full specification.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -17,13 +17,13 @@ class ExpectedCard(BaseModel):
     back_present: bool
     physical_card_key: str
     is_foil: bool
-    approx_front_window_ms: tuple[int, int] | None = None
-    approx_back_window_ms: tuple[int, int] | None = None
-    notes: str | None = None
+    approx_front_window_ms: Optional[tuple[int, int]] = None
+    approx_back_window_ms: Optional[tuple[int, int]] = None
+    notes: Optional[str] = None
 
     @field_validator("approx_front_window_ms", "approx_back_window_ms", mode="before")
     @classmethod
-    def _ordered_window(cls, v: Any) -> tuple[int, int] | None:
+    def _ordered_window(cls, v: Any) -> Optional[tuple[int, int]]:
         if v is None:
             return v
         start, end = v

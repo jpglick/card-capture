@@ -32,6 +32,13 @@ review = [
   "python-multipart",
   "uvicorn",
 ]
+app = [
+  "fastapi",
+  "uvicorn[standard]",
+  "sse-starlette",
+  "pydantic>=2",
+  "httpx",
+]
 test = [
   "pytest",
   "httpx",
@@ -40,6 +47,8 @@ test = [
 ]
 harness = [
   "pydantic>=2",
+  "scikit-image>=0.21",
+  "scikit-learn>=1.3",
 ]
 
 [project.scripts]

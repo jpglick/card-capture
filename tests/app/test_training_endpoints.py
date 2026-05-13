@@ -23,13 +23,12 @@ def test_list_datasets(client: TestClient):
     assert r.status_code == 200
     data = r.json()
     assert isinstance(data, list)
-    names = {d["name"] for d in data}
-    assert "fb_labels" in names
-    assert "dedup_clusters" in names
+    names = {d["model_name"] for d in data}
+    assert "fb_classifier" in names
 
 
 def test_retrain_returns_job_id(client: TestClient):
-    r = client.post("/api/v1/training/retrain/fb_classifier", json={"dry_run": True})
+    r = client.post("/api/v1/training/retrain/fb_classifier", json={"epochs": 1, "learning_rate": 0.001})
     assert r.status_code in (200, 202)
     body = r.json()
     assert "job_id" in body
@@ -38,7 +37,7 @@ def test_retrain_returns_job_id(client: TestClient):
 
 def test_get_job(client: TestClient):
     j = client.post(
-        "/api/v1/training/retrain/fb_classifier", json={"dry_run": True}
+        "/api/v1/training/retrain/fb_classifier", json={"epochs": 1, "learning_rate": 0.001}
     ).json()
     r = client.get(f"/api/v1/training/jobs/{j['job_id']}")
     assert r.status_code == 200

@@ -1,0 +1,39 @@
+{
+  "video_id": "dedup",
+  "schema_version": 1,
+  "expected_cards": [
+    {
+      "card_id": "card_01",
+      "front_present": true,
+      "back_present": false,
+      "physical_card_key": "key_pair",
+      "is_foil": false,
+      "approx_front_window_ms": [
+        1000,
+        2000
+      ]
+    },
+    {
+      "card_id": "card_02",
+      "front_present": true,
+      "back_present": false,
+      "physical_card_key": "key_pair",
+      "is_foil": false,
+      "approx_front_window_ms": [
+        3500,
+        4500
+      ]
+    },
+    {
+      "card_id": "card_03",
+      "front_present": true,
+      "back_present": false,
+      "physical_card_key": "key_solo",
+      "is_foil": false,
+      "approx_front_window_ms": [
+        6500,
+        7500
+      ]
+    }
+  ]
+}
