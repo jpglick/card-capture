@@ -14,6 +14,10 @@
         <h2>Cluster Confirmer</h2>
         <p>Verify deduplication groups across sessions.</p>
     </a>
+    <a href="/label/hard_cases" class="tool-card">
+        <h2>Hard Case Review</h2>
+        <p>Graduate failure cases into the permanent training set.</p>
+    </a>
 </div>
 
 <style>

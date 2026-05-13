@@ -47,3 +47,16 @@ def get_job(job_id: str, request: Request):
         "created_at": job.created_at,
         "completed_at": job.completed_at,
     }
+
+
+@router.get("/hard_cases")
+def list_hard_cases(request: Request, stage_id: Optional[str] = None):
+    """List all captured hard cases."""
+    return request.app.state.mining_service.list_hard_cases(stage_id=stage_id)
+
+
+@router.post("/hard_cases/{case_id}/promote")
+def promote_hard_case(case_id: int, model_name: str, label: str, request: Request):
+    """Promote a hard case to the permanent training set."""
+    path = request.app.state.mining_service.promote_to_training(case_id, model_name, label)
+    return {"path": str(path)}

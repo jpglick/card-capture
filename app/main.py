@@ -17,6 +17,7 @@ from app.services.video_service import VideoService
 from app.services.runs_service import RunService
 from app.services.cards_service import CardService
 from app.services.playground_service import PlaygroundService
+from app.services.mining_service import MiningService
 
 
 def create_app(db_path: Optional[Path] = None) -> FastAPI:
@@ -58,6 +59,10 @@ def create_app(db_path: Optional[Path] = None) -> FastAPI:
     app.state.run_service = RunService(db_path=db_path)
     app.state.card_service = CardService(db_path=db_path)
     app.state.playground_service = PlaygroundService(db_path=db_path)
+    app.state.mining_service = MiningService(
+        db_path=db_path,
+        training_data_dir=Path("data/training")
+    )
 
     # Include routers
     app.include_router(videos.router, prefix="/api/v1/videos", tags=["videos"])
