@@ -28,6 +28,10 @@ sample_run_*/
 .vscode/
 .idea/
 
+# Python cache
+__pycache__/
+*.py[cod]
+
 # Plan & Spec working files
 .worktrees/
 .pytest_cache/

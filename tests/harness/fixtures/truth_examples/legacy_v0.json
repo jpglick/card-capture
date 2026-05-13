@@ -1,0 +1,21 @@
+{
+  "video_id": "video_42",
+  "video_path": "/data/sessions/practice_03.mov",
+  "labeled_at": "2026-05-01",
+  "expected_cards": [
+    {
+      "card_id": "card_001",
+      "front_present": true,
+      "back_present": false,
+      "approx_front_window_ms": [4200, 6100],
+      "physical_card_key": "charizard_base_4_holo_1999"
+    },
+    {
+      "card_id": "card_002",
+      "front_present": true,
+      "back_present": true,
+      "approx_front_window_ms": [8000, 10000],
+      "approx_back_window_ms": [10500, 12000]
+    }
+  ]
+}

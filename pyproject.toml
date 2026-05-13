@@ -34,6 +34,9 @@ test = [
   "pytest",
   "httpx",
 ]
+harness = [
+  "pydantic>=2",
+]
 
 [project.scripts]
 card-capture = "card_capture.cli:main"

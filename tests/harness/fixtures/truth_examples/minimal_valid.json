@@ -1,0 +1,13 @@
+{
+  "video_id": "v1",
+  "schema_version": 1,
+  "expected_cards": [
+    {
+      "card_id": "c1",
+      "front_present": true,
+      "back_present": false,
+      "physical_card_key": "k1",
+      "is_foil": false
+    }
+  ]
+}
