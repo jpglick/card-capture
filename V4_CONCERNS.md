@@ -35,6 +35,10 @@ When adding an item:
 
 ### 1.1 — Pipeline now has two parallel implementations (monolith + Metaflow) drifting asymmetrically — **High** *(new in Wave 3 review)*
 
+*(Resolved decision-wise via ADR 0004. Execution is pending Surface A.)*
+See: `docs/architecture/decisions/0004-v4-modular-pipeline.md`
+
+
 **Where:** `src/card_capture/pipeline.py` (the 2,000-line monolith) and
 `pipeline/card_capture_flow.py` + `pipeline/steps/*` (the Metaflow
 decomposition from PR #45).
