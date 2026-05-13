@@ -210,14 +210,14 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
         def _to_scored(entry):
             c = entry["candidate"]
             qs = entry["quality_score"]
-            sc = _SC.__new__(_SC)
-            sc.detection_id = c["detection_id"]
-            sc.timestamp_ms = c.get("timestamp_ms", 0)
-            sc.image_path = c.get("image_path", "")
-            sc.score = qs
-            sc.corners = [(float(x), float(y)) for x, y in c["corners"]] if c["corners"] else []
-            sc.frame_index = c["frame_index"]
-            return sc
+            return _SC(
+                detection_id=c["detection_id"],
+                timestamp_ms=c.get("timestamp_ms", 0),
+                image_path=c.get("image_path", ""),
+                score=qs,
+                corners=[(float(x), float(y)) for x, y in c["corners"]] if c["corners"] else [],
+                frame_index=c["frame_index"],
+            )
 
         # Patch frame_entries to have "candidate" as a ScoredCandidate
         patched_entries = []

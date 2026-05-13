@@ -1,0 +1,1 @@
+{"flow_id": "CardCaptureFlow", "run_number": "1778644362169141", "step_name": "fuse", "task_id": "9", "field_name": "foreach-stack", "type": "foreach-stack", "value": ["fanout={'angle': 'Front', 'appearance"], "tags": ["attempt_id:0"], "user_name": "josh", "ts_epoch": 1778644372081}

@@ -227,6 +227,7 @@ def run(ctx: RunContext, novelty_out: NoveltyOutput) -> TrackOutput:
                     "frame_index": c.frame_index,
                     "timestamp_ms": c.timestamp_ms,
                     "image_path": c.image_path,
+                    "confidence": c.score.total,
                     "score_total": c.score.total,
                     "score_components": dict(c.score.components),
                     "corners": [(float(x), float(y)) for x, y in c.corners] if c.corners else [],
