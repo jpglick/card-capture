@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+import warnings
+warnings.warn(
+    "The monolith pipeline in src.card_capture.pipeline is deprecated and will be removed in Wave 5. "
+    "Use pipeline.card_capture_flow.CardCaptureFlow (Metaflow) instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 import hashlib
 import io
 import json

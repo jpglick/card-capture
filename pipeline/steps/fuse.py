@@ -80,8 +80,10 @@ def run(ctx: RunContext, prepared_track: Dict[str, Any]) -> FuseOutput:
             "session_id": prepared_track.get("session_id", 0),
             "angle": prepared_track["angle"],
             "fused_image_path": str(fused_path),
-            "primary_hash": str(prepared_track["frame_entries"][0]["visual_hash"]), # simplified
+            "primary_hash": str(prepared_track["frame_entries"][0]["visual_hash"]), # Matches monolith
             "quality_score": prepared_track["frame_entries"][0]["quality_score"], # simplified
+
+
             "side_score": prepared_track.get("side_score", 0.0),
             "appearance_vector": prepared_track.get("appearance_vector", []),
             "best_canonical_detection_id": prepared_track["best_canonical_detection_id"],

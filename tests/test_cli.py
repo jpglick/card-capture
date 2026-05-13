@@ -88,6 +88,8 @@ def test_process_wires_v21_options_into_processing_options(tmp_path: Path):
                 str(tmp_path / "cards.sqlite"),
                 "--config",
                 str(config_path),
+                "--pipeline",
+                "monolith",
             ]
         )
 
@@ -124,9 +126,10 @@ def test_cli_process_fake_detector_writes_database(tmp_path: Path):
             str(db_path),
             "--config",
             str(config_path),
+            "--pipeline",
+            "monolith",
         ]
     )
-
     assert exit_code == 0
     assert db_path.exists()
 
@@ -160,6 +163,8 @@ def test_cli_process_cancels_when_mps_unavailable_and_user_declines(tmp_path: Pa
                 str(tmp_path / "cards.sqlite"),
                 "--config",
                 str(config_path),
+                "--pipeline",
+                "monolith",
             ]
         )
 
@@ -204,6 +209,8 @@ def test_cli_process_continues_when_mps_unavailable_and_user_accepts(tmp_path: P
                 str(tmp_path / "cards.sqlite"),
                 "--config",
                 str(config_path),
+                "--pipeline",
+                "monolith",
             ]
         )
 
@@ -255,8 +262,9 @@ def test_cli_process_tracker_backend_choices():
 def test_pipeline_config_has_new_fields():
     from card_capture.config import PipelineConfig
     cfg = PipelineConfig()
-    assert cfg.tracker_backend == "botsort"
-    assert cfg.fast_scan_fps == 15.0
+    assert cfg.tracker_backend == "bytetrack"
+    assert cfg.centroid_jump_ratio == 0.30
+
     assert cfg.confirm_scan_fps == 5.0
     assert cfg.valley_drop_ratio == 0.40
     assert cfg.valley_min_width_frames == 3

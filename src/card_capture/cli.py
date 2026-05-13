@@ -26,6 +26,7 @@ def build_parser() -> argparse.ArgumentParser:
     process.add_argument("--output-dir", type=Path, default=Path("card_capture_output"))
     process.add_argument("--db", type=Path, default=Path("card_capture_output/cards.sqlite"))
     process.add_argument("--config", type=Path, default=Path("card_capture_config.json"))
+    process.add_argument("--detector", choices=["docaligner", "fake"], default=None, help="Detector backend")
     process.add_argument(
         "--presence-threshold", type=float, default=None,
         help="Classifier confidence threshold for card presence (0–1). Default: 0.5. "
@@ -40,6 +41,12 @@ def build_parser() -> argparse.ArgumentParser:
     process.add_argument("--centroid-jump-ratio", type=float, default=None, dest="centroid_jump_ratio")
     process.add_argument("--centroid-jump-frames", type=int, default=None, dest="centroid_jump_frames")
     process.add_argument("--reid-distance-threshold", type=float, default=None, dest="reid_distance_threshold")
+    process.add_argument(
+        "--pipeline",
+        choices=["metaflow", "monolith"],
+        default="metaflow",
+        help="Which pipeline architecture to run. The 'monolith' path is deprecated and will be removed in Wave 5. Use --pipeline metaflow (the default).",
+    )
 
     review = subparsers.add_parser("review", help="Start the local review UI")
     review.add_argument("--db", type=Path, default=Path("card_capture_output/cards.sqlite"))
@@ -117,7 +124,7 @@ def _run_process(args: argparse.Namespace) -> int:
 
     # Apply CLI overrides for new segmentation flags
     for attr in (
-        "tracker_backend", "fast_scan_fps", "confirm_scan_fps",
+        "detector", "tracker_backend", "fast_scan_fps", "confirm_scan_fps",
         "valley_drop_ratio", "valley_min_width_frames", "delta_spike_ratio",
         "centroid_jump_ratio", "centroid_jump_frames", "reid_distance_threshold",
     ):
@@ -148,62 +155,81 @@ def _run_process(args: argparse.Namespace) -> int:
             presence_threshold=presence_threshold,
         )
 
-    processor = VideoProcessor(storage=storage, sampler=sampler, detector=detector)
-    result = processor.process(
-        args.video_path,
-        ProcessingOptions(
-            output_dir=args.output_dir,
-            reader_backend=config.reader_backend,
-            queue_size=config.queue_size,
-            inference_batch_size=config.inference_batch_size,
-            corner_confidence_threshold=config.corner_confidence,
-            blur_threshold=config.blur_threshold,
-            variance_threshold=config.variance_threshold,
-            empty_pixel_threshold=config.empty_pixel_threshold,
-            group_gap_ms=config.group_gap_ms,
-            spatial_variance_threshold=config.spatial_variance_threshold,
-            min_track_length=config.min_track_length,
-            telemetry_scope=config.telemetry_scope,
-            triage_keep_percentile=config.triage_keep_percentile,
-            background_frames=config.background_frames,
-            background_threshold=config.background_threshold,
-            null_patience_frames=config.null_patience_frames,
-            rotate_180=config.rotate_180,
-            tracker_backend=config.tracker_backend,
-            centroid_jump_ratio=config.centroid_jump_ratio,
-            centroid_jump_frames=config.centroid_jump_frames,
-        ),
-        debug_config=config.debug
-    )
-    print(
-        f"Processed video_id={result.video_id}: "
-        f"{result.frame_count} frames ({result.accepted_frame_count} accepted), "
-        f"{result.detection_count} detections, {result.saved_instance_count} saved"
-    )
-    if isinstance(result.telemetry, dict) and result.telemetry:
-        telemetry = result.telemetry
-        t_high = telemetry.get("tracker_t_high", 0.0)
-        try:
-            t_high_display = f"{float(t_high):.3f}"
-        except (TypeError, ValueError):
-            t_high_display = "n/a"
-        print(
-            "Telemetry: "
-            f"windows={telemetry.get('last_presence_window_count', 0)}, "
-            f"selected_frames={telemetry.get('last_selected_frame_count', 0)}, "
-            f"tracks={telemetry.get('tracks_finalized', 0)}, "
-            f"duplicates={telemetry.get('duplicate_tracks', 0)}, "
-            f"tracker_events={telemetry.get('tracker_event_count', 0)}, "
-            f"t_high={t_high_display}, "
-            f"status={telemetry.get('status', 'unknown')}"
+    if getattr(args, "pipeline", "metaflow") == "metaflow":
+        import subprocess
+        cmd = [
+            sys.executable, "-m", "pipeline.card_capture_flow", "run",
+            "--video", str(args.video_path),
+            "--output-dir", str(args.output_dir),
+            "--db", str(args.db),
+            "--detector", config.detector,
+        ]
+        res = subprocess.run(cmd)
+        return res.returncode
+    else:
+        import warnings
+        warnings.warn(
+            "The 'monolith' pipeline path is deprecated and will be removed "
+            "in Wave 5. Use --pipeline metaflow (the default).", 
+            DeprecationWarning
         )
-        telemetry_path = telemetry.get("telemetry_path")
-        if telemetry_path:
-            print(f"Telemetry written to {telemetry_path}")
-        tracker_events_path = telemetry.get("tracker_association_events_path")
-        if tracker_events_path:
-            print(f"Tracker events written to {tracker_events_path}")
-    return 0
+
+        processor = VideoProcessor(storage=storage, sampler=sampler, detector=detector)
+        result = processor.process(
+            args.video_path,
+            ProcessingOptions(
+                output_dir=args.output_dir,
+                reader_backend=config.reader_backend,
+                queue_size=config.queue_size,
+                inference_batch_size=config.inference_batch_size,
+                corner_confidence_threshold=config.corner_confidence,
+                blur_threshold=config.blur_threshold,
+                variance_threshold=config.variance_threshold,
+                empty_pixel_threshold=config.empty_pixel_threshold,
+                group_gap_ms=config.group_gap_ms,
+                spatial_variance_threshold=config.spatial_variance_threshold,
+                min_track_length=config.min_track_length,
+                telemetry_scope=config.telemetry_scope,
+                triage_keep_percentile=config.triage_keep_percentile,
+                background_frames=config.background_frames,
+                background_threshold=config.background_threshold,
+                null_patience_frames=config.null_patience_frames,
+                rotate_180=config.rotate_180,
+                tracker_backend=config.tracker_backend,
+                centroid_jump_ratio=config.centroid_jump_ratio,
+                centroid_jump_frames=config.centroid_jump_frames,
+            ),
+            debug_config=config.debug
+        )
+        print(
+            f"Processed video_id={result.video_id}: "
+            f"{result.frame_count} frames ({result.accepted_frame_count} accepted), "
+            f"{result.detection_count} detections, {result.saved_instance_count} saved"
+        )
+        if isinstance(result.telemetry, dict) and result.telemetry:
+            telemetry = result.telemetry
+            t_high = telemetry.get("tracker_t_high", 0.0)
+            try:
+                t_high_display = f"{float(t_high):.3f}"
+            except (TypeError, ValueError):
+                t_high_display = "n/a"
+            print(
+                "Telemetry: "
+                f"windows={telemetry.get('last_presence_window_count', 0)}, "
+                f"selected_frames={telemetry.get('last_selected_frame_count', 0)}, "
+                f"tracks={telemetry.get('tracks_finalized', 0)}, "
+                f"duplicates={telemetry.get('duplicate_tracks', 0)}, "
+                f"tracker_events={telemetry.get('tracker_event_count', 0)}, "
+                f"t_high={t_high_display}, "
+                f"status={telemetry.get('status', 'unknown')}"
+            )
+            telemetry_path = telemetry.get("telemetry_path")
+            if telemetry_path:
+                print(f"Telemetry written to {telemetry_path}")
+            tracker_events_path = telemetry.get("tracker_association_events_path")
+            if tracker_events_path:
+                print(f"Tracker events written to {tracker_events_path}")
+        return 0
 
 
 def _confirm_cpu_fallback(device_status) -> bool:
