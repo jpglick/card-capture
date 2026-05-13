@@ -10,7 +10,9 @@ requires-python = ">=3.9"
 dependencies = [
   "numpy",
   "opencv-python",
+  "Pillow>=10.4.0",
   "supervision>=0.21,<0.28",
+  "torch>=2.6.0",
   "torchvision",
 ]
 
@@ -40,6 +42,8 @@ app = [
 test = [
   "pytest",
   "httpx",
+  "fastapi",
+  "pydantic>=2",
 ]
 harness = [
   "pydantic>=2",

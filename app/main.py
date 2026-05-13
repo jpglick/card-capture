@@ -8,18 +8,32 @@ Usage (production-ish):
 """
 from __future__ import annotations
 
+import sqlite3
+from pathlib import Path
+
 from fastapi import FastAPI
 
 from app.api import cards, config, events, label, regression, runs, training, videos
 from app.services.event_bus import EventBus
+from app.services.training_service import TrainingService
 
 
-def create_app() -> FastAPI:
+def create_app(db_path: Path | None = None) -> FastAPI:
     """Create and configure the FastAPI application.
+
+    Args:
+        db_path: Path to the SQLite database.  Defaults to ``cards.sqlite`` in
+                 the current working directory.
 
     All configuration is injected here so tests can call ``create_app()``
     with a clean state every time.
     """
+    if db_path is None:
+        db_path = Path("cards.sqlite")
+
+    if not db_path.exists():
+        sqlite3.connect(db_path).close()
+
     app = FastAPI(
         title="Card Capture v4",
         version="0.1.0",
@@ -29,8 +43,8 @@ def create_app() -> FastAPI:
         ),
     )
 
-    # Shared in-process event bus — one per app instance.
     app.state.event_bus = EventBus()
+    app.state.training_service = TrainingService(db_path=db_path)
 
     app.include_router(videos.router, prefix="/api/v1/videos", tags=["videos"])
     app.include_router(runs.router, prefix="/api/v1/runs", tags=["runs"])
