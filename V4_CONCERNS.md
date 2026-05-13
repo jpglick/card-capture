@@ -234,7 +234,7 @@ nothing and saves an hour of debugging.
 
 ---
 
-### 1.9 — No CI gate exists; manual review is the only test signal — **High** *(carries over from prior review)*
+### 1.9 — No CI gate exists; manual review is the only test signal — **Resolved (see §2.12)**
 
 **Where:** No `.github/workflows/` directory exists.
 
@@ -488,6 +488,12 @@ the test. Shape coverage is still gated on the test being committed
 service's lock and raises `ValueError` if a `queued`/`running` job
 for the same model exists; the router maps the exception to
 `HTTPException(409)`. Matches Contract 2.
+
+---
+
+### 2.12 — *(was §1.9)* No CI gate exists — **Resolved** in Wave 4
+
+Added `.github/workflows/ci.yml` to run `pytest tests/` on push and PR to `main`.
 
 ---
 
