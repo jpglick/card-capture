@@ -32,6 +32,13 @@ review = [
   "python-multipart",
   "uvicorn",
 ]
+app = [
+  "fastapi",
+  "uvicorn[standard]",
+  "sse-starlette",
+  "pydantic>=2",
+  "httpx",
+]
 test = [
   "pytest",
   "httpx",
