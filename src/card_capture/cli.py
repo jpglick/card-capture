@@ -177,28 +177,7 @@ def _run_process(args: argparse.Namespace) -> int:
         processor = VideoProcessor(storage=storage, sampler=sampler, detector=detector)
         result = processor.process(
             args.video_path,
-            ProcessingOptions(
-                output_dir=args.output_dir,
-                reader_backend=config.reader_backend,
-                queue_size=config.queue_size,
-                inference_batch_size=config.inference_batch_size,
-                corner_confidence_threshold=config.corner_confidence,
-                blur_threshold=config.blur_threshold,
-                variance_threshold=config.variance_threshold,
-                empty_pixel_threshold=config.empty_pixel_threshold,
-                group_gap_ms=config.group_gap_ms,
-                spatial_variance_threshold=config.spatial_variance_threshold,
-                min_track_length=config.min_track_length,
-                telemetry_scope=config.telemetry_scope,
-                triage_keep_percentile=config.triage_keep_percentile,
-                background_frames=config.background_frames,
-                background_threshold=config.background_threshold,
-                null_patience_frames=config.null_patience_frames,
-                rotate_180=config.rotate_180,
-                tracker_backend=config.tracker_backend,
-                centroid_jump_ratio=config.centroid_jump_ratio,
-                centroid_jump_frames=config.centroid_jump_frames,
-            ),
+            config.to_options(args.output_dir),
             debug_config=config.debug
         )
         print(

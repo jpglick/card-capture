@@ -116,7 +116,7 @@ def _build_sampler_detector(ctx: RunContext):
             presence_weights_path=weights if weights.exists() else None,
         )
         detector = CardcaptorUltralyticsDetector(
-            confidence_threshold=ctx.corner_confidence_threshold,
+            confidence_threshold=ctx.corner_confidence,
             detection_width=640,
             device="auto",
         )
@@ -130,7 +130,7 @@ def _ctx_to_options(ctx: RunContext, output_dir: Path):
         output_dir=output_dir,
         queue_size=ctx.queue_size,
         inference_batch_size=ctx.inference_batch_size,
-        corner_confidence_threshold=ctx.corner_confidence_threshold,
+        corner_confidence_threshold=ctx.corner_confidence,
         blur_threshold=ctx.blur_threshold,
         variance_threshold=ctx.variance_threshold,
         empty_pixel_threshold=ctx.empty_pixel_threshold,

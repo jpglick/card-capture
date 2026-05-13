@@ -29,29 +29,45 @@ class RunContext:
     frame_dir: str = ""
     crops_dir: str = ""
 
-    # Config knobs (with defaults matching ProcessingOptions)
+    # Config knobs (aligned with card_capture.config.PipelineConfig)
+    reader_backend: str = "auto"
     queue_size: int = 256
     inference_batch_size: int = 16
-    corner_confidence_threshold: float = 0.5
+    device: str = "auto"
+    
+    corner_confidence: float = 0.5
     blur_threshold: float = 30.0
     variance_threshold: float = 20.0
     empty_pixel_threshold: float = 0.98
-    group_gap_ms: int = 300
+    detection_width: int = 640
+    
     background_frames: int = 30
     background_threshold: float = 15.0
     null_patience_frames: int = 20
-    min_track_length: int = 6
-    use_kornia: bool = True
-    kornia_device: str = "auto"
     triage_keep_percentile: float = 0.05
-    rotate_180: bool = True
+    fast_scan_fps: float = 15.0
+    confirm_scan_fps: float = 5.0
+    valley_drop_ratio: float = 0.40
+    valley_min_width_frames: int = 3
+    delta_spike_ratio: float = 0.50
+    
     tracker_backend: str = "bytetrack"
+    group_gap_ms: int = 300
+    spatial_variance_threshold: float = 300.0
+    min_track_length: int = 6
     centroid_jump_ratio: float = 0.30
     centroid_jump_frames: int = 3
+    
+    rotate_180: bool = False
+    reid_distance_threshold: float = 0.6
+    fusion_target_frames: int = 4
     foil_threshold: float = 50.0
     enable_foil_aware_fusion: bool = True
-    fusion_target_frames: int = 4
     corner_refinement: bool = False
+    
+    use_kornia: bool = True
+    kornia_device: str = "auto"
+    
     use_fb_classifier: bool = True
     use_dino_dedup: bool = True
     telemetry_scope: str = "canonical"
@@ -68,9 +84,8 @@ def init_run(
     video_path: str,
     output_dir: str,
     db_path: str,
-    detector: str = "docaligner",
+    detector: Optional[str] = None,
     config_preset: str = "balanced",
-    fusion_target_frames: int = 4,
     **kwargs,
 ) -> RunContext:
     """Create output directories, initialise the database, and return a RunContext.
@@ -81,12 +96,22 @@ def init_run(
         db_path:      Path to the SQLite database (created if absent).
         detector:     Detector backend key (``"fake"`` or ``"docaligner"``).
         config_preset: Named config preset (``"balanced"``, ``"fast"``, ``"quality"``).
-        fusion_target_frames: Target number of frames for multi-frame fusion.
         **kwargs:     Override any ``RunContext`` field by keyword.
 
     Returns:
         A fully-initialised ``RunContext``.
     """
+    from card_capture.config import PipelineConfig
+    cfg = PipelineConfig()
+    
+    # Apply keyword overrides to the config object first
+    if detector:
+        cfg.detector = detector
+        
+    for k, v in kwargs.items():
+        if hasattr(cfg, k):
+            setattr(cfg, k, v)
+
     out = Path(output_dir)
     frame_dir = out / "frames"
     crops_dir = out / "crops"
@@ -94,16 +119,53 @@ def init_run(
     frame_dir.mkdir(parents=True, exist_ok=True)
     crops_dir.mkdir(parents=True, exist_ok=True)
 
+    # Convert cfg to RunContext fields
     ctx = RunContext(
         video_path=str(video_path),
         output_dir=str(output_dir),
         db_path=str(db_path),
-        detector=detector,
+        detector=cfg.detector,
         config_preset=config_preset,
         frame_dir=str(frame_dir),
         crops_dir=str(crops_dir),
-        fusion_target_frames=fusion_target_frames,
-        **kwargs,
+        
+        reader_backend=cfg.reader_backend,
+        queue_size=cfg.queue_size,
+        inference_batch_size=cfg.inference_batch_size,
+        device=cfg.device,
+        
+        corner_confidence=cfg.corner_confidence,
+        blur_threshold=cfg.blur_threshold,
+        variance_threshold=cfg.variance_threshold,
+        empty_pixel_threshold=cfg.empty_pixel_threshold,
+        detection_width=cfg.detection_width,
+        
+        background_frames=cfg.background_frames,
+        background_threshold=cfg.background_threshold,
+        null_patience_frames=cfg.null_patience_frames,
+        triage_keep_percentile=cfg.triage_keep_percentile,
+        fast_scan_fps=cfg.fast_scan_fps,
+        confirm_scan_fps=cfg.confirm_scan_fps,
+        valley_drop_ratio=cfg.valley_drop_ratio,
+        valley_min_width_frames=cfg.valley_min_width_frames,
+        delta_spike_ratio=cfg.delta_spike_ratio,
+        
+        tracker_backend=cfg.tracker_backend,
+        group_gap_ms=cfg.group_gap_ms,
+        spatial_variance_threshold=cfg.spatial_variance_threshold,
+        min_track_length=cfg.min_track_length,
+        centroid_jump_ratio=cfg.centroid_jump_ratio,
+        centroid_jump_frames=cfg.centroid_jump_frames,
+        
+        rotate_180=cfg.rotate_180,
+        reid_distance_threshold=cfg.reid_distance_threshold,
+        fusion_target_frames=cfg.fusion_target_frames,
+        foil_threshold=cfg.foil_threshold,
+        enable_foil_aware_fusion=cfg.enable_foil_aware_fusion,
+        corner_refinement=cfg.corner_refinement,
+        
+        use_kornia=cfg.use_kornia,
+        kornia_device=cfg.device,
     )
 
     from card_capture.storage import Storage

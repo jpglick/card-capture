@@ -41,7 +41,10 @@ def apply_migrations(db_path: Path) -> None:
                     raise
             
             if all_ok:
+                print(f"Applied migration: {sql_file.name}")
                 conn.execute("INSERT INTO _migrations(filename) VALUES (?)", (sql_file.name,))
+            else:
+                print(f"Skipped migration (table missing, will retry): {sql_file.name}")
         conn.commit()
 
 
