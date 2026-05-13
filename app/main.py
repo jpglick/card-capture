@@ -13,6 +13,9 @@ from app.services.event_bus import EventBus
 from app.services.training_service import TrainingService
 from app.services.labeling_service import LabelingService
 from app.services.regression_service import RegressionService
+from app.services.video_service import VideoService
+from app.services.runs_service import RunService
+from app.services.cards_service import CardService
 
 
 def create_app(db_path: Optional[Path] = None) -> FastAPI:
@@ -45,10 +48,14 @@ def create_app(db_path: Optional[Path] = None) -> FastAPI:
     )
 
     # Initialize services
+    app.state.db_path = db_path
     app.state.event_bus = EventBus()
     app.state.training_service = TrainingService(db_path=db_path)
     app.state.labeling_service = LabelingService(db_path=db_path)
     app.state.regression_service = RegressionService(db_path=db_path)
+    app.state.video_service = VideoService(db_path=db_path)
+    app.state.run_service = RunService(db_path=db_path)
+    app.state.card_service = CardService(db_path=db_path)
 
     # Include routers
     app.include_router(videos.router, prefix="/api/v1/videos", tags=["videos"])

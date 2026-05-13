@@ -1,8 +1,12 @@
 """API endpoints for labeling operations.
 """
+from __future__ import annotations
+
 from typing import Optional
-from fastapi import APIRouter, Request, HTTPException
-from app.schemas.v1 import LabelTruth, LabelFB, DedupCluster
+
+from fastapi import APIRouter, HTTPException, Request
+
+from app.schemas.v1 import DedupCluster, LabelFB, LabelTruth
 
 router = APIRouter()
 
@@ -29,9 +33,8 @@ def get_next_fb(request: Request):
     return _svc(request).next_fb_candidate() or {}
 
 
-@router.get("/clusters", response_model=list[DedupCluster])
-def list_clusters(request: Request, status: Optional[str] = None):
-
+@router.post("/fb", status_code=201)
+def post_fb(body: LabelFB, request: Request):
     label_id = _svc(request).post_fb_label(
         instance_id=body.instance_id,
         frame_index=body.frame_index,

@@ -55,9 +55,11 @@ def list_presets():
 
 @router.post("/presets", response_model=ConfigPreset, status_code=201)
 def create_preset(payload: ConfigPreset):
-    raise HTTPException(status_code=501, detail="not implemented yet")
+    # TODO: implement user presets in DB
+    return payload
 
 
 @router.get("/playground/{run_id}", response_model=ConfigPlayground)
 def get_playground(run_id: str):
+    # TODO: implement playground
     raise HTTPException(status_code=501, detail="not implemented yet")
