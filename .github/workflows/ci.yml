@@ -27,3 +27,7 @@ jobs:
     - name: Test with pytest
       run: |
         pytest tests/
+    - name: Validate schema docs drift
+      run: |
+        python scripts/validate_schema_docs.py
+

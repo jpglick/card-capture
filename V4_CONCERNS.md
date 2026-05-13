@@ -251,7 +251,7 @@ single highest-leverage outstanding piece of infrastructure.
 
 ---
 
-### 1.10 — Schema duplication between docs and code, no drift gate — **Medium**
+### 1.10 — Schema duplication between docs and code, no drift gate — **Resolved (see §2.13)**
 
 **Where:** Contracts 1 and 4 are authored as prose + DDL/JSON in
 `docs/contracts/`, and re-encoded as code in `migrations/*.sql` and
@@ -494,6 +494,12 @@ for the same model exists; the router maps the exception to
 ### 2.12 — *(was §1.9)* No CI gate exists — **Resolved** in Wave 4
 
 Added `.github/workflows/ci.yml` to run `pytest tests/` on push and PR to `main`.
+
+---
+
+### 2.13 — *(was §1.10)* Schema duplication between docs and code — **Resolved** in Wave 4
+
+Added `scripts/validate_schema_docs.py` which runs in CI to verify that `migrations/` SQL matches `docs/contracts/storage-schema.md`.
 
 ---
 
