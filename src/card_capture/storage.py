@@ -170,6 +170,28 @@ class Storage:
             )
             return int(cursor.lastrowid)
 
+    def get_or_create_video(
+        self,
+        source_path: str,
+        file_hash: str,
+        duration_ms: int = 0,
+        width: int = 0,
+        height: int = 0,
+    ) -> int:
+        """Return the existing video ID for source_path, or insert a new row."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT id FROM videos WHERE source_path = ?", (source_path,)
+            ).fetchone()
+            if row:
+                return int(row[0])
+            cursor = conn.execute(
+                "INSERT INTO videos (source_path, file_hash, duration_ms, width, height, status) "
+                "VALUES (?, ?, ?, ?, ?, 'processing')",
+                (source_path, file_hash, duration_ms, width, height),
+            )
+            return int(cursor.lastrowid)
+
     def update_video_status(self, video_id: int, status: str) -> None:
         with self._connect() as conn:
             conn.execute("UPDATE videos SET status = ? WHERE id = ?", (status, video_id))

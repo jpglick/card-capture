@@ -175,12 +175,9 @@ def init_run(
     storage.initialize()
 
     vp = Path(video_path)
-    ctx.video_id = storage.add_video(
+    ctx.video_id = storage.get_or_create_video(
         source_path=str(vp),
         file_hash=_file_hash(vp) if vp.exists() else "fake",
-        duration_ms=0,
-        width=0,
-        height=0,
     )
 
     return ctx
