@@ -18,16 +18,17 @@ class PipelineConfig:
     device: str = "auto"
     
     # Detection & Quality
-    corner_confidence: float = 0.5
+    corner_confidence: float = 0.4
     blur_threshold: float = 30.0
     variance_threshold: float = 20.0
     empty_pixel_threshold: float = 0.98
     detection_width: int = 640
     
     # Presence & Sampling
+    presence_threshold: float = 0.4
     background_frames: int = 30
     background_threshold: float = 15.0
-    null_patience_frames: int = 20
+    null_patience_frames: int = 30
     triage_keep_percentile: float = 0.05
     fast_scan_fps: float = 15.0
     confirm_scan_fps: float = 5.0
@@ -39,7 +40,7 @@ class PipelineConfig:
     tracker_backend: str = "bytetrack"
     group_gap_ms: int = 300
     spatial_variance_threshold: float = 300.0  # Consolidating to monolith's 300
-    min_track_length: int = 6                 # Consolidating to monolith's 6
+    min_track_length: int = 3
     centroid_jump_ratio: float = 0.30
     centroid_jump_frames: int = 3
     

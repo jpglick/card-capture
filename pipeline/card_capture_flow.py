@@ -21,6 +21,10 @@ class CardCaptureFlow(FlowSpec):
     fusion_target_frames = Parameter("fusion-target-frames", default=1, type=int)
     corner_refinement = Parameter("corner-refinement", default=False, type=bool)
     ui_run_id = Parameter("ui-run-id", help="Run ID assigned by the app UI", default="")
+    presence_threshold = Parameter("presence-threshold", default=0.4, type=float,
+                                   help="Classifier confidence for card presence (0-1). Lower = more frames sampled.")
+    min_track_length = Parameter("min-track-length", default=3, type=int,
+                                 help="Minimum detections required to keep a track.")
 
     @step
     def start(self):
@@ -29,7 +33,9 @@ class CardCaptureFlow(FlowSpec):
             self.video, self.output_dir, self.db,
             self.detector, self.config_preset,
             fusion_target_frames=self.fusion_target_frames,
-            corner_refinement=self.corner_refinement
+            corner_refinement=self.corner_refinement,
+            presence_threshold=self.presence_threshold,
+            min_track_length=self.min_track_length,
         )
         self.next(self.detect)
 

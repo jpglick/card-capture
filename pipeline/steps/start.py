@@ -43,7 +43,8 @@ class RunContext:
     
     background_frames: int = 30
     background_threshold: float = 15.0
-    null_patience_frames: int = 20
+    presence_threshold: float = 0.4
+    null_patience_frames: int = 30
     triage_keep_percentile: float = 0.05
     fast_scan_fps: float = 15.0
     confirm_scan_fps: float = 5.0
@@ -54,7 +55,7 @@ class RunContext:
     tracker_backend: str = "bytetrack"
     group_gap_ms: int = 300
     spatial_variance_threshold: float = 300.0
-    min_track_length: int = 6
+    min_track_length: int = 3
     centroid_jump_ratio: float = 0.30
     centroid_jump_frames: int = 3
     
@@ -142,6 +143,7 @@ def init_run(
         
         background_frames=cfg.background_frames,
         background_threshold=cfg.background_threshold,
+        presence_threshold=cfg.presence_threshold,
         null_patience_frames=cfg.null_patience_frames,
         triage_keep_percentile=cfg.triage_keep_percentile,
         fast_scan_fps=cfg.fast_scan_fps,
