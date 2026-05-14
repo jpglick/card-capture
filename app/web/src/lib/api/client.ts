@@ -78,6 +78,7 @@ export const api = {
     },
     config: {
         listPresets: () => req<T.ConfigPreset[]>('GET', '/config/presets'),
+        createPreset: (payload: T.ConfigPreset) => req<T.ConfigPreset>('POST', '/config/presets', payload),
         getPlayground: (runId: string) => req<T.ConfigPlayground>('GET', `/config/playground/${runId}`),
     }
 };
