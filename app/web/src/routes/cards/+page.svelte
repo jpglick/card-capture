@@ -28,10 +28,10 @@
     <div class="card-grid">
         {#each cards as card}
             <div class="card-item">
-                <img src={card.fused_image_url} alt="Fused card" />
+                <img src={card.fused_url ?? card.canonical_url ?? ''} alt="Fused card" />
                 <div class="info">
-                    <span class="angle">{card.angle}</span>
-                    <span class="score">{(card.quality_score * 100).toFixed(0)}%</span>
+                    <span class="angle">{card.side}</span>
+                    <span class="score">{(card.confidence * 100).toFixed(0)}%</span>
                 </div>
             </div>
         {/each}
