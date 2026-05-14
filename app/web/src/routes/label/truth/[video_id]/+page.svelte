@@ -46,7 +46,6 @@
             if (instances.length > 0) {
                 selectedId = instances[0].instance_id;
             }
-        } finally {
         } catch (e: any) {
             loadError = e?.message ?? String(e);
         } finally {
