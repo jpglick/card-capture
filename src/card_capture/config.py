@@ -46,7 +46,7 @@ class PipelineConfig:
     # Post-Processing
     rotate_180: bool = False
     reid_distance_threshold: float = 0.6
-    fusion_target_frames: int = 4
+    fusion_target_frames: int = 1
     foil_threshold: float = 50.0
     enable_foil_aware_fusion: bool = True
     corner_refinement: bool = False

@@ -18,7 +18,7 @@ class CardCaptureFlow(FlowSpec):
     db = Parameter("db", help="SQLite database path", required=True)
     detector = Parameter("detector", help="Detector backend", default="docaligner")
     config_preset = Parameter("config-preset", default="balanced")
-    fusion_target_frames = Parameter("fusion-target-frames", default=4, type=int)
+    fusion_target_frames = Parameter("fusion-target-frames", default=1, type=int)
     corner_refinement = Parameter("corner-refinement", default=False, type=bool)
 
     @step
