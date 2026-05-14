@@ -156,7 +156,14 @@ def _run_process(args: argparse.Namespace) -> int:
         )
 
     if getattr(args, "pipeline", "metaflow") == "metaflow":
+        import os
         import subprocess
+        # Metaflow spawns a subprocess per step; those subprocesses won't find
+        # the `pipeline` package (repo root, not installed) unless we pass it
+        # through PYTHONPATH so Metaflow propagates it to each step worker.
+        repo_root = str(Path(__file__).parent.parent.parent)
+        env = os.environ.copy()
+        env["PYTHONPATH"] = repo_root + (":" + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
         cmd = [
             sys.executable, "-m", "pipeline.card_capture_flow", "run",
             "--video", str(args.video_path),
@@ -164,7 +171,7 @@ def _run_process(args: argparse.Namespace) -> int:
             "--db", str(args.db),
             "--detector", config.detector,
         ]
-        res = subprocess.run(cmd)
+        res = subprocess.run(cmd, env=env)
         return res.returncode
     else:
         import warnings
