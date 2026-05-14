@@ -47,6 +47,15 @@ def build_parser() -> argparse.ArgumentParser:
         default="metaflow",
         help="Which pipeline architecture to run. The 'monolith' path is deprecated and will be removed in Wave 5. Use --pipeline metaflow (the default).",
     )
+    process.add_argument(
+        "--resume",
+        metavar="RUN_ID",
+        default=None,
+        dest="resume_run_id",
+        help="Resume a previous Metaflow run from its first failed step. "
+             "Pass the run-id printed at the start of the failed run, e.g. 1778729424981206. "
+             "Omit to start a fresh run.",
+    )
 
     review = subparsers.add_parser("review", help="Start the local review UI")
     review.add_argument("--db", type=Path, default=Path("card_capture_output/cards.sqlite"))
@@ -164,13 +173,20 @@ def _run_process(args: argparse.Namespace) -> int:
         repo_root = str(Path(__file__).parent.parent.parent)
         env = os.environ.copy()
         env["PYTHONPATH"] = repo_root + (":" + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
-        cmd = [
-            sys.executable, "-m", "pipeline.card_capture_flow", "run",
-            "--video", str(args.video_path),
-            "--output-dir", str(args.output_dir),
-            "--db", str(args.db),
-            "--detector", config.detector,
-        ]
+        resume_run_id = getattr(args, "resume_run_id", None)
+        if resume_run_id:
+            cmd = [
+                sys.executable, "-m", "pipeline.card_capture_flow",
+                "resume", resume_run_id,
+            ]
+        else:
+            cmd = [
+                sys.executable, "-m", "pipeline.card_capture_flow", "run",
+                "--video", str(args.video_path),
+                "--output-dir", str(args.output_dir),
+                "--db", str(args.db),
+                "--detector", config.detector,
+            ]
         res = subprocess.run(cmd, env=env)
         return res.returncode
     else:
