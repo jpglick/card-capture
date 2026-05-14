@@ -65,7 +65,16 @@ class CardCaptureFlow(FlowSpec):
     @step
     def fuse_fanout(self):
         self.fanout = list(self.resolve_out.prepared_tracks)
-        self.next(self.fuse, foreach="fanout")
+        if self.fanout:
+            self.next(self.fuse, foreach="fanout")
+        else:
+            self.next(self.no_cards)
+
+    @step
+    def no_cards(self):
+        """No tracks survived scoring/resolve — skip fuse and finish cleanly."""
+        self.fused_canonicals = []
+        self.next(self.dedup)
 
     @step
     def fuse(self):
