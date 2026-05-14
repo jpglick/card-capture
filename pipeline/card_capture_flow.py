@@ -64,27 +64,23 @@ class CardCaptureFlow(FlowSpec):
 
     @step
     def fuse_fanout(self):
-        self.fanout = list(self.resolve_out.prepared_tracks)
-        if self.fanout:
-            self.next(self.fuse, foreach="fanout")
-        else:
-            self.next(self.no_cards)
-
-    @step
-    def no_cards(self):
-        """No tracks survived scoring/resolve — skip fuse and finish cleanly."""
-        self.fused_canonicals = []
-        self.next(self.dedup)
+        tracks = list(self.resolve_out.prepared_tracks)
+        # Metaflow foreach requires ≥1 item; sentinel None is filtered in fuse_join
+        self.fanout = tracks if tracks else [None]
+        self.next(self.fuse, foreach="fanout")
 
     @step
     def fuse(self):
         prepared_track = self.input
-        self.fuse_out = fuse.run(self.run_context, prepared_track)
+        self.fuse_out = fuse.run(self.run_context, prepared_track) if prepared_track is not None else None
         self.next(self.fuse_join)
 
     @step
     def fuse_join(self, inputs):
-        self.fused_canonicals = [inp.fuse_out.fused_canonical for inp in inputs]
+        self.fused_canonicals = [
+            inp.fuse_out.fused_canonical for inp in inputs
+            if inp.fuse_out is not None
+        ]
         self.merge_artifacts(inputs, exclude=["fuse_out"])
         self.next(self.dedup)
 
