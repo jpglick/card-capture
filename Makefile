@@ -2,7 +2,7 @@
 
 dev:
 	@trap 'kill 0' SIGINT; \
-	.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload & \
+	.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload & \
 	cd app/web && npm run dev
 
 test:
