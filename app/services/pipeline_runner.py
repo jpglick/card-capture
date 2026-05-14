@@ -61,7 +61,7 @@ class PipelineRunner:
 
         try:
             self.bus.emit(run_id, Event(name="run_started"))
-            logger.info("[%s] pipeline starting — video=%s", run_id, video)
+            print(f"[{run_id}] pipeline starting — video={video}", flush=True)
 
             if self.flow_cls is not None:
                 self.flow_cls(
@@ -77,14 +77,15 @@ class PipelineRunner:
                 abs_video = str(Path(video).resolve())
                 abs_output = str((Path(_REPO_ROOT) / output_dir).resolve())
                 cmd = [
-                    sys.executable, "-m", "pipeline.card_capture_flow", "run",
+                    sys.executable, "-m", "pipeline.card_capture_flow",
+                    "--no-pylint", "run",
                     "--video", abs_video,
                     "--output-dir", abs_output,
                     "--db", abs_db,
                     "--detector", detector,
                     "--config-preset", config_preset,
                 ]
-                logger.info("[%s] running: %s", run_id, " ".join(cmd))
+                print(f"[{run_id}] running: {' '.join(cmd)}", flush=True)
 
                 proc = subprocess.Popen(
                     cmd, env=env, cwd=_REPO_ROOT,
@@ -94,19 +95,19 @@ class PipelineRunner:
                 for line in proc.stdout:
                     line = line.rstrip()
                     if line:
-                        logger.info("[%s] %s", run_id, line)
+                        print(f"[{run_id}] {line}", flush=True)
                         self.bus.emit(run_id, Event(name="log", payload={"line": line}))
                 proc.wait()
 
                 if proc.returncode != 0:
                     raise RuntimeError(f"Pipeline exited with code {proc.returncode}")
 
-            logger.info("[%s] pipeline completed", run_id)
+            print(f"[{run_id}] pipeline completed", flush=True)
             self.bus.emit(run_id, Event(name="run_completed"))
             self._set_video_status(video_id, "completed")
 
         except Exception as exc:
-            logger.error("[%s] pipeline failed: %s", run_id, exc)
+            print(f"[{run_id}] pipeline failed: {exc}", flush=True)
             self.bus.emit(run_id, Event(name="run_failed", payload={"error": str(exc)}))
             self._set_video_status(video_id, "failed")
             raise
