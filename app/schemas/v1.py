@@ -425,7 +425,7 @@ class LabelFBNext(BaseModel):
     frame_index: int
     canonical_url: Optional[str] = None
     video_id: str
-    run_id: str
+    run_id: Optional[str] = None
     labels_collected: int
     labels_target: int
 
@@ -917,16 +917,6 @@ class LabelTruth(BaseModel):
     video_id: str
     schema_version: int = 1
     expected_cards: list[LabelTruthExpectedCard] = []
-
-
-class LabelFBNext(BaseModel):
-    instance_id: str
-    frame_index: int
-    canonical_url: Optional[str] = None
-    video_id: str
-    run_id: str
-    labels_collected: int
-    labels_target: int
 
 
 class LabelFB(BaseModel):
