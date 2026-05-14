@@ -13,6 +13,8 @@ from typing import Any, Optional
 import click
 
 from harness.baseline import freeze_baseline, get_baseline, persist_run
+from harness.config import load_pipeline_config
+from harness.metrics.types import MetricResult
 from harness.runner import run_metrics
 from harness.validator import validate_file
 
@@ -82,13 +84,7 @@ def run(
     deltas = _compute_deltas(report.metrics, b.metrics)
 
     # Load current pipeline config
-    config = {}
-    config_path = Path("card_capture_config.json")
-    if config_path.exists():
-        try:
-            config = json.loads(config_path.read_text())
-        except Exception:
-            pass
+    config = load_pipeline_config()
 
     # Persist the run
     code_sha = _get_git_sha()
@@ -117,13 +113,14 @@ def run(
     click.echo("\nRegression Summary vs. " + baseline)
     click.echo("-" * 40)
     for k, v in report.metrics.items():
-        if isinstance(v, (int, float)):
-            delta = deltas.get(k)
-            delta_str = f" ({delta:+.4f})" if delta is not None else ""
-            click.echo(f"{k:20}: {v:.4f}{delta_str}")
-        elif hasattr(v, "__dict__"):
-            # ImageQuality, DedupAccuracy
-            click.echo(f"{k:20}: {v}")
+        if isinstance(v, MetricResult):
+            if v.value is not None:
+                delta = deltas.get(k)
+                delta_val = delta.value if isinstance(delta, MetricResult) else None
+                delta_str = f" ({delta_val:+.4f})" if delta_val is not None else ""
+                click.echo(f"{k:20}: {v.value:.4f}{delta_str}")
+            elif v.breakdown:
+                click.echo(f"{k:20}: {v.breakdown}")
 
 
 @harness.group()
@@ -160,13 +157,7 @@ def freeze(name: str, db: Path, truth_dir: Path, videos: Optional[str]):
     report = run_metrics(db_path=db, truth_dir=truth_dir, videos=video_ids)
 
     # Load current pipeline config
-    config = {}
-    config_path = Path("card_capture_config.json")
-    if config_path.exists():
-        try:
-            config = json.loads(config_path.read_text())
-        except Exception:
-            pass
+    config = load_pipeline_config()
 
     code_sha = _get_git_sha()
     freeze_baseline(
@@ -225,20 +216,17 @@ def _compute_deltas(current: dict, baseline: dict) -> dict:
     deltas = {}
     for k, v in current.items():
         bv = baseline.get(k)
-        if isinstance(v, (int, float)) and isinstance(bv, (int, float)):
-            deltas[k] = v - bv
-        elif hasattr(v, "ari") and hasattr(bv, "ari"):
-            # DedupAccuracy
-            deltas[k] = {
-                "ari": (v.ari - bv.ari) if v.ari is not None and bv.ari is not None else None,
-                "pair_f1": (v.pair_f1 - bv.pair_f1) if v.pair_f1 is not None and bv.pair_f1 is not None else None,
-            }
-        elif hasattr(v, "mean_ssim") and hasattr(bv, "mean_ssim"):
-            # ImageQuality
-            deltas[k] = {
-                "mean_ssim": (v.mean_ssim - bv.mean_ssim) if v.mean_ssim is not None and bv.mean_ssim is not None else None,
-                "coverage": v.coverage - bv.coverage,
-            }
+        if not isinstance(v, MetricResult) or not isinstance(bv, MetricResult):
+            continue
+        if v.value is not None and bv.value is not None:
+            deltas[k] = MetricResult(value=v.value - bv.value)
+        elif v.breakdown and bv.breakdown:
+            delta_breakdown = {}
+            for sub_k in v.breakdown:
+                a = v.breakdown.get(sub_k)
+                b = bv.breakdown.get(sub_k)
+                delta_breakdown[sub_k] = (a - b) if (a is not None and b is not None) else None
+            deltas[k] = MetricResult(breakdown=delta_breakdown)
     return deltas
 
 

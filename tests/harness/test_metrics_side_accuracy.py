@@ -14,7 +14,7 @@ def test_side_accuracy_one_correct_one_wrong():
         truth_path=FIX / "side_accuracy" / "truth.json",
         video_id="side_accuracy",
     )
-    assert score == pytest.approx(0.5)
+    assert score.value == pytest.approx(0.5)
 
 
 def test_side_accuracy_all_correct():
@@ -24,7 +24,7 @@ def test_side_accuracy_all_correct():
         truth_path=FIX / "all_matched" / "truth.json",
         video_id="all_matched",
     )
-    assert score == pytest.approx(1.0)
+    assert score.value == pytest.approx(1.0)
 
 
 def test_side_accuracy_undefined_when_no_matches(tmp_path):
@@ -40,4 +40,4 @@ def test_side_accuracy_undefined_when_no_matches(tmp_path):
         truth_path=truth_path,
         video_id="no_video",
     )
-    assert score is None
+    assert score.value is None

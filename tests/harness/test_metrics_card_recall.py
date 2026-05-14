@@ -14,7 +14,7 @@ def test_recall_2_of_3():
         truth_path=FIX / "all_matched" / "truth.json",
         video_id="all_matched",
     )
-    assert score == pytest.approx(2 / 3)
+    assert score.value == pytest.approx(2 / 3)
 
 
 def test_recall_undefined_when_no_truth(tmp_path):
@@ -28,7 +28,7 @@ def test_recall_undefined_when_no_truth(tmp_path):
         truth_path=truth_path,
         video_id="x",
     )
-    assert score is None
+    assert score.value is None
 
 
 def test_recall_zero_when_no_detections(tmp_path):
@@ -44,4 +44,4 @@ def test_recall_zero_when_no_detections(tmp_path):
         truth_path=truth_path,
         video_id="no_video",
     )
-    assert score == 0.0
+    assert score.value == 0.0

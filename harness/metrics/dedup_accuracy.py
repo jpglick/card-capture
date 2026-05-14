@@ -1,6 +1,6 @@
 """dedup_accuracy metric.
 
-Returns a DedupAccuracy dataclass with:
+Returns a MetricResult with breakdown keys:
 
 - ``ari``: Adjusted Rand Index (sklearn) comparing predicted dedup clusters to
   ground-truth clusters derived from ``physical_card_key``.
@@ -25,12 +25,13 @@ from pathlib import Path
 from typing import Optional
 
 from harness.match import match_detections_to_truth
+from harness.metrics.types import MetricResult
 from harness.schema import TruthFile
 
 
 @dataclass(frozen=True)
-class DedupAccuracy:
-    """Result of the dedup_accuracy metric."""
+class _DedupAccuracy:
+    """Internal result of the dedup_accuracy computation."""
 
     ari: Optional[float]
     pair_f1: Optional[float]
@@ -38,7 +39,7 @@ class DedupAccuracy:
 
 def dedup_accuracy(
     *, db_path: Path, truth_path: Path, video_id: str
-) -> DedupAccuracy:
+) -> MetricResult:
     """Compute dedup accuracy (ARI + pair F1) for one video.
 
     Parameters
@@ -52,7 +53,7 @@ def dedup_accuracy(
 
     Returns
     -------
-    DedupAccuracy with ari and pair_f1 fields; both None if < 2 matched.
+    MetricResult with breakdown keys ``ari`` and ``pair_f1``; both None if < 2 matched.
     """
     from sklearn.metrics import adjusted_rand_score  # type: ignore[import-untyped]
 
@@ -66,7 +67,7 @@ def dedup_accuracy(
 
     matched = [p for p in pairs if p.gt_card_id is not None and p.detection_id is not None]
     if len(matched) < 2:
-        return DedupAccuracy(ari=None, pair_f1=None)
+        return MetricResult(breakdown={"ari": None, "pair_f1": None})
 
     # Ground-truth labels: physical_card_key for each matched detection.
     gt_labels = [gt_key_map[p.gt_card_id] for p in matched]  # type: ignore[index]
@@ -78,7 +79,7 @@ def dedup_accuracy(
     ari = float(adjusted_rand_score(gt_labels, pred_labels))
     pf1 = _pair_f1(gt_labels, pred_labels)
 
-    return DedupAccuracy(ari=ari, pair_f1=pf1)
+    return MetricResult(breakdown={"ari": ari, "pair_f1": pf1})
 
 
 def _build_predicted_clusters(db_path: Path) -> dict[int, int]:

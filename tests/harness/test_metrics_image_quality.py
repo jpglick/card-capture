@@ -2,7 +2,8 @@
 import pytest
 from pathlib import Path
 
-from harness.metrics.image_quality import ImageQuality, image_quality
+from harness.metrics.image_quality import image_quality
+from harness.metrics.types import MetricResult
 
 FIX = Path("tests/harness/fixtures/runs")
 
@@ -14,10 +15,10 @@ def test_image_quality_identical_images():
         truth_path=FIX / "image_quality" / "truth.json",
         video_id="image_quality",
     )
-    assert isinstance(result, ImageQuality)
-    assert result.mean_ssim is not None
-    assert result.mean_ssim == pytest.approx(1.0, abs=1e-4)
-    assert result.coverage == pytest.approx(1.0, abs=1e-6)
+    assert isinstance(result, MetricResult)
+    assert result.breakdown["mean_ssim"] is not None
+    assert result.breakdown["mean_ssim"] == pytest.approx(1.0, abs=1e-4)
+    assert result.breakdown["coverage"] == pytest.approx(1.0, abs=1e-6)
 
 
 def test_image_quality_psnr_reported():
@@ -28,7 +29,7 @@ def test_image_quality_psnr_reported():
         video_id="image_quality",
     )
     # PSNR of identical images is effectively infinite; skimage returns ~inf or very large
-    assert result.mean_psnr is not None
+    assert result.breakdown["mean_psnr"] is not None
 
 
 def test_image_quality_none_when_no_reference_frames(tmp_path):
@@ -46,13 +47,13 @@ def test_image_quality_none_when_no_reference_frames(tmp_path):
         truth_path=truth_path,
         video_id="image_quality",
     )
-    assert result.mean_ssim is None
-    assert result.mean_psnr is None
-    assert result.coverage == pytest.approx(0.0, abs=1e-6)
+    assert result.breakdown["mean_ssim"] is None
+    assert result.breakdown["mean_psnr"] is None
+    assert result.breakdown["coverage"] == pytest.approx(0.0, abs=1e-6)
 
 
 def test_image_quality_result_is_frozen():
-    """ImageQuality instances are immutable."""
-    iq = ImageQuality(mean_ssim=0.9, mean_psnr=30.0, coverage=1.0)
+    """MetricResult instances are immutable."""
+    mr = MetricResult(breakdown={"mean_ssim": 0.9, "mean_psnr": 30.0, "coverage": 1.0})
     with pytest.raises(Exception):
-        iq.mean_ssim = 0.0  # type: ignore[misc]
+        mr.breakdown = {}  # type: ignore[misc]

@@ -1,6 +1,6 @@
 """image_quality metric.
 
-Returns an ImageQuality dataclass with:
+Returns a MetricResult with breakdown keys:
 
 - ``mean_ssim``: Mean Structural Similarity Index (SSIM) of each matched
   GT card's fused canonical image vs. the hand-picked reference frame.
@@ -9,7 +9,8 @@ Returns an ImageQuality dataclass with:
 - ``coverage``: Fraction of matched GT cards that have a reference frame
   available (0.0 – 1.0).
 
-All three are ``None`` when no reference frames exist.
+All three are ``None`` when no reference frames exist (except ``coverage``
+which defaults to 0.0).
 
 Reference frames are looked up at::
 
@@ -30,14 +31,15 @@ from typing import Optional
 import numpy as np
 
 from harness.match import match_detections_to_truth
+from harness.metrics.types import MetricResult
 from harness.schema import TruthFile
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class ImageQuality:
-    """Result of the image_quality metric."""
+class _ImageQuality:
+    """Internal result of the image_quality computation."""
 
     mean_ssim: Optional[float]
     mean_psnr: Optional[float]
@@ -46,7 +48,7 @@ class ImageQuality:
 
 def image_quality(
     *, db_path: Path, truth_path: Path, video_id: str
-) -> ImageQuality:
+) -> MetricResult:
     """Compute mean SSIM and PSNR of fused canonicals vs. reference frames.
 
     Parameters
@@ -60,7 +62,7 @@ def image_quality(
 
     Returns
     -------
-    ImageQuality with mean_ssim, mean_psnr, and coverage fields.
+    MetricResult with breakdown keys ``mean_ssim``, ``mean_psnr``, and ``coverage``.
     """
     from skimage.metrics import (  # type: ignore[import-untyped]
         peak_signal_noise_ratio,
@@ -138,13 +140,15 @@ def image_quality(
 
     if not ssim_vals:
         coverage = 0.0 if matched_count == 0 else len(ssim_vals) / matched_count
-        return ImageQuality(mean_ssim=None, mean_psnr=None, coverage=coverage)
+        return MetricResult(breakdown={"mean_ssim": None, "mean_psnr": None, "coverage": coverage})
 
     coverage = len(ssim_vals) / matched_count if matched_count > 0 else 0.0
-    return ImageQuality(
-        mean_ssim=float(np.mean(ssim_vals)),
-        mean_psnr=float(np.mean(psnr_vals)),
-        coverage=coverage,
+    return MetricResult(
+        breakdown={
+            "mean_ssim": float(np.mean(ssim_vals)),
+            "mean_psnr": float(np.mean(psnr_vals)),
+            "coverage": coverage,
+        }
     )
 
 
