@@ -64,11 +64,13 @@ def run(ctx: RunContext, score_out: ScoreOutput) -> ResolveOutput:
     if ctx.use_fb_classifier:
         try:
             latest_fb = get_latest(db_path=Path(ctx.db_path), model_name="fb_classifier")
-            if latest_fb:
-                fb_predictor = FBPredictor(checkpoint_path=latest_fb.checkpoint_path)
+            ckpt_path = latest_fb.checkpoint_path if latest_fb else None
+            
+            if FBPredictor.is_available(ckpt_path):
+                fb_predictor = FBPredictor(checkpoint_path=ckpt_path)
+                print(f"Loaded trained F/B classifier from {ckpt_path}")
             else:
-                # Fallback to pretrained ResNet head
-                fb_predictor = FBPredictor()
+                print("F/B classifier not yet trained; falling back to longest-track heuristic.")
         except Exception as e:
             print(f"Failed to initialize F/B predictor: {e}")
 

@@ -58,6 +58,15 @@ def run(ctx: RunContext, groups: List[Dict[str, Any]], fused: List[Dict[str, Any
         if f.get("reid_embedding") is not None:
             import numpy as np
             embedding_bytes = np.array(f["reid_embedding"], dtype=np.float32).tobytes()
+        else:
+            # Task C2: Always populate reid_embedding even if tracker didn't.
+            # We use the FUSED image for the stable embedding.
+            try:
+                from card_capture.ml.embeddings import compute_reid_embedding
+                emb = compute_reid_embedding(f["fused_image_path"])
+                embedding_bytes = emb.tobytes()
+            except Exception as e:
+                print(f"Failed to generate late ReID embedding for {iid[:8]}: {e}")
 
         row_id = storage.add_card_instance(
             video_id=video_id,
