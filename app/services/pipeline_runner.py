@@ -12,7 +12,13 @@ from __future__ import annotations
 
 import asyncio
 import os
+import subprocess
+import sys
+from pathlib import Path
 from typing import Optional, Type
+
+# Repo root is three levels up from app/services/pipeline_runner.py
+_REPO_ROOT = str(Path(__file__).parent.parent.parent)
 
 from app.services.event_bus import Event, EventBus
 from app.services import _event_bus_registry
@@ -78,18 +84,21 @@ class PipelineRunner:
                     config_preset=config_preset,
                 )
             else:
-                # Production path: invoke the Metaflow flow via its Runner.
-                # Local import so tests that don't have metaflow installed still work.
-                from metaflow import Runner  # type: ignore[import]
-
-                with Runner("pipeline/card_capture_flow.py").run(
-                    video=video,
-                    output_dir=output_dir,
-                    db=db,
-                    detector=detector,
-                    config_preset=config_preset,
-                ):
-                    pass  # events emitted by step modules via _event_bus_registry
+                # Production path: subprocess — same as the CLI, avoids Runner's
+                # PYTHONPATH and working-directory issues.
+                env = os.environ.copy()
+                env["PYTHONPATH"] = _REPO_ROOT + (":" + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+                cmd = [
+                    sys.executable, "-m", "pipeline.card_capture_flow", "run",
+                    "--video", video,
+                    "--output-dir", output_dir,
+                    "--db", db,
+                    "--detector", detector,
+                    "--config-preset", config_preset,
+                ]
+                result = subprocess.run(cmd, env=env, cwd=_REPO_ROOT)
+                if result.returncode != 0:
+                    raise RuntimeError(f"Pipeline subprocess exited with code {result.returncode}")
 
             self.bus.emit(run_id, Event(name="run_completed"))
         except Exception as exc:

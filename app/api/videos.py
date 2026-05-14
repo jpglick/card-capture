@@ -69,8 +69,8 @@ async def start_run(video_id: int, request: Request, bg: BackgroundTasks):
         
     run_id = f"run_{uuid.uuid4().hex[:8]}"
     runner = PipelineRunner(bus=request.app.state.event_bus, flow_cls=None)
-    
-    # Use output dir relative to video or in a central location
+    _svc(request).update_status(video_id, "processing")
+
     output_dir = Path("card_capture_output") / run_id
     
     bg.add_task(

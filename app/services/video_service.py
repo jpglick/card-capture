@@ -70,12 +70,17 @@ class VideoService:
         storage = Storage(self.db_path)
         video_id = storage.add_video(
             source_path=str(path),
-            file_hash="pending", # To be computed by pipeline
+            file_hash="pending",
             duration_ms=metadata.get("duration_ms", 0),
             width=metadata.get("width", 0),
             height=metadata.get("height", 0),
+            status="pending",
         )
         return video_id
+
+    def update_status(self, video_id: int, status: str) -> None:
+        from card_capture.storage import Storage
+        Storage(self.db_path).update_video_status(video_id, status)
 
     def delete_video(self, video_id: int) -> None:
         """Remove a video and its associated runs/cards."""
