@@ -5,7 +5,7 @@ in the step modules; this file is the orchestration spine and stays small.
 """
 from __future__ import annotations
 
-from metaflow import FlowSpec, Parameter, step
+from metaflow import FlowSpec, Parameter, current, step
 
 from pipeline.steps import (
     detect, novelty, track, refine, score, resolve, fuse, dedup, store,
@@ -91,7 +91,7 @@ class CardCaptureFlow(FlowSpec):
             self.dedup_out.dedup_groups, 
             self.fused_canonicals,
             prepared_tracks=self.resolve_out.prepared_tracks,
-            run_id=self.run_id
+            run_id=current.run_id
         )
         self.next(self.end)
 
