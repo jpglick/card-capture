@@ -48,6 +48,13 @@ reports/*
 !reports/.gitkeep
 !reports/baseline_*
 
+# Harness runtime config (use harness/config.example.json as template)
+harness_config.json
+card_capture_config.json
+
+# Golden set generated artifacts
+golden_set/**/reference_frames/
+
 # Training data
 data/
 

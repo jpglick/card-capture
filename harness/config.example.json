@@ -1,0 +1,11 @@
+{
+  "_comment": "Copy to card_capture_config.json and fill in your values. See src/card_capture/config.py for all options.",
+  "corner_confidence": 0.5,
+  "background_novelty_threshold": 0.08,
+  "centroid_jump_ratio": 0.30,
+  "valley_drop_ratio": 0.40,
+  "foil_threshold": 50.0,
+  "fast_scan_fps": 15.0,
+  "presence_threshold": 0.5,
+  "min_track_length": 12
+}

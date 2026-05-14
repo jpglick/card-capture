@@ -14,7 +14,7 @@ def test_precision_2_of_3():
         truth_path=FIX / "one_phantom" / "truth.json",
         video_id="one_phantom",
     )
-    assert score == pytest.approx(2 / 3)
+    assert score.value == pytest.approx(2 / 3)
 
 
 def test_precision_undefined_when_no_detections(tmp_path):
@@ -30,7 +30,7 @@ def test_precision_undefined_when_no_detections(tmp_path):
         truth_path=truth_path,
         video_id="no_video",
     )
-    assert score is None
+    assert score.value is None
 
 
 def test_precision_zero_when_no_gt_cards(tmp_path):
@@ -44,7 +44,7 @@ def test_precision_zero_when_no_gt_cards(tmp_path):
         truth_path=truth_path,
         video_id="one_phantom",
     )
-    assert score == pytest.approx(0.0)
+    assert score.value == pytest.approx(0.0)
 
 
 def test_precision_perfect_when_all_detections_matched():
@@ -54,4 +54,4 @@ def test_precision_perfect_when_all_detections_matched():
         truth_path=FIX / "all_matched" / "truth.json",
         video_id="all_matched",
     )
-    assert score == pytest.approx(1.0)
+    assert score.value == pytest.approx(1.0)

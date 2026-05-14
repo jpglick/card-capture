@@ -2,7 +2,8 @@
 import pytest
 from pathlib import Path
 
-from harness.metrics.dedup_accuracy import DedupAccuracy, dedup_accuracy
+from harness.metrics.dedup_accuracy import dedup_accuracy
+from harness.metrics.types import MetricResult
 
 FIX = Path("tests/harness/fixtures/runs")
 
@@ -14,9 +15,9 @@ def test_dedup_perfect_grouping():
         truth_path=FIX / "dedup" / "truth.json",
         video_id="dedup",
     )
-    assert isinstance(result, DedupAccuracy)
-    assert result.ari == pytest.approx(1.0, abs=1e-6)
-    assert result.pair_f1 == pytest.approx(1.0, abs=1e-6)
+    assert isinstance(result, MetricResult)
+    assert result.breakdown["ari"] == pytest.approx(1.0, abs=1e-6)
+    assert result.breakdown["pair_f1"] == pytest.approx(1.0, abs=1e-6)
 
 
 def test_dedup_returns_none_when_fewer_than_two_matches(tmp_path):
@@ -33,12 +34,12 @@ def test_dedup_returns_none_when_fewer_than_two_matches(tmp_path):
         truth_path=truth_path,
         video_id="dedup",
     )
-    assert result.ari is None
-    assert result.pair_f1 is None
+    assert result.breakdown["ari"] is None
+    assert result.breakdown["pair_f1"] is None
 
 
 def test_dedup_result_is_frozen():
-    """DedupAccuracy instances are immutable."""
-    d = DedupAccuracy(ari=0.5, pair_f1=0.5)
+    """MetricResult instances are immutable."""
+    d = MetricResult(breakdown={"ari": 0.5, "pair_f1": 0.5})
     with pytest.raises(Exception):
-        d.ari = 0.0  # type: ignore[misc]
+        d.breakdown = {}  # type: ignore[misc]

@@ -3,8 +3,7 @@ import pytest
 from pathlib import Path
 
 from harness.runner import Report, PerVideoReport, run_metrics
-from harness.metrics.dedup_accuracy import DedupAccuracy
-from harness.metrics.image_quality import ImageQuality
+from harness.metrics.types import MetricResult
 
 FIX = Path("tests/harness/fixtures/runs")
 
@@ -44,7 +43,7 @@ def test_runner_recall_value():
         truth_dir=FIX / "all_matched",
         videos=["all_matched"],
     )
-    assert report.metrics["card_recall"] == pytest.approx(2 / 3)
+    assert report.metrics["card_recall"].value == pytest.approx(2 / 3)
 
 
 def test_runner_aggregate_averages_across_videos():
@@ -54,8 +53,8 @@ def test_runner_aggregate_averages_across_videos():
         truth_dir=FIX / "all_matched",
         videos=["all_matched"],
     )
-    pv_recall = report.per_video[0].metrics["card_recall"]
-    assert report.metrics["card_recall"] == pytest.approx(pv_recall)
+    pv_recall = report.per_video[0].metrics["card_recall"].value
+    assert report.metrics["card_recall"].value == pytest.approx(pv_recall)
 
 
 def test_runner_raises_when_truth_not_found(tmp_path):
@@ -68,19 +67,19 @@ def test_runner_raises_when_truth_not_found(tmp_path):
         )
 
 
-def test_runner_dedup_accuracy_is_dataclass():
+def test_runner_dedup_accuracy_is_metric_result():
     report = run_metrics(
         db_path=FIX / "dedup" / "cards.sqlite",
         truth_dir=FIX / "dedup",
         videos=["dedup"],
     )
-    assert isinstance(report.metrics["dedup_accuracy"], DedupAccuracy)
+    assert isinstance(report.metrics["dedup_accuracy"], MetricResult)
 
 
-def test_runner_image_quality_is_dataclass():
+def test_runner_image_quality_is_metric_result():
     report = run_metrics(
         db_path=FIX / "image_quality" / "cards.sqlite",
         truth_dir=FIX / "image_quality",
         videos=["image_quality"],
     )
-    assert isinstance(report.metrics["image_quality"], ImageQuality)
+    assert isinstance(report.metrics["image_quality"], MetricResult)

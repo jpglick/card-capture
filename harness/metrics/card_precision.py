@@ -8,13 +8,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from typing import Optional
-
 from harness.match import match_detections_to_truth
+from harness.metrics.types import MetricResult
 from harness.schema import TruthFile
 
 
-def card_precision(*, db_path: Path, truth_path: Path, video_id: str) -> Optional[float]:
+def card_precision(*, db_path: Path, truth_path: Path, video_id: str) -> MetricResult:
     """Compute card precision for one video.
 
     Parameters
@@ -28,7 +27,7 @@ def card_precision(*, db_path: Path, truth_path: Path, video_id: str) -> Optiona
 
     Returns
     -------
-    float in [0, 1], or ``None`` when there are no detections.
+    MetricResult with value in [0, 1], or value=None when there are no detections.
     """
     truth = TruthFile.model_validate_json(truth_path.read_text())
     pairs = match_detections_to_truth(db_path, truth, video_id)
@@ -36,7 +35,7 @@ def card_precision(*, db_path: Path, truth_path: Path, video_id: str) -> Optiona
     # All pairs that contain a detection (matched or phantom).
     all_detections = [p for p in pairs if p.detection_id is not None]
     if not all_detections:
-        return None
+        return MetricResult(value=None)
 
     matched = [p for p in all_detections if p.gt_card_id is not None]
-    return len(matched) / len(all_detections)
+    return MetricResult(value=len(matched) / len(all_detections))
