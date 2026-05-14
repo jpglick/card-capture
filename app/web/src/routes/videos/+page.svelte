@@ -2,10 +2,12 @@
     import { onMount } from 'svelte';
     import { api } from '$lib/api/client';
     import type { Video } from '$lib/api/types';
+    import QueueCard from '$lib/components/QueueCard.svelte';
 
     let videos: Video[] = [];
     let loading = true;
     let error: string | null = null;
+    let dragging = false;
 
     async function loadVideos() {
         try {
@@ -18,85 +20,163 @@
         }
     }
 
-    async function startProcessing(videoId: string) {
+    async function registerVideo(filename: string) {
         try {
-            const run = await api.videos.process(videoId);
-            window.location.href = `/runs/${run.run_id}`;
+            await api.videos.create({ filename });
+            await loadVideos();
         } catch (e: any) {
-            alert(`Failed to start processing: ${e.message}`);
+            error = `Failed to add video: ${e.message}`;
         }
+    }
+
+    function onDragOver(e: DragEvent) {
+        e.preventDefault();
+        dragging = true;
+    }
+
+    function onDragLeave() {
+        dragging = false;
+    }
+
+    async function onDrop(e: DragEvent) {
+        e.preventDefault();
+        dragging = false;
+        const files = e.dataTransfer?.files;
+        if (!files?.length) return;
+        for (const file of Array.from(files)) {
+            await registerVideo(file.name);
+        }
+    }
+
+    async function onFileInput(e: Event) {
+        const input = e.target as HTMLInputElement;
+        if (!input.files?.length) return;
+        for (const file of Array.from(input.files)) {
+            await registerVideo(file.name);
+        }
+        input.value = '';
     }
 
     onMount(loadVideos);
 </script>
 
-<h1>Videos</h1>
+<div class="page-header">
+    <h1>Videos</h1>
+    <label class="add-btn">
+        + Add Videos
+        <input type="file" accept="video/*" multiple on:change={onFileInput} style="display:none" />
+    </label>
+</div>
 
+{#if error}
+    <div class="error-banner">{error} <button on:click={() => error = null}>✕</button></div>
+{/if}
+
+<!-- Drag-drop dropzone -->
+<div
+    class="dropzone"
+    class:active={dragging}
+    on:dragover={onDragOver}
+    on:dragleave={onDragLeave}
+    on:drop={onDrop}
+    role="region"
+    aria-label="Drop video files here"
+>
+    {#if dragging}
+        <span class="drop-hint">Release to add videos</span>
+    {:else}
+        <span class="drop-hint">Drag & drop video files here, or use the button above</span>
+    {/if}
+</div>
+
+<!-- Queue -->
 {#if loading}
-    <p>Loading videos...</p>
-{:else if error}
-    <p class="error">{error}</p>
+    <p class="loading">Loading…</p>
+{:else if videos.length === 0}
+    <p class="empty">No videos yet. Add one above.</p>
 {:else}
-    <table class="video-table">
-        <thead>
-            <tr>
-                <th>ID</th>
-                <th>Filename</th>
-                <th>Status</th>
-                <th>Created At</th>
-                <th>Actions</th>
-            </tr>
-        </thead>
-        <tbody>
-            {#each videos as video}
-                <tr>
-                    <td>{video.video_id}</td>
-                    <td>{video.filename}</td>
-                    <td><span class="status-badge {video.status}">{video.status}</span></td>
-                    <td>{new Date(video.created_at).toLocaleString()}</td>
-                    <td>
-                        <button onclick={() => startProcessing(video.video_id)}>Process</button>
-                    </td>
-                </tr>
-            {/each}
-        </tbody>
-    </table>
+    <div class="queue-list">
+        {#each videos as video (video.video_id)}
+            <QueueCard {video} />
+        {/each}
+    </div>
 {/if}
 
 <style>
-    .video-table {
-        width: 100%;
-        border-collapse: collapse;
-        background: white;
+    .page-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1.5rem;
+    }
+
+    h1 { margin: 0; }
+
+    .add-btn {
+        background: #727cf5;
+        color: white;
+        padding: 0.5rem 1.2rem;
         border-radius: 8px;
-        overflow: hidden;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        cursor: pointer;
+        font-weight: 600;
+        font-size: 0.9rem;
+        user-select: none;
+    }
+    .add-btn:hover { background: #5a65e8; }
+
+    .error-banner {
+        background: #fff3f3;
+        border: 1px solid #fa5c7c;
+        color: #fa5c7c;
+        border-radius: 8px;
+        padding: 0.75rem 1rem;
+        margin-bottom: 1rem;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+    .error-banner button {
+        background: none;
+        border: none;
+        cursor: pointer;
+        color: #fa5c7c;
+        font-size: 1rem;
     }
 
-    th, td {
-        padding: 1rem;
-        text-align: left;
-        border-bottom: 1px solid #eee;
-    }
-
-    th {
+    .dropzone {
+        border: 2px dashed #dee2e6;
+        border-radius: 12px;
+        padding: 2.5rem;
+        text-align: center;
+        margin-bottom: 1.5rem;
+        transition: all 0.2s;
         background: #f8f9fa;
+    }
+
+    .dropzone.active {
+        border-color: #727cf5;
+        background: #eef0fe;
+    }
+
+    .drop-hint {
+        color: #6c757d;
+        font-size: 0.95rem;
+    }
+
+    .dropzone.active .drop-hint {
+        color: #727cf5;
         font-weight: 600;
     }
 
-    .error {
-        color: #fa5c7c;
+    .loading, .empty {
+        color: #6c757d;
+        text-align: center;
+        padding: 2rem;
     }
 
-    .status-badge {
-        padding: 0.25rem 0.5rem;
-        border-radius: 4px;
-        font-size: 0.875rem;
-        text-transform: capitalize;
+    .queue-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
     }
-
-    .status-badge.completed { background: #0acf97; color: white; }
-    .status-badge.processing { background: #727cf5; color: white; }
-    .status-badge.failed { background: #fa5c7c; color: white; }
-    .status-badge.pending { background: #ffbc00; color: white; }
 </style>

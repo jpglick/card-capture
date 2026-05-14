@@ -1,3 +1,4 @@
+from typing import Optional
 """Model-versions registry — thin read/write wrapper for the ``model_versions`` table.
 
 Schema (from Contract 1 / migrations/0001_v4_schema.sql):
@@ -53,7 +54,7 @@ def register_model(
         return cur.lastrowid
 
 
-def get_latest(*, db_path: Path, model_name: str) -> ModelVersion | None:
+def get_latest(*, db_path: Path, model_name: str) -> Optional[ModelVersion]:
     """Return the most-recently created version for *model_name*, or ``None``."""
     with sqlite3.connect(db_path) as conn:
         row = conn.execute(
