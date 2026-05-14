@@ -8,6 +8,17 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
+def _to_file_url(path: "Optional[str]") -> "Optional[str]":
+    if not path:
+        return None
+    p = Path(path)
+    try:
+        return "/files/" + str(p.relative_to("card_capture_output"))
+    except ValueError:
+        parts = p.parts
+        if parts and parts[0] == "card_capture_output":
+            return "/files/" + "/".join(parts[1:])
+        return f"/files/crops/{p.name}" if p.suffix else None
 from typing import Optional, Any
 
 from harness.schema import TruthFile
@@ -106,8 +117,9 @@ class LabelingService:
             labels_collected = conn.execute("SELECT COUNT(*) FROM fb_labels").fetchone()[0]
 
         res = dict(row)
+        res["canonical_url"] = _to_file_url(res.get("canonical_url"))
         res["labels_collected"] = labels_collected
-        res["labels_target"] = 500  # Default target
+        res["labels_target"] = 500
         return res
 
     def list_clusters(self, status: Optional[str] = None) -> list[dict[str, Any]]:

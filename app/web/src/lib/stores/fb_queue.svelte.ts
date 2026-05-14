@@ -12,7 +12,7 @@ export function createFBQueue() {
         loading = true;
         try {
             const next = await api.label.nextFB();
-            if ('instance_id' in next) {
+            if (next && typeof next === 'object' && 'instance_id' in next) {
                 queue.push(next as LabelFBNext);
             }
         } finally {

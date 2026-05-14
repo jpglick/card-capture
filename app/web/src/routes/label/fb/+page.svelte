@@ -1,6 +1,6 @@
 <script lang="ts">
     import { onMount } from 'svelte';
-    import { createFBQueue } from '$lib/stores/fb_queue';
+    import { createFBQueue } from '$lib/stores/fb_queue.svelte';
     import Hotkeys from '$lib/components/Hotkeys.svelte';
 
     const q = createFBQueue();
