@@ -15,67 +15,43 @@ class RunService:
         """Return a list of pipeline runs, newest first."""
         with sqlite3.connect(str(self.db_path)) as conn:
             conn.row_factory = sqlite3.Row
-            
-            # Select distinct runs. We use COALESCE to handle legacy null run_ids.
-            query = """
-                SELECT 
-                    COALESCE(run_id, 'legacy-' || video_id) as run_id,
-                    video_id,
-                    MIN(created_at) as created_at
-                FROM pipeline_events
-                GROUP BY 1
-                ORDER BY created_at DESC
-            """
-            params = []
+            params: list = []
+            where = "WHERE 1=1"
             if video_id:
-                query = """
-                    SELECT 
-                        COALESCE(run_id, 'legacy-' || video_id) as run_id,
-                        video_id,
-                        MIN(created_at) as created_at
-                    FROM pipeline_events
-                    WHERE video_id = ?
-                    GROUP BY 1
-                    ORDER BY created_at DESC
-                """
+                where += " AND pr.video_id = ?"
                 params.append(video_id)
-                
-            rows = conn.execute(query, params).fetchall()
-            
+            rows = conn.execute(f"""
+                SELECT pr.run_id, pr.video_id, pr.status, pr.cards_extracted,
+                       pr.started_at as created_at, pr.finished_at,
+                       v.source_path
+                FROM pipeline_runs pr
+                LEFT JOIN videos v ON v.id = pr.video_id
+                {where}
+                ORDER BY pr.started_at DESC
+            """, params).fetchall()
+
             runs = []
             for r in rows:
-                run_id = r["run_id"]
-                vid = r["video_id"]
-                
-                # Get latest status for this run
-                status_row = conn.execute(
-                    """
-                    SELECT event_type 
-                    FROM pipeline_events 
-                    WHERE (run_id = ? OR (run_id IS NULL AND 'legacy-' || video_id = ?))
-                      AND event_type IN ('run_completed', 'run_failed') 
-                    ORDER BY created_at DESC LIMIT 1
-                    """,
-                    (run_id, run_id)
-                ).fetchone()
-                
-                # Count cards extracted for this run
-                card_count = conn.execute(
-                    "SELECT COUNT(*) FROM card_instances WHERE run_id = ? OR (run_id IS NULL AND 'legacy-' || video_id = ?)",
-                    (run_id, run_id)
-                ).fetchone()[0]
-                
-                # Get video filename
-                video_row = conn.execute("SELECT source_path FROM videos WHERE id = ?", (vid,)).fetchone()
-                video_id_str = Path(video_row["source_path"]).stem if video_row else str(vid)
-                
+                started = r["created_at"] or ""
+                finished = r["finished_at"] or ""
+                elapsed_ms = 0
+                if started and finished:
+                    from datetime import datetime
+                    fmt = "%Y-%m-%d %H:%M:%S"
+                    try:
+                        elapsed_ms = int(
+                            (datetime.strptime(finished, fmt) - datetime.strptime(started, fmt))
+                            .total_seconds() * 1000
+                        )
+                    except ValueError:
+                        pass
                 runs.append({
-                    "run_id": run_id,
-                    "video_id": video_id_str,
-                    "status": status_row["event_type"].replace("run_", "") if status_row else "running",
-                    "cards_extracted": card_count,
-                    "elapsed_ms": 0, # To be computed if start/end events exist
-                    "created_at": r["created_at"],
+                    "run_id": r["run_id"],
+                    "video_id": Path(r["source_path"]).stem if r["source_path"] else str(r["video_id"]),
+                    "status": r["status"],
+                    "cards_extracted": r["cards_extracted"],
+                    "elapsed_ms": elapsed_ms,
+                    "created_at": started,
                 })
             return runs
 

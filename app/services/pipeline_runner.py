@@ -67,6 +67,7 @@ class PipelineRunner:
 
         try:
             self.bus.emit(run_id, Event(name="run_started"))
+            self._record_run_start(run_id, video_id)
             print(f"[{run_id}] pipeline starting — video={video}", flush=True)
 
             if self.flow_cls is not None:
@@ -90,6 +91,7 @@ class PipelineRunner:
                     "--db", abs_db,
                     "--detector", detector,
                     "--config-preset", config_preset,
+                    "--ui-run-id", run_id,
                 ]
                 print(f"[{run_id}] running: {' '.join(cmd)}", flush=True)
 
@@ -111,16 +113,47 @@ class PipelineRunner:
             print(f"[{run_id}] pipeline completed", flush=True)
             self.bus.emit(run_id, Event(name="run_completed"))
             self._set_video_status(video_id, "completed")
+            self._record_run_finish(run_id, "completed")
 
         except Exception as exc:
             print(f"[{run_id}] pipeline failed: {exc}", flush=True)
             self.bus.emit(run_id, Event(name="run_failed", payload={"error": str(exc)}))
             self._set_video_status(video_id, "failed")
+            self._record_run_finish(run_id, "failed")
             raise
         finally:
             _event_bus_registry.clear(run_id)
             os.environ.pop("EVENT_BUS_RUN_ID", None)
             os.environ.pop("EVENT_BUS_INPROC", None)
+
+    def _record_run_start(self, run_id: str, video_id: int) -> None:
+        if not self.db_path:
+            return
+        try:
+            import sqlite3
+            with sqlite3.connect(str(self.db_path)) as conn:
+                conn.execute(
+                    "INSERT OR IGNORE INTO pipeline_runs (run_id, video_id, status) VALUES (?, ?, 'running')",
+                    (run_id, video_id),
+                )
+        except Exception as exc:
+            print(f"[{run_id}] could not record run start: {exc}", flush=True)
+
+    def _record_run_finish(self, run_id: str, status: str) -> None:
+        if not self.db_path:
+            return
+        try:
+            import sqlite3
+            with sqlite3.connect(str(self.db_path)) as conn:
+                cards = conn.execute(
+                    "SELECT COUNT(*) FROM card_instances WHERE run_id = ?", (run_id,)
+                ).fetchone()[0]
+                conn.execute(
+                    "UPDATE pipeline_runs SET status=?, cards_extracted=?, finished_at=datetime('now') WHERE run_id=?",
+                    (status, cards, run_id),
+                )
+        except Exception as exc:
+            print(f"[{run_id}] could not record run finish: {exc}", flush=True)
 
     def _set_video_status(self, video_id: int, status: str) -> None:
         if not self.db_path:

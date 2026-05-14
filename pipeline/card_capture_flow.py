@@ -20,6 +20,7 @@ class CardCaptureFlow(FlowSpec):
     config_preset = Parameter("config-preset", default="balanced")
     fusion_target_frames = Parameter("fusion-target-frames", default=1, type=int)
     corner_refinement = Parameter("corner-refinement", default=False, type=bool)
+    ui_run_id = Parameter("ui-run-id", help="Run ID assigned by the app UI", default="")
 
     @step
     def start(self):
@@ -96,7 +97,7 @@ class CardCaptureFlow(FlowSpec):
             self.dedup_out.dedup_groups, 
             self.fused_canonicals,
             prepared_tracks=self.resolve_out.prepared_tracks,
-            run_id=current.run_id
+            run_id=self.ui_run_id or current.run_id
         )
         self.next(self.end)
 

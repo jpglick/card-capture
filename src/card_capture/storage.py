@@ -178,10 +178,17 @@ class Storage:
         width: int = 0,
         height: int = 0,
     ) -> int:
-        """Return the existing video ID for source_path, or insert a new row."""
+        """Return the existing video ID for source_path, or insert a new row.
+
+        Normalises to absolute path before lookup so relative and absolute
+        references to the same file don't create duplicate rows.
+        """
+        norm = str(Path(source_path).resolve())
         with self._connect() as conn:
+            # Check both the normalised absolute path and the original value
             row = conn.execute(
-                "SELECT id FROM videos WHERE source_path = ?", (source_path,)
+                "SELECT id FROM videos WHERE source_path = ? OR source_path = ?",
+                (norm, source_path),
             ).fetchone()
             if row:
                 return int(row[0])
