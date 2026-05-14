@@ -51,7 +51,7 @@ def run(ctx: RunContext, detect_out: DetectOutput) -> NoveltyOutput:
         bg_model = BackgroundModel.from_source_frame_paths(bg_paths, n=30)
         # Persist the background model so downstream steps can use it
         bg_model_path = str(Path(ctx.output_dir) / "bg_model.npy")
-        np.save(bg_model_path, bg_model.mean_bgr)
+        np.save(bg_model_path, bg_model.bgr if bg_model.bgr is not None else bg_model.gray)
 
     scored_rows: List[Dict[str, Any]] = []
     for row in detect_out.detection_rows:
