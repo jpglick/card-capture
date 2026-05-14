@@ -2,6 +2,7 @@
 """
 from __future__ import annotations
 
+import os
 import sqlite3
 from pathlib import Path
 from typing import Optional
@@ -24,7 +25,7 @@ def create_app(db_path: Optional[Path] = None) -> FastAPI:
     """Create and configure the FastAPI application.
     """
     if db_path is None:
-        db_path = Path("cards.sqlite")
+        db_path = Path(os.environ.get("CC_DB", "card_capture_output/cards.sqlite"))
 
     # Ensure the database file exists.
     if not db_path.exists():
