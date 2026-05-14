@@ -33,17 +33,23 @@ class PipelineRunner:
         config_preset: str = "balanced",
     ) -> None:
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            None,
-            self._run_blocking,
-            run_id,
-            video_id,
-            video,
-            output_dir,
-            db,
-            detector,
-            config_preset,
-        )
+        try:
+            await loop.run_in_executor(
+                None,
+                self._run_blocking,
+                run_id,
+                video_id,
+                video,
+                output_dir,
+                db,
+                detector,
+                config_preset,
+            )
+        except Exception:
+            # Already handled in _run_blocking (status updated, event emitted).
+            # Swallow here so the exception doesn't propagate through Starlette's
+            # ASGI background task layer and generate a spurious 500 traceback.
+            pass
 
     def _run_blocking(
         self,
