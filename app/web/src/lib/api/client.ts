@@ -27,6 +27,16 @@ export const api = {
         list: () => req<T.Video[]>('GET', '/videos'),
         get: (id: string) => req<T.Video>('GET', `/videos/${id}`),
         create: (body: T.VideoCreate) => req<T.Video>('POST', '/videos', body),
+        upload: async (file: File): Promise<T.Video> => {
+            const form = new FormData();
+            form.append('file', file);
+            const r = await fetch(`${BASE}/videos/upload`, { method: 'POST', body: form });
+            if (!r.ok) {
+                const detail = await r.text().catch(() => '');
+                throw new ApiError(r.status, detail);
+            }
+            return r.json();
+        },
         process: (videoId: string) => req<T.RunSummary>('POST', `/videos/${videoId}/process`),
         delete: (id: string) => req<void>('DELETE', `/videos/${id}`),
     },

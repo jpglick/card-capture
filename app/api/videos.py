@@ -2,13 +2,17 @@
 from __future__ import annotations
 
 import datetime
+import shutil
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, UploadFile, File
 
 from app.schemas.v1 import RunSummary, Video, VideoCreate
 from app.services.pipeline_runner import PipelineRunner
+
+UPLOADS_DIR = Path("card_capture_uploads")
+UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 router = APIRouter()
 
@@ -26,6 +30,20 @@ def list_videos(request: Request):
 def create_video(payload: VideoCreate, request: Request):
     path = payload.file_path or payload.filename
     video_id = _svc(request).add_video(path)
+    return _svc(request).get_video(video_id)
+
+
+@router.post("/upload", response_model=Video, status_code=201)
+async def upload_video(request: Request, file: UploadFile = File(...)):
+    """Accept a video file upload, persist it to the managed uploads directory,
+    and create the corresponding video record."""
+    dest = UPLOADS_DIR / f"{uuid.uuid4().hex}_{file.filename}"
+    try:
+        with dest.open("wb") as fh:
+            shutil.copyfileobj(file.file, fh)
+    finally:
+        await file.close()
+    video_id = _svc(request).add_video(str(dest))
     return _svc(request).get_video(video_id)
 
 

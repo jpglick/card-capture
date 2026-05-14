@@ -20,9 +20,9 @@
         }
     }
 
-    async function registerVideo(filename: string) {
+    async function uploadVideo(file: File) {
         try {
-            await api.videos.create({ filename });
+            await api.videos.upload(file);
             await loadVideos();
         } catch (e: any) {
             error = `Failed to add video: ${e.message}`;
@@ -44,7 +44,7 @@
         const files = e.dataTransfer?.files;
         if (!files?.length) return;
         for (const file of Array.from(files)) {
-            await registerVideo(file.name);
+            await uploadVideo(file);
         }
     }
 
@@ -52,7 +52,7 @@
         const input = e.target as HTMLInputElement;
         if (!input.files?.length) return;
         for (const file of Array.from(input.files)) {
-            await registerVideo(file.name);
+            await uploadVideo(file);
         }
         input.value = '';
     }

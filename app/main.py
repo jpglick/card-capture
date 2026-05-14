@@ -37,8 +37,9 @@ def create_app(db_path: Optional[Path] = None) -> FastAPI:
     storage.initialize()
 
     # 2. Run migrations (applies v4 schema: truth_files, regression_baselines, etc.)
-    from migrations.run_migrations import apply_migrations
+    from migrations.run_migrations import apply_migrations, assert_migrations_complete
     apply_migrations(db_path)
+    assert_migrations_complete(db_path)
 
     app = FastAPI(
         title="Card Capture v4",

@@ -65,8 +65,14 @@ def run(ctx: RunContext, groups: List[Dict[str, Any]], fused: List[Dict[str, Any
                 from card_capture.ml.embeddings import compute_reid_embedding
                 emb = compute_reid_embedding(f["fused_image_path"])
                 embedding_bytes = emb.tobytes()
-            except Exception as e:
-                print(f"Failed to generate late ReID embedding for {iid[:8]}: {e}")
+            except (FileNotFoundError, RuntimeError, OSError) as e:
+                storage.add_pipeline_event(
+                    video_id=video_id,
+                    frame_index=0,
+                    timestamp_ms=0,
+                    event_type="reid_embedding_failed",
+                    data={"instance_id": iid, "error": type(e).__name__, "message": str(e)},
+                )
 
         row_id = storage.add_card_instance(
             video_id=video_id,

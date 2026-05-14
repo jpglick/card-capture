@@ -1,3 +1,4 @@
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -112,24 +113,23 @@ def test_cli_process_fake_detector_writes_database(tmp_path: Path):
     output_dir = tmp_path / "output"
     db_path = tmp_path / "cards.sqlite"
     config_path = tmp_path / "config.json"
-    
+
     import json
     config_path.write_text(json.dumps({"detector": "fake"}))
 
-    exit_code = main(
-        [
-            "process",
-            str(video_path),
-            "--output-dir",
-            str(output_dir),
-            "--db",
-            str(db_path),
-            "--config",
-            str(config_path),
-            "--pipeline",
-            "monolith",
-        ]
-    )
+    with patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0)):
+        exit_code = main(
+            [
+                "process",
+                str(video_path),
+                "--output-dir",
+                str(output_dir),
+                "--db",
+                str(db_path),
+                "--config",
+                str(config_path),
+            ]
+        )
     assert exit_code == 0
     assert db_path.exists()
 
@@ -163,8 +163,6 @@ def test_cli_process_cancels_when_mps_unavailable_and_user_declines(tmp_path: Pa
                 str(tmp_path / "cards.sqlite"),
                 "--config",
                 str(config_path),
-                "--pipeline",
-                "monolith",
             ]
         )
 
@@ -190,15 +188,8 @@ def test_cli_process_continues_when_mps_unavailable_and_user_accepts(tmp_path: P
             reason="mps_unavailable",
         ),
     ), patch("sys.stdin.isatty", return_value=True), patch("builtins.input", return_value="y"), patch(
-        "card_capture.cli.VideoProcessor"
-    ) as mock_processor:
-        mock_result = mock_processor.return_value.process.return_value
-        mock_result.video_id = 1
-        mock_result.frame_count = 1
-        mock_result.accepted_frame_count = 1
-        mock_result.detection_count = 1
-        mock_result.saved_instance_count = 1
-
+        "subprocess.run", return_value=subprocess.CompletedProcess([], 0)
+    ):
         exit_code = main(
             [
                 "process",
@@ -209,8 +200,6 @@ def test_cli_process_continues_when_mps_unavailable_and_user_accepts(tmp_path: P
                 str(tmp_path / "cards.sqlite"),
                 "--config",
                 str(config_path),
-                "--pipeline",
-                "monolith",
             ]
         )
 
@@ -300,3 +289,42 @@ def test_sampler_sessions_diagnostic_output_contains_valley_splits(capsys, tmp_p
     out = capsys.readouterr().out
     assert "valley_splits" in out or "valley splits" in out.lower()
     assert "fast_scan" in out or "scan frames" in out.lower()
+
+
+def test_to_options_rotate_180_matches_pipeline_config():
+    """PipelineConfig().to_options() must propagate rotate_180 — default must agree."""
+    from pathlib import Path
+    from card_capture.config import PipelineConfig
+    cfg = PipelineConfig()
+    opts = cfg.to_options(Path("/tmp"))
+    assert opts.rotate_180 == cfg.rotate_180, (
+        f"rotate_180 default mismatch: PipelineConfig={cfg.rotate_180}, "
+        f"ProcessingOptions={opts.rotate_180}"
+    )
+
+
+def test_to_options_covers_all_processing_options_fields():
+    """Every ProcessingOptions field must come from PipelineConfig (via direct name,
+    a rename, or the explicit extras dict) — no silent drift."""
+    import dataclasses
+    from pathlib import Path
+    from card_capture.config import PipelineConfig
+    from card_capture.pipeline import ProcessingOptions
+
+    cfg = PipelineConfig()
+    opts = cfg.to_options(Path("/tmp"))
+
+    pc_field_names = {f.name for f in dataclasses.fields(cfg)}
+    po_field_names = {f.name for f in dataclasses.fields(ProcessingOptions)}
+
+    # Fields in ProcessingOptions that have no counterpart in PipelineConfig.
+    # These are intentionally absent: either derived (output_dir, kornia_device)
+    # or renamed (corner_confidence_threshold).
+    known_po_only = {"output_dir", "kornia_device", "corner_confidence_threshold"}
+
+    unaccounted = po_field_names - pc_field_names - known_po_only
+    assert not unaccounted, (
+        f"ProcessingOptions fields with no PipelineConfig counterpart and not in "
+        f"known_po_only: {unaccounted}. Either add them to PipelineConfig, "
+        f"map them in to_options(), or add them to known_po_only."
+    )

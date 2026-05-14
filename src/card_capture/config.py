@@ -58,34 +58,32 @@ class PipelineConfig:
     debug: DebugConfig = field(default_factory=DebugConfig)
 
     def to_options(self, output_dir: Path) -> "card_capture.pipeline.ProcessingOptions":
-        """Convert to legacy ProcessingOptions for the monolith path."""
+        """Convert to legacy ProcessingOptions for the monolith path.
+
+        Generated programmatically to prevent silent drift: any field added to
+        ProcessingOptions with a matching PipelineConfig name is auto-mapped.
+        Fields with different names are handled in `renames`; fields with no
+        PipelineConfig counterpart fall through to their ProcessingOptions default.
+        """
+        import dataclasses as _dc
         from .pipeline import ProcessingOptions
-        return ProcessingOptions(
-            output_dir=output_dir,
-            reader_backend=self.reader_backend,
-            queue_size=self.queue_size,
-            inference_batch_size=self.inference_batch_size,
-            corner_confidence_threshold=self.corner_confidence,
-            blur_threshold=self.blur_threshold,
-            variance_threshold=self.variance_threshold,
-            empty_pixel_threshold=self.empty_pixel_threshold,
-            group_gap_ms=self.group_gap_ms,
-            spatial_variance_threshold=self.spatial_variance_threshold,
-            telemetry_scope=self.telemetry_scope,
-            background_frames=self.background_frames,
-            background_threshold=self.background_threshold,
-            null_patience_frames=self.null_patience_frames,
-            min_track_length=self.min_track_length,
-            use_kornia=self.use_kornia,
-            kornia_device=self.device,
-            triage_keep_percentile=self.triage_keep_percentile,
-            rotate_180=self.rotate_180,
-            tracker_backend=self.tracker_backend,
-            centroid_jump_ratio=self.centroid_jump_ratio,
-            centroid_jump_frames=self.centroid_jump_frames,
-            foil_threshold=self.foil_threshold,
-            enable_foil_aware_fusion=self.enable_foil_aware_fusion,
-        )
+
+        # ProcessingOptions fields whose names differ from PipelineConfig.
+        renames = {
+            "corner_confidence_threshold": self.corner_confidence,
+            "kornia_device": self.device,
+        }
+        pc_fields = {f.name for f in _dc.fields(self)}
+        kwargs: dict = {"output_dir": output_dir}
+        for f in _dc.fields(ProcessingOptions):
+            if f.name == "output_dir":
+                continue
+            elif f.name in renames:
+                kwargs[f.name] = renames[f.name]
+            elif f.name in pc_fields:
+                kwargs[f.name] = getattr(self, f.name)
+            # else: ProcessingOptions-only field; use its default
+        return ProcessingOptions(**kwargs)
 
 def load_config(path: Path) -> PipelineConfig:
     if not path.exists():

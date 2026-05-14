@@ -209,7 +209,7 @@ class ProcessingOptions:
     use_kornia: bool = True
     kornia_device: str = "auto"
     triage_keep_percentile: float = 0.05
-    rotate_180: bool = True
+    rotate_180: bool = False
     tracker_backend: str = "bytetrack"
     centroid_jump_ratio: float = 0.30
     centroid_jump_frames: int = 3

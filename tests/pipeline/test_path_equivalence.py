@@ -17,11 +17,10 @@ FIXTURE_VIDEO = Path("tests/fixtures/golden_corpus/IMG_5872/IMG_5872.MOV")
 
 
 def _read_cards(db_path: Path) -> list[tuple]:
-    """Return a sorted list of (instance_id, side, primary_hash)."""
+    """Return a sorted list of (angle, session_id) pairs."""
     with sqlite3.connect(db_path) as conn:
         rows = conn.execute(
-            "SELECT id, angle, visual_hash "
-            "FROM card_instances ORDER BY id"
+            "SELECT angle, session_id FROM card_instances ORDER BY angle, session_id"
         ).fetchall()
     return rows
 
@@ -72,17 +71,11 @@ def test_monolith_and_metaflow_produce_same_cards(tmp_path):
     mono_cards = _read_cards(monolith_out / "cards.sqlite")
     meta_cards = _read_cards(metaflow_out / "cards.sqlite")
 
-    # Card set must match. 
-    # Compare on side only, ignoring the exact IDs and primary_hash
-    # (primary_hash differs because FakeCardDetector adds random noise to confidence,
-    # causing a different frame to be selected as best_canonical).
-    mono_set = {side for _, side, _ in mono_cards}
-    meta_set = {side for _, side, _ in meta_cards}
-
-    assert mono_set == meta_set, (
-        f"Pipeline paths disagree.\n"
-        f"  monolith-only: {mono_set - meta_set}\n"
-        f"  metaflow-only: {meta_set - mono_set}"
+    # Compare on (angle, session_id) sorted pairs and total count.
+    # This catches card-set divergence that a set-of-angles comparison would miss
+    # (e.g. monolith drops 2 Fronts and Metaflow drops 2 different Fronts).
+    assert mono_cards == meta_cards, (
+        f"Pipeline paths produced different (angle, session_id) sets.\n"
+        f"  monolith: {mono_cards}\n"
+        f"  metaflow: {meta_cards}"
     )
-    # Also verify counts match
-    assert len(mono_cards) == len(meta_cards), "Pipeline paths produced different number of cards"
