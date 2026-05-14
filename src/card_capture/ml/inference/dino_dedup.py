@@ -13,7 +13,7 @@ import numpy as np
 import torch
 from PIL import Image
 
-from .models.dino_embedder import DinoEmbedder, DINO_VARIANT
+from ..models.dino_embedder import DinoEmbedder, DINO_VARIANT
 
 
 class DinoDeduplicator:
