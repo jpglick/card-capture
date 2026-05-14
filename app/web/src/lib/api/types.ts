@@ -98,6 +98,13 @@ export interface CardFilter {
     page_size?: number;
 }
 
+export interface PaginatedCards {
+    total: number;
+    page: number;
+    page_size: number;
+    items: Card[];
+}
+
 export interface CardBulkAction {
     card_ids: string[];
     review_state?: string;

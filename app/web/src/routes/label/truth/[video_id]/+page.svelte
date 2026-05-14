@@ -11,7 +11,7 @@
     const videoId = page.params.video_id;
     let instances: (Card & { verdict?: 'real' | 'phantom' })[] = $state([]);
     let selectedId = $state<string | null>(null);
-    let loading = true;
+    let loading = $state(true);
     let draftStore: any = $state(null);
 
     async function load() {
@@ -20,7 +20,7 @@
             const [video, truth, cards] = await Promise.all([
                 api.videos.get(videoId),
                 api.label.getTruth(videoId),
-                api.cards.list({ video_id: parseInt(videoId) })
+                api.cards.listAll({ video_id: videoId })
             ]);
 
             const initialTruth: LabelTruth = truth || {

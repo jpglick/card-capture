@@ -58,7 +58,15 @@ export const api = {
             Object.entries(filter).forEach(([k, v]) => {
                 if (v !== undefined) params.append(k, v.toString());
             });
-            return req<T.Card[]>('GET', `/cards?${params.toString()}`);
+            return req<T.PaginatedCards>('GET', `/cards?${params.toString()}`);
+        },
+        listAll: async (filter: T.CardFilter): Promise<T.Card[]> => {
+            const params = new URLSearchParams();
+            Object.entries(filter).forEach(([k, v]) => {
+                if (v !== undefined) params.append(k, v.toString());
+            });
+            const r = await req<T.PaginatedCards>('GET', `/cards?${params.toString()}`);
+            return r.items;
         },
         detail: (id: string) => req<T.CardDetail>('GET', `/cards/${id}`),
         update: (id: string, body: Partial<T.Card>) => req<T.Card>('PATCH', `/cards/${id}`, body),

@@ -9,7 +9,7 @@
     async function load() {
         try {
             loading = true;
-            cards = await api.cards.list({});
+            cards = await api.cards.listAll({});
         } catch (e) {
             console.error(e);
         } finally {
