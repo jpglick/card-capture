@@ -9,9 +9,10 @@ from pathlib import Path
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, UploadFile, File
 
 from app.schemas.v1 import RunSummary, Video, VideoCreate
-from app.services.pipeline_runner import PipelineRunner
+from app.services.pipeline_runner import PipelineRunner, _REPO_ROOT
 
-UPLOADS_DIR = Path("card_capture_uploads")
+# Absolute path so the stored source_path is always resolvable regardless of cwd
+UPLOADS_DIR = (Path(__file__).parent.parent.parent / "card_capture_uploads").resolve()
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 router = APIRouter()
@@ -68,17 +69,19 @@ async def start_run(video_id: int, request: Request, bg: BackgroundTasks):
         raise HTTPException(status_code=404, detail="Video not found")
         
     run_id = f"run_{uuid.uuid4().hex[:8]}"
-    runner = PipelineRunner(bus=request.app.state.event_bus, flow_cls=None)
+    db_path = request.app.state.db_path
+    runner = PipelineRunner(bus=request.app.state.event_bus, flow_cls=None, db_path=db_path)
     _svc(request).update_status(video_id, "processing")
 
-    output_dir = Path("card_capture_output") / run_id
-    
+    output_dir = Path(_REPO_ROOT) / "card_capture_output" / run_id
+
     bg.add_task(
         runner.run_async,
         run_id,
+        video_id=video_id,
         video=video["source_path"],
         output_dir=str(output_dir),
-        db=str(request.app.state.db_path),
+        db=str(db_path.resolve()),
     )
     
     return RunSummary(
