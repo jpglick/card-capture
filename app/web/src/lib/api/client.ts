@@ -27,15 +27,27 @@ export const api = {
         list: () => req<T.Video[]>('GET', '/videos'),
         get: (id: string) => req<T.Video>('GET', `/videos/${id}`),
         create: (body: T.VideoCreate) => req<T.Video>('POST', '/videos', body),
-        upload: async (file: File): Promise<T.Video> => {
-            const form = new FormData();
-            form.append('file', file);
-            const r = await fetch(`${BASE}/videos/upload`, { method: 'POST', body: form });
-            if (!r.ok) {
-                const detail = await r.text().catch(() => '');
-                throw new ApiError(r.status, detail);
-            }
-            return r.json();
+        upload: (file: File, onProgress?: (pct: number) => void): Promise<T.Video> => {
+            return new Promise((resolve, reject) => {
+                const xhr = new XMLHttpRequest();
+                const form = new FormData();
+                form.append('file', file);
+                xhr.upload.addEventListener('progress', (e) => {
+                    if (e.lengthComputable && onProgress) {
+                        onProgress(Math.round((e.loaded / e.total) * 100));
+                    }
+                });
+                xhr.addEventListener('load', () => {
+                    if (xhr.status >= 200 && xhr.status < 300) {
+                        resolve(JSON.parse(xhr.responseText));
+                    } else {
+                        reject(new ApiError(xhr.status, xhr.responseText));
+                    }
+                });
+                xhr.addEventListener('error', () => reject(new ApiError(0, 'Network error')));
+                xhr.open('POST', `${BASE}/videos/upload`);
+                xhr.send(form);
+            });
         },
         process: (videoId: string) => req<T.RunSummary>('POST', `/videos/${videoId}/process`),
         delete: (id: string) => req<void>('DELETE', `/videos/${id}`),

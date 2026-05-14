@@ -4,10 +4,13 @@
     import type { Video } from '$lib/api/types';
     import QueueCard from '$lib/components/QueueCard.svelte';
 
+    interface UploadState { name: string; pct: number; done: boolean; error?: string; }
+
     let videos: Video[] = [];
     let loading = true;
     let error: string | null = null;
     let dragging = false;
+    let uploads: UploadState[] = [];
 
     async function loadVideos() {
         try {
@@ -21,11 +24,18 @@
     }
 
     async function uploadVideo(file: File) {
+        const state: UploadState = { name: file.name, pct: 0, done: false };
+        uploads = [...uploads, state];
         try {
-            await api.videos.upload(file);
+            await api.videos.upload(file, (pct) => {
+                uploads = uploads.map(u => u === state ? { ...u, pct } : u);
+            });
+            uploads = uploads.map(u => u === state ? { ...u, pct: 100, done: true } : u);
             await loadVideos();
+            // Remove the completed entry after a short delay
+            setTimeout(() => { uploads = uploads.filter(u => u !== state); }, 2000);
         } catch (e: any) {
-            error = `Failed to add video: ${e.message}`;
+            uploads = uploads.map(u => u === state ? { ...u, error: e.message } : u);
         }
     }
 
@@ -88,6 +98,25 @@
         <span class="drop-hint">Drag & drop video files here, or use the button above</span>
     {/if}
 </div>
+
+<!-- Upload progress -->
+{#if uploads.length > 0}
+    <div class="upload-list">
+        {#each uploads as u}
+            <div class="upload-item" class:done={u.done} class:errored={!!u.error}>
+                <div class="upload-name">{u.name}</div>
+                {#if u.error}
+                    <div class="upload-error">{u.error}</div>
+                {:else}
+                    <div class="progress-track">
+                        <div class="progress-fill" style="width: {u.pct}%"></div>
+                    </div>
+                    <div class="upload-pct">{u.done ? 'Done' : `${u.pct}%`}</div>
+                {/if}
+            </div>
+        {/each}
+    </div>
+{/if}
 
 <!-- Queue -->
 {#if loading}
@@ -178,5 +207,64 @@
         display: flex;
         flex-direction: column;
         gap: 0.75rem;
+    }
+
+    .upload-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+        margin-bottom: 1.5rem;
+    }
+
+    .upload-item {
+        background: white;
+        border-radius: 8px;
+        padding: 0.75rem 1rem;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.07);
+        display: grid;
+        grid-template-columns: 1fr auto;
+        grid-template-rows: auto auto;
+        gap: 0.4rem 1rem;
+        align-items: center;
+    }
+
+    .upload-name {
+        font-size: 0.9rem;
+        font-weight: 600;
+        color: #313a46;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .upload-pct {
+        font-size: 0.8rem;
+        color: #6c757d;
+        text-align: right;
+    }
+
+    .upload-item.done .upload-pct { color: #0acf97; font-weight: 600; }
+
+    .progress-track {
+        grid-column: 1;
+        height: 6px;
+        background: #e9ecef;
+        border-radius: 3px;
+        overflow: hidden;
+    }
+
+    .progress-fill {
+        height: 100%;
+        background: #727cf5;
+        border-radius: 3px;
+        transition: width 0.15s ease;
+    }
+
+    .upload-item.done .progress-fill { background: #0acf97; }
+
+    .upload-error {
+        grid-column: 1 / -1;
+        font-size: 0.8rem;
+        color: #fa5c7c;
     }
 </style>
