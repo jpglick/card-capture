@@ -61,7 +61,7 @@
         instances = instances.map(i => {
             if (i.instance_id === selectedId) {
                 if (verdict === 'flip') {
-                    return { ...i, angle: i.angle === 'Front' ? 'Back' : 'Front' };
+                    return { ...i, side: i.side === 'Front' ? 'Back' : 'Front' };
                 }
                 return { ...i, verdict };
             }
@@ -75,8 +75,8 @@
                     const inst = instances.find(i => i.instance_id === selectedId)!;
                     d.expected_cards.push({
                         card_id: inst.instance_id,
-                        front_present: inst.angle === 'Front',
-                        back_present: inst.angle === 'Back',
+                        front_present: inst.side === 'Front',
+                        back_present: inst.side === 'Back',
                         physical_card_key: inst.instance_id,
                         is_foil: false
                     });
