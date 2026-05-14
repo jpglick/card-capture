@@ -56,41 +56,48 @@ class RunService:
             return runs
 
     def get_run_details(self, run_id: str) -> Optional[dict[str, Any]]:
-        """Retrieve full details and telemetry for a run."""
+        """Retrieve full details for a run."""
         with sqlite3.connect(str(self.db_path)) as conn:
             conn.row_factory = sqlite3.Row
-            events = conn.execute(
+            row = conn.execute(
                 """
-                SELECT * FROM pipeline_events 
-                WHERE (run_id = ? OR (run_id IS NULL AND 'legacy-' || video_id = ?))
-                ORDER BY created_at ASC
+                SELECT pr.*, v.source_path
+                FROM pipeline_runs pr
+                LEFT JOIN videos v ON v.id = pr.video_id
+                WHERE pr.run_id = ?
                 """,
-                (run_id, run_id)
-            ).fetchall()
-            
-            if not events:
-                return None
-            
-            # Get latest status
-            status_row = conn.execute(
-                """
-                SELECT event_type 
-                FROM pipeline_events 
-                WHERE (run_id = ? OR (run_id IS NULL AND 'legacy-' || video_id = ?))
-                  AND event_type IN ('run_completed', 'run_failed') 
-                ORDER BY created_at DESC LIMIT 1
-                """,
-                (run_id, run_id)
+                (run_id,),
             ).fetchone()
-            
-            vid = events[0]["video_id"]
-            video_row = conn.execute("SELECT source_path FROM videos WHERE id = ?", (vid,)).fetchone()
-            video_id_str = Path(video_row["source_path"]).stem if video_row else str(vid)
+
+            if not row:
+                return None
+
+            events = conn.execute(
+                "SELECT event_type, data_json, created_at FROM pipeline_events "
+                "WHERE run_id = ? ORDER BY created_at ASC",
+                (run_id,),
+            ).fetchall()
+
+            started = row["started_at"] or ""
+            finished = row["finished_at"] or ""
+            elapsed_ms = 0
+            if started and finished:
+                from datetime import datetime
+                fmt = "%Y-%m-%d %H:%M:%S"
+                try:
+                    elapsed_ms = int(
+                        (datetime.strptime(finished, fmt) - datetime.strptime(started, fmt))
+                        .total_seconds() * 1000
+                    )
+                except ValueError:
+                    pass
 
             return {
                 "run_id": run_id,
-                "video_id": video_id_str,
-                "status": status_row["event_type"].replace("run_", "") if status_row else "running",
-                "created_at": events[0]["created_at"],
+                "video_id": Path(row["source_path"]).stem if row["source_path"] else str(row["video_id"]),
+                "status": row["status"],
+                "cards_extracted": row["cards_extracted"],
+                "elapsed_ms": elapsed_ms,
+                "created_at": started,
                 "events": [dict(e) for e in events],
             }
