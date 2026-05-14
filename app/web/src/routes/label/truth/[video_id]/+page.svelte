@@ -2,7 +2,7 @@
     import { onMount, onDestroy } from 'svelte';
     import { page } from '$app/state';
     import { api } from '$lib/api/client';
-    import { createTruthDraft } from '$lib/stores/truth_draft';
+    import { createTruthDraft } from '$lib/stores/truth_draft.svelte';
     import Filmstrip from '$lib/components/Filmstrip.svelte';
     import VerdictButtons from '$lib/components/VerdictButtons.svelte';
     import Hotkeys from '$lib/components/Hotkeys.svelte';
@@ -12,11 +12,13 @@
     let instances: (Card & { verdict?: 'real' | 'phantom' })[] = $state([]);
     let selectedId = $state<string | null>(null);
     let loading = $state(true);
+    let loadError = $state<string | null>(null);
     let draftStore: any = $state(null);
 
     async function load() {
         try {
             loading = true;
+            loadError = null;
             const [video, truth, cards] = await Promise.all([
                 api.videos.get(videoId),
                 api.label.getTruth(videoId),
@@ -44,6 +46,9 @@
             if (instances.length > 0) {
                 selectedId = instances[0].instance_id;
             }
+        } finally {
+        } catch (e: any) {
+            loadError = e?.message ?? String(e);
         } finally {
             loading = false;
         }
@@ -120,6 +125,8 @@
 
         {#if loading}
             <p>Loading...</p>
+        {:else if loadError}
+            <p class="error">Error loading instances: {loadError}</p>
         {:else}
             <div class="main-layout">
                 <div class="preview-area">
