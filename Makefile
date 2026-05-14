@@ -1,4 +1,9 @@
-.PHONY: harness baseline test
+.PHONY: dev harness baseline test
+
+dev:
+	@trap 'kill 0' SIGINT; \
+	.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload & \
+	cd app/web && npm run dev
 
 test:
 	.venv/bin/python -m pytest tests/
