@@ -24,20 +24,31 @@
     }
 
     function subscribeToEvents(id: string) {
-        evtSource = new EventSource(`/api/v1/events/subscribe?run_id=${id}`);
-        evtSource.onmessage = (e) => {
+        evtSource = new EventSource(`/events/${id}`);
+
+        function handle(e: MessageEvent) {
             try {
                 const data = JSON.parse(e.data);
-                stage = data.stage ?? stage;
-                progress = data.message ?? progress;
-                if (data.stage === 'completed' || data.stage === 'failed') {
-                    evtSource?.close();
-                }
+                if (data.payload?.line) progress = data.payload.line;
+                stage = e.type;
             } catch {}
-        };
-        evtSource.onerror = () => {
+        }
+
+        for (const name of ['run_started', 'log', 'run_completed', 'run_failed']) {
+            evtSource.addEventListener(name, handle);
+        }
+
+        evtSource.addEventListener('run_completed', () => {
+            stage = 'completed';
             evtSource?.close();
-        };
+        });
+        evtSource.addEventListener('run_failed', (e: any) => {
+            stage = 'failed';
+            try { progress = JSON.parse(e.data)?.payload?.error ?? 'Pipeline failed'; } catch {}
+            evtSource?.close();
+        });
+
+        evtSource.onerror = () => { evtSource?.close(); };
     }
 
     onDestroy(() => {
