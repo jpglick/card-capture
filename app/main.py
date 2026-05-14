@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from app.api import cards, config, events, label, regression, runs, training, videos
 from app.services.event_bus import EventBus
@@ -65,6 +66,11 @@ def create_app(db_path: Optional[Path] = None) -> FastAPI:
         db_path=db_path,
         training_data_dir=Path("data/training")
     )
+
+    # Serve pipeline output (crops, frames) as static files
+    output_dir = db_path.parent if db_path.parent.name != "." else Path("card_capture_output")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    app.mount("/files", StaticFiles(directory=str(output_dir)), name="files")
 
     # Include routers
     app.include_router(videos.router, prefix="/api/v1/videos", tags=["videos"])

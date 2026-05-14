@@ -128,13 +128,22 @@
             <p class="error">Error loading instances: {loadError}</p>
         {:else}
             <div class="main-layout">
+                <div class="sidebar">
+                    <Filmstrip
+                        items={instances}
+                        {selectedId}
+                        onSelect={(id) => selectedId = id}
+                    />
+                </div>
+
                 <div class="preview-area">
                     {#if selectedInstance}
                         <div class="large-preview">
-                            <img src={selectedInstance.fused_image_url} alt="Preview" />
+                            <img src={selectedInstance.fused_url ?? selectedInstance.canonical_url ?? ''} alt="Preview" />
                             <div class="meta">
-                                <span>{selectedInstance.instance_id}</span>
-                                <span>{selectedInstance.angle}</span>
+                                <span>#{selectedInstance.instance_id}</span>
+                                <span>{selectedInstance.side}</span>
+                                <span>{(selectedInstance.confidence * 100).toFixed(0)}%</span>
                             </div>
                         </div>
                     {:else}
@@ -142,14 +151,6 @@
                     {/if}
 
                     <VerdictButtons onVerdict={handleVerdict} />
-                </div>
-
-                <div class="sidebar">
-                    <Filmstrip 
-                        items={instances} 
-                        {selectedId} 
-                        onSelect={(id) => selectedId = id} 
-                    />
                 </div>
             </div>
         {/if}
@@ -175,16 +176,40 @@
 
     .main-layout {
         display: grid;
-        grid-template-columns: 1fr 300px;
-        gap: 2rem;
+        grid-template-columns: 160px 1fr;
+        gap: 1.5rem;
         flex: 1;
+        min-height: 0;
         padding-top: 1rem;
+    }
+
+    .sidebar {
+        overflow-y: auto;
+        border-right: 1px solid #eee;
+        padding-right: 1rem;
     }
 
     .preview-area {
         display: flex;
         flex-direction: column;
         align-items: center;
+        gap: 1.5rem;
+    }
+
+    .large-preview img {
+        max-height: 70vh;
+        width: auto;
+        border-radius: 6px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+    }
+
+    .large-preview .meta {
+        display: flex;
+        gap: 1rem;
+        justify-content: center;
+        margin-top: 0.5rem;
+        font-size: 0.85rem;
+        color: #666;
     }
 
     .large-preview {

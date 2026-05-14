@@ -8,6 +8,7 @@ export default defineConfig({
 		proxy: {
 			'/api': 'http://127.0.0.1:8002',
 			'/events': { target: 'http://127.0.0.1:8002', changeOrigin: true, ws: false },
+			'/files': 'http://127.0.0.1:8002',
 		},
 	},
 });

@@ -7,6 +7,30 @@ from pathlib import Path
 from typing import Any, List, Optional
 
 
+def _to_file_url(path: Optional[str]) -> Optional[str]:
+    """Convert an absolute or relative filesystem path to a /files/ URL.
+
+    The FastAPI app mounts card_capture_output/ at /files/. Paths that are
+    already relative to that directory are served directly; absolute paths
+    outside it fall back to None so broken images don't show.
+    """
+    if not path:
+        return None
+    p = Path(path)
+    # Try to make path relative to card_capture_output/
+    try:
+        rel = p.relative_to("card_capture_output")
+        return f"/files/{rel}"
+    except ValueError:
+        pass
+    # Already a relative path starting with card_capture_output
+    parts = p.parts
+    if parts and parts[0] == "card_capture_output":
+        return "/files/" + "/".join(parts[1:])
+    # Absolute path not under output dir — return filename only as best-effort
+    return f"/files/crops/{p.name}" if p.suffix else None
+
+
 class CardService:
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
@@ -60,16 +84,16 @@ class CardService:
                 video_id_str = Path(video_row["source_path"]).stem if video_row else str(vid)
 
                 items.append({
-                    "card_id": r["track_id"], # v4 uses track_id as stable card_id within run
+                    "card_id": r["track_id"],
                     "instance_id": str(r["id"]),
                     "video_id": video_id_str,
                     "run_id": r["run_id"] or f"legacy-{vid}",
-                    "side": r["angle"] or "front",
-                    "is_foil": False, # TODO: integrate with foil detection
+                    "side": r["angle"] or "Front",
+                    "is_foil": False,
                     "confidence": view["confidence"] if view else 0.0,
                     "review_state": "pending",
-                    "canonical_url": view["rectified_path"] if view else None,
-                    "fused_url": r["fused_image_path"],
+                    "canonical_url": _to_file_url(view["rectified_path"] if view else None),
+                    "fused_url": _to_file_url(r["fused_image_path"]),
                     "created_at": r["created_at"],
                 })
             
@@ -114,8 +138,8 @@ class CardService:
                 "is_foil": False,
                 "confidence": view["confidence"] if view else 0.0,
                 "review_state": "pending",
-                "canonical_url": view["rectified_path"] if view else None,
-                "fused_url": row["fused_image_path"],
+                "canonical_url": _to_file_url(view["rectified_path"] if view else None),
+                "fused_url": _to_file_url(row["fused_image_path"]),
                 "created_at": row["created_at"],
                 "source_frame_indices": [f["frame_index"] for f in source_frames],
                 "quality_score": {

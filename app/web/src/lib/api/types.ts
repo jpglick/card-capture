@@ -70,13 +70,17 @@ export interface RunCardSummary {
 }
 
 export interface Card {
+    card_id: string;
     instance_id: string;
+    video_id: string;
     run_id: string;
-    angle: 'Front' | 'Back';
-    fused_image_url: string;
-    quality_score: number;
-    primary_hash: string;
+    side: 'Front' | 'Back';
+    is_foil: boolean;
+    confidence: number;
     review_state?: string;
+    canonical_url: string | null;
+    fused_url: string | null;
+    created_at: string;
 }
 
 export interface CardDetail extends Card {

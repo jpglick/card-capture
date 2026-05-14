@@ -16,8 +16,8 @@
             class="item {selectedId === item.instance_id ? 'selected' : ''} {getVerdictClass(item)}"
             onclick={() => onSelect(item.instance_id)}
         >
-            <img src={item.fused_image_url} alt="Thumbnail" />
-            <div class="badge">{item.angle}</div>
+            <img src={item.fused_url ?? item.canonical_url ?? ''} alt="Thumbnail" />
+            <div class="badge">{item.side}</div>
         </button>
     {/each}
 </div>
@@ -25,15 +25,14 @@
 <style>
     .filmstrip {
         display: flex;
+        flex-direction: column;
         gap: 0.5rem;
-        overflow-x: auto;
-        padding: 1rem 0;
-        background: #1e1e2d;
+        padding: 0.5rem 0;
     }
 
     .item {
-        flex: 0 0 100px;
-        height: 140px;
+        width: 100%;
+        aspect-ratio: 5 / 7;
         position: relative;
         background: #2b2b3d;
         border: 2px solid transparent;
