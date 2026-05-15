@@ -9,6 +9,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import json as _json
+import sqlite3 as _sqlite3
+
 from pipeline.steps.start import RunContext
 
 
@@ -84,6 +87,8 @@ def run(ctx: RunContext) -> DetectOutput:
     # Make sampler_telemetry JSON-serialisable
     sampler_telemetry = _serialise_telemetry(stats.sampler_telemetry)
 
+    _save_corner_samples(ctx, detection_rows, output_dir)
+
     return DetectOutput(
         frame_count=stats.frame_count,
         accepted_frame_count=stats.accepted_frame_count,
@@ -97,6 +102,35 @@ def run(ctx: RunContext) -> DetectOutput:
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+def _save_corner_samples(ctx: RunContext, detection_rows: list, output_dir: Path) -> None:
+    """Persist borderline YOLO detections (0.50–0.70 conf) for corner labeling."""
+    if not ctx.db_path:
+        return
+    borderline = [d for d in detection_rows if 0.50 <= d["confidence"] <= 0.70]
+    if not borderline:
+        return
+    try:
+        with _sqlite3.connect(ctx.db_path) as conn:
+            for d in borderline:
+                conn.execute(
+                    """INSERT OR IGNORE INTO corner_samples
+                       (run_id, video_id, frame_index, image_path,
+                        predicted_corners, confidence)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (
+                        ctx.ui_run_id or "",
+                        ctx.video_id or 0,
+                        d["frame_index"],
+                        d.get("source_frame_path", ""),
+                        _json.dumps(d["corners"]),
+                        d["confidence"],
+                    ),
+                )
+            conn.commit()
+    except Exception as exc:
+        print(f"[detect] corner sampling failed: {exc}", flush=True)
+
 
 def _build_sampler_detector(ctx: RunContext):
     """Construct the sampler and detector from RunContext.detector."""

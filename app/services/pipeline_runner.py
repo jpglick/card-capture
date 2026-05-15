@@ -114,6 +114,7 @@ class PipelineRunner:
             self.bus.emit(run_id, Event(name="run_completed"))
             self._set_video_status(video_id, "completed")
             self._record_run_finish(run_id, "completed")
+            self._sample_presence_frames(run_id, video_id, video)
 
         except Exception as exc:
             print(f"[{run_id}] pipeline failed: {exc}", flush=True)
@@ -154,6 +155,24 @@ class PipelineRunner:
                 )
         except Exception as exc:
             print(f"[{run_id}] could not record run finish: {exc}", flush=True)
+
+    def _sample_presence_frames(self, run_id: str, video_id: int, video_path: str) -> None:
+        if not self.db_path:
+            return
+        try:
+            from app.services.presence_sampler import sample_presence_frames
+            from pathlib import Path as _Path
+            base_output = _Path(self.db_path).parent
+            n = sample_presence_frames(
+                video_path=_Path(video_path),
+                run_id=run_id,
+                video_id=video_id,
+                output_dir=base_output,
+                db_path=_Path(self.db_path),
+            )
+            print(f"[{run_id}] queued {n} presence frames for labeling", flush=True)
+        except Exception as exc:
+            print(f"[{run_id}] presence sampling skipped: {exc}", flush=True)
 
     def _set_video_status(self, video_id: int, status: str) -> None:
         if not self.db_path:

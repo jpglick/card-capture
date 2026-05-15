@@ -1006,3 +1006,14 @@ class RegressionCompare(BaseModel):
     metric_deltas: dict[str, Any]
     regressions: list[Any] = Field(default_factory=list)
     per_video_deltas: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class PresenceLabelRequest(BaseModel):
+    sample_id: int
+    label: str  # 'present' | 'absent'
+
+
+class CornerLabelRequest(BaseModel):
+    sample_id: int
+    label: str              # 'correct' | 'adjusted' | 'negative'
+    corrected_corners: Optional[str] = None  # JSON string when label='adjusted'
