@@ -1,5 +1,6 @@
 {
     "detector": "docaligner",
+    "presence_threshold": 0.0,
     "reader_backend": "auto",
     "queue_size": 256,
     "inference_batch_size": 16,

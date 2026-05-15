@@ -632,22 +632,20 @@ class AdaptivePresenceSampler:
             ]
             return windows
 
-        best_idx = int(np.argmax(scores))
-        half_span = max(0, self.min_presence_frames // 2)
-        start = max(0, best_idx - half_span)
-        end = min(len(records) - 1, start + max(self.min_presence_frames, 1) - 1)
-        if end - start + 1 < self.min_presence_frames:
-            start = max(0, end - self.min_presence_frames + 1)
-        window_records = records[start : end + 1]
-        if window_records:
+        # No active windows found — treat the entire video as one presence window.
+        # The old fallback picked only 2 frames near the best-scored scan frame, which
+        # left too few detections for tracking (min_track_length prunes anything < 3).
+        # This is the safe path for hand-held videos where the classifier was never
+        # trained on that domain: YOLO will filter non-cards at detection time.
+        if records:
             self.last_presence_window_count = 1
             self.last_score_threshold = threshold
             self.last_fallback_used = True
             self.last_inter_window_gaps_frames = []
             return [
                 PresenceWindow(
-                    start_frame=window_records[0].frame_index,
-                    end_frame=window_records[-1].frame_index,
+                    start_frame=records[0].frame_index,
+                    end_frame=records[-1].frame_index,
                     detection_methods=["adaptive_fallback"],
                 )
             ]
