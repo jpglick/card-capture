@@ -1,189 +1,220 @@
 <script lang="ts">
-    import { onMount, onDestroy } from 'svelte';
-    import { api } from '$lib/api/client';
-    import type { DatasetSummary, TrainingJobSummary, TrainingJobDetail } from '$lib/api/types';
+  import { onMount } from 'svelte';
+  import { goto } from '$app/navigation';
+  import { api } from '$lib/api/client';
+  import { createTrainingStore } from '$lib/stores/training.svelte';
 
-    let datasets: DatasetSummary[] = [];
-    let activeJob: TrainingJobDetail | null = null;
-    let loading = true;
-    let error: string | null = null;
-    let pollInterval: any;
+  const store = createTrainingStore();
 
-    async function load() {
-        try {
-            loading = true;
-            datasets = await api.training.listDatasets();
-        } catch (e: any) {
-            error = e.message;
-        } finally {
-            loading = false;
+  let retraining = $state(false);
+
+  interface BenchmarkRow { video: string; before: number; after: number; delta: number; }
+  let benchmarkRows = $state<BenchmarkRow[]>([]);
+  let benchmarking = $state(false);
+
+  onMount(() => store.refresh());
+
+  async function retrain(model: string) {
+    retraining = true;
+    const r = await api.post(`/training/retrain/${model}`, { epochs: 30, learning_rate: 0.001 });
+    const job = await r.json();
+    await pollJob(job.job_id);
+  }
+
+  async function retrainAll() {
+    retraining = true;
+    for (const model of ['presence', 'fb_classifier']) {
+      const r = await api.post(`/training/retrain/${model}`, { epochs: 30, learning_rate: 0.001 });
+      const job = await r.json();
+      await pollJob(job.job_id);
+    }
+    await store.refresh();
+    retraining = false;
+  }
+
+  async function pollJob(id: string): Promise<void> {
+    return new Promise((resolve) => {
+      const interval = setInterval(async () => {
+        const r = await api.get(`/training/jobs/${id}`);
+        const job = await r.json();
+        if (job.status === 'completed' || job.status === 'failed') {
+          clearInterval(interval);
+          resolve();
         }
-    }
+      }, 2000);
+    });
+  }
 
-    async function startRetrain(modelName: string) {
-        try {
-            const job = await api.training.retrain(modelName, { epochs: 20, learning_rate: 0.001 });
-            activeJob = { ...job, progress: undefined };
-            startPolling(job.job_id);
-        } catch (e: any) {
-            alert(e.message);
+  async function runBenchmark() {
+    benchmarking = true;
+    benchmarkRows = [];
+    const r = await api.post('/training/benchmark', { n: 3 });
+    const job = await r.json();
+    await pollBenchmarkJob(job.job_id);
+    benchmarking = false;
+  }
+
+  async function pollBenchmarkJob(id: string) {
+    return new Promise<void>((resolve) => {
+      const interval = setInterval(async () => {
+        const r = await api.get(`/training/benchmark/${id}`);
+        const j = await r.json();
+        if (j.status === 'completed') {
+          benchmarkRows = j.rows ?? [];
+          clearInterval(interval);
+          resolve();
+        } else if (j.status === 'failed') {
+          clearInterval(interval);
+          resolve();
         }
-    }
+      }, 3000);
+    });
+  }
 
-    function startPolling(jobId: string) {
-        if (pollInterval) clearInterval(pollInterval);
-        pollInterval = setInterval(async () => {
-            try {
-                const job = await api.training.getJob(jobId);
-                activeJob = job;
-                if (job.status === 'completed' || job.status === 'failed') {
-                    clearInterval(pollInterval);
-                    load(); // Refresh dataset last_updated
-                }
-            } catch (e) {
-                clearInterval(pollInterval);
-            }
-        }, 1000);
-    }
-
-    onMount(load);
-    onDestroy(() => clearInterval(pollInterval));
+  function pct(v: number | null | undefined) {
+    return v != null ? `${Math.round(v * 100)}%` : '—';
+  }
 </script>
 
-<h1>Model Training</h1>
+<div class="hub">
+  <h1>Training</h1>
 
-<div class="datasets-grid">
-    {#each datasets as ds}
-        <div class="dataset-card">
-            <h2>{ds.model_name}</h2>
-            <div class="stat">
-                <span class="label">Total Labels:</span>
-                <span class="value">{ds.total_labels}</span>
+  <div class="panels">
+    <div class="panel" onclick={() => goto('/training/presence')}>
+      <div class="panel-title">Presence</div>
+      <div class="pending">{store.stats?.pending.presence ?? '…'} pending</div>
+      <div class="acc">acc: {pct(store.stats?.accuracy['presence'])}</div>
+      <button class="label-btn" onclick|stopPropagation={() => goto('/training/presence')}>
+        Label now →
+      </button>
+    </div>
+
+    <div class="panel" onclick={() => goto('/training/fb')}>
+      <div class="panel-title">Front / Back</div>
+      <div class="pending">{store.stats?.pending.fb ?? '…'} pending</div>
+      <div class="acc">acc: {pct(store.stats?.accuracy['fb_classifier'])}</div>
+      <button class="label-btn" onclick|stopPropagation={() => goto('/training/fb')}>
+        Label now →
+      </button>
+    </div>
+
+    <div class="panel" onclick={() => goto('/training/corners')}>
+      <div class="panel-title">YOLO Corners</div>
+      <div class="pending">{store.stats?.pending.corners ?? '…'} pending</div>
+      <div class="acc">acc: —</div>
+      <button class="label-btn" onclick|stopPropagation={() => goto('/training/corners')}>
+        Label now →
+      </button>
+    </div>
+
+    <div class="panel benchmark">
+      <div class="panel-title">Retrain</div>
+      <button class="retrain-btn" disabled={retraining} onclick={retrainAll}>
+        {retraining ? 'Training…' : 'Retrain all'}
+      </button>
+    </div>
+  </div>
+
+  <!-- Benchmark section -->
+  <div class="benchmark-section">
+    <div class="bm-header">
+      <h2>Benchmark</h2>
+      <button class="bm-btn" disabled={benchmarking} onclick={runBenchmark}>
+        {benchmarking ? 'Running…' : 'Run pipeline on last 3 videos'}
+      </button>
+    </div>
+
+    {#if benchmarkRows.length > 0}
+      <table class="bm-table">
+        <thead><tr><th>Video</th><th>Before</th><th>After</th><th>Δ</th></tr></thead>
+        <tbody>
+          {#each benchmarkRows as row}
+            <tr>
+              <td>{row.video}</td>
+              <td>{row.before} cards</td>
+              <td>{row.after} cards</td>
+              <td class:positive={row.delta > 0} class:neutral={row.delta === 0}>
+                {row.delta > 0 ? '+' : ''}{row.delta} {row.delta > 0 ? '✓' : '→'}
+              </td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    {/if}
+  </div>
+
+  <!-- Accuracy history chart -->
+  {#if store.stats?.history?.length}
+    <div class="chart-section">
+      <h2>Accuracy over time</h2>
+      <div class="chart">
+        {#each ['presence', 'fb_classifier'] as model}
+          {@const points = store.stats.history.filter(h => h.model === model && h.accuracy != null)}
+          {#if points.length > 1}
+            <div class="series">
+              <span class="series-label">{model === 'presence' ? 'Presence' : 'Front/Back'}</span>
+              <svg viewBox="0 0 200 60" class="sparkline">
+                <polyline
+                  points={points.map((p, i) =>
+                    `${(i / (points.length - 1)) * 190 + 5},${55 - (p.accuracy ?? 0) * 50}`
+                  ).join(' ')}
+                  fill="none"
+                  stroke={model === 'presence' ? '#6366f1' : '#0acf97'}
+                  stroke-width="2"
+                />
+              </svg>
+              <span class="series-pct">{pct(points[points.length - 1]?.accuracy)}</span>
             </div>
-            <div class="distribution">
-                {#each Object.entries(ds.class_distribution) as [cls, count]}
-                    <div class="class-item">
-                        <span class="cls">{cls}:</span>
-                        <span class="cnt">{count}</span>
-                    </div>
-                {/each}
-            </div>
-            <div class="meta">Last updated: {new Date(ds.last_updated).toLocaleString()}</div>
-            
-            <button 
-                class="retrain-btn" 
-                disabled={activeJob?.status === 'running'}
-                onclick={() => startRetrain(ds.model_name)}
-            >
-                Start Retraining
-            </button>
-        </div>
-    {/each}
+          {/if}
+        {/each}
+      </div>
+    </div>
+  {/if}
 </div>
 
-{#if activeJob}
-    <div class="active-job">
-        <h3>Training Job: {activeJob.job_id}</h3>
-        <div class="job-status">
-            Status: <span class="status {activeJob.status}">{activeJob.status}</span>
-        </div>
-        
-        {#if activeJob.progress}
-            <div class="progress-bar">
-                <div class="fill" style="width: {(activeJob.progress.epoch / activeJob.progress.total_epochs) * 100}%"></div>
-            </div>
-            <div class="progress-text">
-                Epoch {activeJob.progress.epoch}/{activeJob.progress.total_epochs} 
-                - Val Accuracy: {(activeJob.progress.val_accuracy * 100).toFixed(1)}%
-            </div>
-        {/if}
-
-        {#if activeJob.status === 'completed'}
-            <p class="success">Training completed successfully!</p>
-        {:else if activeJob.status === 'failed'}
-            <p class="error">Training failed: {activeJob.progress?.error || 'Unknown error'}</p>
-        {/if}
-    </div>
-{/if}
-
 <style>
-    .datasets-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-        gap: 2rem;
-        margin-bottom: 3rem;
-    }
+  .hub { max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+  h1 { margin-bottom: 1.5rem; }
+  .panels { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; }
+  .panel {
+    background: #1e1e2e; border-radius: 12px; padding: 1.25rem;
+    cursor: pointer; transition: background 0.15s;
+    display: flex; flex-direction: column; gap: 0.5rem;
+  }
+  .panel:hover { background: #2a2a3e; }
+  .panel-title { font-weight: 700; font-size: 1rem; }
+  .pending { font-size: 1.4rem; font-weight: 700; }
+  .acc { color: #aaa; font-size: 0.85rem; }
+  .label-btn {
+    margin-top: auto; background: #6366f1; color: white;
+    border: none; border-radius: 8px; padding: 0.5rem 1rem;
+    cursor: pointer; font-size: 0.85rem;
+  }
+  .retrain-btn {
+    background: #0acf97; color: white; border: none;
+    border-radius: 8px; padding: 0.6rem 1.2rem; cursor: pointer;
+    font-weight: 600; margin-top: auto;
+  }
+  .retrain-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .benchmark { cursor: default; }
+  .benchmark:hover { background: #1e1e2e; }
 
-    .dataset-card {
-        background: white;
-        padding: 2rem;
-        border-radius: 12px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.05);
-    }
-
-    h2 { margin-top: 0; font-size: 1.25rem; color: #333; }
-
-    .stat { margin-bottom: 1rem; }
-    .label { color: #666; margin-right: 0.5rem; }
-    .value { font-weight: bold; font-size: 1.1rem; }
-
-    .distribution {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 0.5rem;
-        margin-bottom: 1.5rem;
-    }
-
-    .class-item {
-        background: #f1f3f9;
-        padding: 0.25rem 0.75rem;
-        border-radius: 20px;
-        font-size: 0.875rem;
-    }
-
-    .meta { font-size: 0.75rem; color: #999; margin-bottom: 1.5rem; }
-
-    .retrain-btn {
-        width: 100%;
-        padding: 0.75rem;
-        background: #727cf5;
-        color: white;
-        border: none;
-        border-radius: 8px;
-        font-weight: bold;
-        cursor: pointer;
-    }
-
-    .retrain-btn:disabled { background: #cfd4ed; cursor: not-allowed; }
-
-    .active-job {
-        background: white;
-        padding: 2rem;
-        border-radius: 12px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-        border-left: 4px solid #727cf5;
-    }
-
-    .status { font-weight: bold; text-transform: uppercase; }
-    .status.running { color: #727cf5; }
-    .status.completed { color: #0acf97; }
-    .status.failed { color: #fa5c7c; }
-
-    .progress-bar {
-        height: 12px;
-        background: #eef2ff;
-        border-radius: 6px;
-        overflow: hidden;
-        margin: 1.5rem 0 0.5rem;
-    }
-
-    .fill {
-        height: 100%;
-        background: #727cf5;
-        transition: width 0.3s ease;
-    }
-
-    .progress-text { font-size: 0.875rem; color: #666; }
-    .success { color: #0acf97; font-weight: bold; margin-top: 1rem; }
-    .error { color: #fa5c7c; font-weight: bold; margin-top: 1rem; }
+  .benchmark-section { margin-top: 2rem; }
+  .bm-header { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; }
+  .bm-header h2 { margin: 0; }
+  .bm-btn {
+    background: #6366f1; color: white; border: none;
+    border-radius: 8px; padding: 0.5rem 1.2rem; cursor: pointer;
+  }
+  .bm-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .bm-table { width: 100%; border-collapse: collapse; }
+  .bm-table th, .bm-table td { padding: 0.5rem 1rem; text-align: left; border-bottom: 1px solid #333; }
+  .positive { color: #0acf97; font-weight: 600; }
+  .neutral { color: #aaa; }
+  .chart-section { margin-top: 2rem; }
+  .chart { display: flex; flex-direction: column; gap: 0.75rem; }
+  .series { display: flex; align-items: center; gap: 1rem; }
+  .series-label { width: 90px; font-size: 0.85rem; color: #aaa; }
+  .sparkline { width: 200px; height: 60px; }
+  .series-pct { font-weight: 700; width: 40px; }
 </style>
