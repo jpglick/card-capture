@@ -37,6 +37,9 @@ class PipelineConfig:
     track_confidence_floor: float = 0.0
     stand_novelty_max: float = 0.065
     stand_sharpness_max: float = 0.092
+    opening_scan_s: float = 2.0
+    laplacian_scan_stride: int = 4
+    max_corner_gap_frames: int = 15
     valley_drop_ratio: float = 0.40
     valley_min_width_frames: int = 3
     delta_spike_ratio: float = 0.50
