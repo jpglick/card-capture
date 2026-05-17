@@ -15,6 +15,7 @@
             <li><a href="/training">Training</a></li>
             <li><a href="/regression">Regression</a></li>
             <li><a href="/settings">Settings</a></li>
+            <li><a href="/batch">Batch</a></li>
         </ul>
     </nav>
 
