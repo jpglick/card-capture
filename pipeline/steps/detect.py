@@ -149,6 +149,7 @@ def _build_sampler_detector(ctx: RunContext):
             device="auto",
             presence_weights_path=weights if weights.exists() else None,
             presence_threshold=ctx.presence_threshold,
+            target_yolo_fps=ctx.target_yolo_fps,
         )
         detector = CardcaptorUltralyticsDetector(
             confidence_threshold=ctx.corner_confidence,
