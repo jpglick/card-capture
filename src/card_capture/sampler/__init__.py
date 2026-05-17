@@ -333,13 +333,14 @@ class AdaptivePresenceSampler:
         min_presence_frames: int = 2,
         window_merge_gap: int = 3,
         min_candidates_per_window: int = 3,
-        max_candidates_per_window: int = 48,
+        max_candidates_per_window: int = 24,
         empty_pixel_threshold: float = 8.0,
         sobel_threshold: float = 50.0,
         presence_weights_path: Optional[Path] = None,
         presence_threshold: float = 0.5,
         fast_scan_fps: float = 15.0,
         confirm_scan_fps: Optional[float] = None,
+        target_yolo_fps: float = 3.0,
         valley_drop_ratio: float = 0.40,
         valley_min_width_frames: int = 3,
         delta_spike_ratio: float = 0.50,
@@ -363,6 +364,7 @@ class AdaptivePresenceSampler:
         self.max_candidates_per_window = max(
             self.min_candidates_per_window, max_candidates_per_window
         )
+        self.target_yolo_fps = max(0.1, target_yolo_fps)
         self.empty_pixel_threshold = empty_pixel_threshold
         self.sobel_threshold = sobel_threshold
         self.presence_weights_path = presence_weights_path
@@ -375,7 +377,7 @@ class AdaptivePresenceSampler:
         self.last_score_threshold: float = 0.0
         self.last_fallback_used = False
         self.last_inter_window_gaps_frames: list[int] = []
-        self.last_source_fps: float = 30.0
+        self.last_source_fps: float = 30.0  # overwritten by _scan_video; safe default for tests
         self.background_proxies: list[np.ndarray] = []
         self._max_bg_proxies = 5
         self._bg_safety_threshold = 0.4  # If min score > this, we have no empty stand
@@ -664,33 +666,32 @@ class AdaptivePresenceSampler:
         if not records:
             return window
 
-        window_len = len(records)
-        # We want to keep as many frames as possible to ensure tracking continuity.
-        # Only cap at max_candidates_per_window to prevent memory explosions on very long holds.
-        target = min(self.max_candidates_per_window, window_len)
+        source_fps = getattr(self, 'last_source_fps', 30.0) or 30.0
+        duration_s = (window.end_frame - window.start_frame) / source_fps
+        target = math.ceil(duration_s * self.target_yolo_fps)
+        target = max(self.min_candidates_per_window, min(self.max_candidates_per_window, target))
+        target = min(target, len(records))
 
-        if window_len <= target:
+        sorted_records = sorted(records, key=lambda r: r.frame_index)
+
+        if len(sorted_records) <= target:
             window.frame_candidates = [
-                (record.frame_index, record.presence_score)
-                for record in sorted(records, key=lambda record: record.frame_index)
+                (r.frame_index, r.presence_score) for r in sorted_records
             ]
             return window
 
-        # If window exceeds max_candidates_per_window, pick frames with highest presence scores
-        scored_records = sorted(records, key=lambda record: record.presence_score, reverse=True)
-        top_indices = {r.frame_index for r in scored_records[:target]}
+        # Divide into target equal temporal buckets; pick highest presence_score per bucket
+        n = len(sorted_records)
+        selected = []
+        for i in range(target):
+            start = int(i * n / target)
+            end = int((i + 1) * n / target)
+            bucket = sorted_records[start:end]
+            if bucket:
+                best = max(bucket, key=lambda r: r.presence_score)
+                selected.append((best.frame_index, best.presence_score))
 
-        # Ensure we always include start and end of presence for boundary detection
-        top_indices.add(records[0].frame_index)
-        top_indices.add(records[-1].frame_index)
-
-        selected = sorted(
-            (record for record in records if record.frame_index in top_indices),
-            key=lambda record: record.frame_index,
-        )
-        window.frame_candidates = [
-            (record.frame_index, record.presence_score) for record in selected
-        ]
+        window.frame_candidates = selected
         return window
 
     def _decode_selected_frames(self, video_path: Path, frame_indices: list[int]) -> list[FrameSample]:
