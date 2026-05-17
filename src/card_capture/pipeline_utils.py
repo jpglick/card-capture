@@ -181,6 +181,147 @@ def _select_canonical_entries(frame_entries: list[dict], deduplicator: Any) -> l
     return selected
 
 
+# ---------------------------------------------------------------------------
+# In-track sharpness selection
+# ---------------------------------------------------------------------------
+
+def _laplacian_select_frames(
+    video_path,
+    track_ranges: list,
+    scan_stride: int = 4,
+    top_k: int = 1,
+    max_corner_gap: int = 15,
+) -> dict:
+    """Single-pass Laplacian sharpness scan across all confirmed track time ranges.
+
+    After tracking confirms which time windows contain cards, this function
+    finds the sharpest source frames within each track's window. It decouples
+    detection coverage (temporal stride, 3fps) from output quality (dense
+    sharpness scan within confirmed holds, ~15fps for scan_stride=4 at 60fps).
+
+    Uses ONE forward video pass covering all track ranges — no repeated seeks.
+    Frames are downscaled to 640px wide before Laplacian computation to keep
+    per-frame cost under 2ms.
+
+    Args:
+        video_path: Absolute path to the source video file.
+        track_ranges: List of track dicts, each with:
+            - "instance_id": str
+            - "detections": list of (frame_index: int, corners: list) tuples
+              sorted by frame_index. These are the YOLO-detected frames.
+        scan_stride: Decode every Nth source frame within each range.
+            4 → ~15fps for a 60fps source, covering a 2-second hold in ~30 frames.
+        top_k: Number of sharpest frames to return per track (≥ 1).
+        max_corner_gap: Max distance in source frames between a selected frame
+            and its nearest YOLO detection when borrowing corners. If the gap
+            exceeds this, fall back to the nearest detection frame itself (safe
+            — always has corners from YOLO). 15 ≈ 0.25s at 60fps.
+
+    Returns:
+        Dict mapping instance_id → list of (frame_index, corners) tuples,
+        length ≤ top_k, ordered sharpest-first. Corners are either the frame's
+        own (if it was a YOLO detection) or borrowed from the nearest detection.
+        Returns empty dict if track_ranges is empty or video cannot be opened.
+    """
+    if not track_ranges:
+        return {}
+
+    import bisect
+    import cv2
+    import numpy as np
+    from pathlib import Path as _Path
+    from .ingestion import _open_capture
+
+    # Build per-track metadata and collect all frame indices to scan
+    track_info: dict = {}
+    all_scan_frames: set = set()
+
+    for t in track_ranges:
+        iid = t["instance_id"]
+        dets = sorted(t.get("detections", []), key=lambda x: x[0])
+        if not dets:
+            continue
+        first_frame, last_frame = dets[0][0], dets[-1][0]
+        det_map = {fi: corners for fi, corners in dets}
+        det_sorted = [fi for fi, _ in dets]
+        scan_frames = set(range(first_frame, last_frame + 1, scan_stride))
+        track_info[iid] = {
+            "first": first_frame,
+            "last": last_frame,
+            "det_map": det_map,
+            "det_sorted": det_sorted,
+            "scan_frames": scan_frames,
+            "scores": {},   # frame_index → laplacian variance
+        }
+        all_scan_frames |= scan_frames
+
+    if not all_scan_frames:
+        return {}
+
+    # Single forward video pass — compute Laplacian for every scan frame
+    max_scan_frame = max(all_scan_frames)
+    try:
+        capture = _open_capture(_Path(video_path))
+    except Exception:
+        return {}
+
+    try:
+        curr = 0
+        while curr <= max_scan_frame:
+            ok, frame = capture.read()
+            if not ok:
+                break
+            if curr in all_scan_frames:
+                h, w = frame.shape[:2]
+                # Downscale to 640px wide for speed (~1-2ms per frame)
+                scale = 640 / w if w > 640 else 1.0
+                small = cv2.resize(frame, (int(w * scale), int(h * scale))) if scale < 1.0 else frame
+                gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY) if small.ndim == 3 else small
+                lap_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+                for ti in track_info.values():
+                    if curr in ti["scan_frames"]:
+                        ti["scores"][curr] = lap_var
+            curr += 1
+    finally:
+        capture.release()
+
+    # Select top_k sharpest frames per track; map each to corners
+    result: dict = {}
+    for iid, ti in track_info.items():
+        if not ti["scores"]:
+            result[iid] = []
+            continue
+
+        ranked = sorted(ti["scores"].items(), key=lambda x: -x[1])
+        selected = []
+        for frame_idx, _ in ranked:
+            if len(selected) >= top_k:
+                break
+            det_sorted = ti["det_sorted"]
+            if not det_sorted:
+                continue
+
+            # Find nearest YOLO detection to borrow corners from
+            pos = bisect.bisect_left(det_sorted, frame_idx)
+            candidates = []
+            if pos < len(det_sorted):
+                candidates.append(det_sorted[pos])
+            if pos > 0:
+                candidates.append(det_sorted[pos - 1])
+            nearest = min(candidates, key=lambda f: abs(f - frame_idx))
+
+            if abs(nearest - frame_idx) <= max_corner_gap:
+                # Close enough — use this frame with borrowed corners
+                selected.append((frame_idx, ti["det_map"][nearest]))
+            else:
+                # Too far — fall back to the nearest detection frame itself
+                selected.append((nearest, ti["det_map"][nearest]))
+
+        result[iid] = selected
+
+    return result
+
+
 def _build_candidates(rows: list) -> list:
     """Build ScoredCandidate list from _DetectionEnvelope rows."""
     from .selector import ScoredCandidate

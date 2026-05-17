@@ -82,6 +82,43 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
             if c["frame_index"] is not None:
                 canonical_indices.add(int(c["frame_index"]))
 
+    # --- In-track Laplacian quality scan ---
+    # Temporal stride selected frames at ~3fps per track. Within each confirmed
+    # track's time window we scan densely (laplacian_scan_stride source frames)
+    # to find sharper frames that the sparse YOLO pass may have skipped.
+    # This runs as ONE forward video pass across all tracks — no repeated seeks.
+    # Non-YOLO frames use corners borrowed from the nearest YOLO detection
+    # (corners are stable over short holds; max_corner_gap_frames limits drift).
+    from card_capture.pipeline_utils import _laplacian_select_frames
+    _lap_top_k = max(1, ctx.fusion_target_frames)
+    _lap_ranges = []
+    for _td in tracks_data:
+        _dets = [
+            (int(c["frame_index"]), c["corners"])
+            for c in _td["candidates"]
+            if c["frame_index"] is not None
+        ]
+        if _dets:
+            _lap_ranges.append({"instance_id": _td["instance_id"], "detections": _dets})
+
+    _lap_results: Dict[str, list] = {}
+    try:
+        _lap_results = _laplacian_select_frames(
+            video_path,
+            _lap_ranges,
+            scan_stride=ctx.laplacian_scan_stride,
+            top_k=_lap_top_k,
+            max_corner_gap=ctx.max_corner_gap_frames,
+        )
+    except Exception as _e:
+        print(f"[Refine] Laplacian scan failed, falling back to temporal-stride frames: {_e}")
+
+    # Add any non-YOLO Laplacian-selected frames to the canonical decode set
+    for _sel_list in _lap_results.values():
+        for _fi, _ in _sel_list:
+            canonical_indices.add(int(_fi))
+    # ----------------------------------------
+
     decoded_images: Dict[int, np.ndarray] = {}
     if canonical_indices:
         sampler_telemetry = track_out.sampler_telemetry
@@ -140,6 +177,42 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
 
         # Sort by score and take top 8 for canonical selection
         scored_candidates = sorted(candidates_data, key=lambda c: c["score_total"], reverse=True)[:8]
+
+        # Reorder: put Laplacian-selected frames first. This overrides the
+        # quality-score ranking so the sharpest frame(s) from the dense scan
+        # become the canonical output. Frames not in the YOLO detection set
+        # (picked from between detections) are inserted as synthetic candidates
+        # with borrowed corners; the warp logic treats them identically.
+        _lap_frames = _lap_results.get(instance_id, [])
+        if _lap_frames:
+            _existing_fi = {c.get("frame_index") for c in candidates_data}
+            _source_fps = track_out.sampler_telemetry.get("last_source_fps", 30.0) or 30.0
+            _lap_leading = []
+            _lap_fi_set = set()
+            for _fi, _corners in _lap_frames:
+                _lap_fi_set.add(_fi)
+                if _fi in _existing_fi:
+                    # Already a YOLO detection — pull it to front with its own data
+                    _match = next((c for c in candidates_data if c.get("frame_index") == _fi), None)
+                    if _match:
+                        _lap_leading.append(_match)
+                else:
+                    # Non-YOLO frame: synthesize a minimal candidate using
+                    # borrowed corners. score_total is a placeholder — ordering
+                    # here is by Laplacian sharpness, not by this score.
+                    _ref = candidates_data[0] if candidates_data else {}
+                    _lap_leading.append({
+                        "frame_index": _fi,
+                        "corners": _corners,
+                        "score_total": float(np.median([c["score_total"] for c in candidates_data])) if candidates_data else 0.7,
+                        "detection_id": -1,
+                        "confidence": float(np.median([c["confidence"] for c in candidates_data])) if candidates_data else 0.7,
+                        "width": _ref.get("width", 3840),
+                        "height": _ref.get("height", 2160),
+                        "timestamp_ms": int(_fi * 1000 / _source_fps),
+                    })
+            _remaining = [c for c in scored_candidates if c.get("frame_index") not in _lap_fi_set]
+            scored_candidates = (_lap_leading + _remaining)[:8]
 
         # Apply RANSAC corner refinement if enabled
         if ctx.corner_refinement:
