@@ -84,7 +84,30 @@ def run(ctx: RunContext, refine_out: RefineOutput) -> ScoreOutput:
         for fe in track_dict.get("frame_entries", [])
     ]
     gate_useful = _novelty_gate_useful(all_novelty_scores)
-    novelty_threshold = ctx.novelty_floor if gate_useful else -1.0
+    if gate_useful:
+        # Compute adaptive threshold: midpoint of the largest gap between per-track
+        # median novelty scores. A fixed floor (ctx.novelty_floor) fails when real
+        # cards also have low absolute novelty — e.g. when the background model was
+        # built from stand-present frames. The natural gap between the stand cluster
+        # and the card cluster is a more reliable separator than any fixed value.
+        _track_meds = sorted(
+            float(np.median([float(fe.get("novelty_score", 1.0))
+                              for fe in _t.get("frame_entries", [])])
+                  if _t.get("frame_entries") else 1.0)
+            for _t in refine_out.refined_tracks
+        )
+        if len(_track_meds) >= 2:
+            _gaps = [_track_meds[i + 1] - _track_meds[i]
+                     for i in range(len(_track_meds) - 1)]
+            _gap_idx = _gaps.index(max(_gaps))
+            _adaptive = (_track_meds[_gap_idx] + _track_meds[_gap_idx + 1]) / 2
+            # Respect the configured floor as an upper cap so the user can still
+            # tighten the gate; use the adaptive value when it's more conservative.
+            novelty_threshold = min(_adaptive, ctx.novelty_floor)
+        else:
+            novelty_threshold = ctx.novelty_floor
+    else:
+        novelty_threshold = -1.0
     conf_floor = ctx.track_confidence_floor
     stand_nov_max = ctx.stand_novelty_max
     stand_shp_max = ctx.stand_sharpness_max
