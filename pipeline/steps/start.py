@@ -59,9 +59,6 @@ class RunContext:
     valley_drop_ratio: float = 0.40
     valley_min_width_frames: int = 3
     delta_spike_ratio: float = 0.50
-    opening_scan_s: float = 2.0
-    laplacian_scan_stride: int = 4
-    max_corner_gap_frames: int = 15
 
     tracker_backend: str = "bytetrack"
     group_gap_ms: int = 300
@@ -171,9 +168,6 @@ def init_run(
         valley_drop_ratio=cfg.valley_drop_ratio,
         valley_min_width_frames=cfg.valley_min_width_frames,
         delta_spike_ratio=cfg.delta_spike_ratio,
-        opening_scan_s=cfg.opening_scan_s,
-        laplacian_scan_stride=cfg.laplacian_scan_stride,
-        max_corner_gap_frames=cfg.max_corner_gap_frames,
 
         tracker_backend=cfg.tracker_backend,
         group_gap_ms=cfg.group_gap_ms,
