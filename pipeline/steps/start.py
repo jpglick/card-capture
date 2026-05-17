@@ -48,6 +48,7 @@ class RunContext:
     triage_keep_percentile: float = 0.05
     fast_scan_fps: float = 15.0
     confirm_scan_fps: float = 5.0
+    target_yolo_fps: float = 3.0
     valley_drop_ratio: float = 0.40
     valley_min_width_frames: int = 3
     delta_spike_ratio: float = 0.50
@@ -102,8 +103,9 @@ def init_run(
     Returns:
         A fully-initialised ``RunContext``.
     """
-    from card_capture.config import PipelineConfig
-    cfg = PipelineConfig()
+    from card_capture.config import load_config, PipelineConfig
+    _cfg_path = Path("card_capture_config.json")
+    cfg = load_config(_cfg_path) if _cfg_path.exists() else PipelineConfig()
     
     # Apply keyword overrides to the config object first
     if detector:
@@ -148,6 +150,7 @@ def init_run(
         triage_keep_percentile=cfg.triage_keep_percentile,
         fast_scan_fps=cfg.fast_scan_fps,
         confirm_scan_fps=cfg.confirm_scan_fps,
+        target_yolo_fps=cfg.target_yolo_fps,
         valley_drop_ratio=cfg.valley_drop_ratio,
         valley_min_width_frames=cfg.valley_min_width_frames,
         delta_spike_ratio=cfg.delta_spike_ratio,
@@ -171,7 +174,7 @@ def init_run(
     )
 
     from card_capture.storage import Storage
-    from card_capture.pipeline import _file_hash
+    from card_capture.pipeline_utils import _file_hash
 
     storage = Storage(Path(db_path))
     storage.initialize()

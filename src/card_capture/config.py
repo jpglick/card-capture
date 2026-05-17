@@ -32,6 +32,7 @@ class PipelineConfig:
     triage_keep_percentile: float = 0.05
     fast_scan_fps: float = 15.0
     confirm_scan_fps: float = 5.0
+    target_yolo_fps: float = 3.0
     valley_drop_ratio: float = 0.40
     valley_min_width_frames: int = 3
     delta_spike_ratio: float = 0.50
@@ -54,11 +55,12 @@ class PipelineConfig:
     
     # Hardware Acceleration
     use_kornia: bool = True
+    prefer_hw_decode: bool = True
     telemetry_scope: str = "canonical"
     
     debug: DebugConfig = field(default_factory=DebugConfig)
 
-    def to_options(self, output_dir: Path) -> "card_capture.pipeline.ProcessingOptions":
+    def to_options(self, output_dir: Path) -> "card_capture.workers.ProcessingOptions":
         """Convert to legacy ProcessingOptions for the monolith path.
 
         Generated programmatically to prevent silent drift: any field added to
@@ -67,7 +69,7 @@ class PipelineConfig:
         PipelineConfig counterpart fall through to their ProcessingOptions default.
         """
         import dataclasses as _dc
-        from .pipeline import ProcessingOptions
+        from .workers import ProcessingOptions
 
         # ProcessingOptions fields whose names differ from PipelineConfig.
         renames = {
@@ -83,7 +85,11 @@ class PipelineConfig:
                 kwargs[f.name] = renames[f.name]
             elif f.name in pc_fields:
                 kwargs[f.name] = getattr(self, f.name)
-            # else: ProcessingOptions-only field; use its default
+            else:
+                raise RuntimeError(
+                    f"ProcessingOptions field '{f.name}' has no source in PipelineConfig. "
+                    "Add it to PipelineConfig or to the `renames` dict in to_options()."
+                )
         return ProcessingOptions(**kwargs)
 
 def load_config(path: Path) -> PipelineConfig:
