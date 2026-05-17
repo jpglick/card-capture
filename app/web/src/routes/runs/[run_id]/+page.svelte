@@ -131,6 +131,9 @@
 
 <div class="page-header">
     <h1>Run <code>{runId}</code></h1>
+    {#if run?.detect_telemetry?.yolo_device === 'cuda' || runId.startsWith('batch_')}
+        <span class="cloud-badge">☁ Cloud GPU</span>
+    {/if}
     {#if run}
         <a href="/runs" class="back-link">← All runs</a>
     {/if}
@@ -352,6 +355,19 @@
     h1 code { font-size: 1rem; background: #f0f1f9; padding: 0.2rem 0.5rem; border-radius: 4px; }
     .back-link { font-size: 0.9rem; color: #727cf5; text-decoration: none; }
     .back-link:hover { text-decoration: underline; }
+
+    .cloud-badge {
+        display: inline-block;
+        background: #e8f4fd;
+        color: #0078d4;
+        border: 1px solid #b3d9f5;
+        border-radius: 4px;
+        padding: 0.1rem 0.5rem;
+        font-size: 0.75rem;
+        font-weight: 600;
+        vertical-align: middle;
+        margin-left: 0.5rem;
+    }
 
     .summary-cards {
         display: flex;

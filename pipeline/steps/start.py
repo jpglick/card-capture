@@ -80,6 +80,8 @@ class RunContext:
     use_fb_classifier: bool = True
     use_dino_dedup: bool = True
     telemetry_scope: str = "canonical"
+    cuda_stride: int = 2
+    cuda_batch_size: int = 32
 
     # Per-video adaptive distributions (collected during run)
     observed_novelty_scores: list[float] = field(default_factory=list)
@@ -185,6 +187,8 @@ def init_run(
         
         use_kornia=cfg.use_kornia,
         kornia_device=cfg.device,
+        cuda_stride=cfg.cuda_stride,
+        cuda_batch_size=cfg.cuda_batch_size,
     )
 
     from card_capture.storage import Storage
