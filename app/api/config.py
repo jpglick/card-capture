@@ -23,6 +23,20 @@ _PIPELINE_FIELDS = {
     "presence_threshold": float,
 }
 
+_COMPUTE_FIELDS = {
+    "pipeline_backend": str,
+    "cuda_gpu_type": str,
+    "vast_template_id": str,
+    "cuda_idle_timeout_s": int,
+}
+
+_COMPUTE_DEFAULTS = {
+    "pipeline_backend": "mps",
+    "cuda_gpu_type": "RTX 4090",
+    "vast_template_id": "",
+    "cuda_idle_timeout_s": 300,
+}
+
 from app.schemas.v1 import ConfigPlayground, ConfigPreset
 
 router = APIRouter()
@@ -170,3 +184,30 @@ def recompute_playground(run_id: str, body: dict, request: Request):
     """Recompute metrics based on new thresholds."""
     svc = request.app.state.playground_service
     return svc.recompute(run_id, body)
+
+
+@router.get("/compute")
+def get_compute_config(_request: Request):
+    """Return the current compute backend config."""
+    try:
+        data = json.loads(_CONFIG_PATH.read_text()) if _CONFIG_PATH.exists() else {}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return {k: data.get(k, _COMPUTE_DEFAULTS[k]) for k in _COMPUTE_FIELDS}
+
+
+@router.patch("/compute")
+def patch_compute_config(body: dict, _request: Request):
+    """Update compute backend fields in card_capture_config.json."""
+    unknown = set(body) - set(_COMPUTE_FIELDS)
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"Unknown fields: {sorted(unknown)}")
+    try:
+        data = json.loads(_CONFIG_PATH.read_text()) if _CONFIG_PATH.exists() else {}
+        for key, cast in _COMPUTE_FIELDS.items():
+            if key in body:
+                data[key] = cast(body[key])
+        _CONFIG_PATH.write_text(json.dumps(data, indent=2))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return {k: data.get(k) for k in _COMPUTE_FIELDS}
