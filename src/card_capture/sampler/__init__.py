@@ -666,7 +666,7 @@ class AdaptivePresenceSampler:
         if not records:
             return window
 
-        source_fps = getattr(self, 'last_source_fps', 30.0) or 30.0
+        source_fps = self.last_source_fps
         duration_s = (window.end_frame - window.start_frame) / source_fps
         target = math.ceil(duration_s * self.target_yolo_fps)
         target = max(self.min_candidates_per_window, min(self.max_candidates_per_window, target))
@@ -687,9 +687,8 @@ class AdaptivePresenceSampler:
             start = int(i * n / target)
             end = int((i + 1) * n / target)
             bucket = sorted_records[start:end]
-            if bucket:
-                best = max(bucket, key=lambda r: r.presence_score)
-                selected.append((best.frame_index, best.presence_score))
+            best = max(bucket, key=lambda r: r.presence_score)
+            selected.append((best.frame_index, best.presence_score))
 
         window.frame_candidates = selected
         return window
