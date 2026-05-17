@@ -385,6 +385,7 @@ class AdaptivePresenceSampler:
         fast_scan_fps: float = 15.0,
         confirm_scan_fps: Optional[float] = None,
         target_yolo_fps: float = 3.0,
+        opening_scan_s: float = 2.0,
         valley_drop_ratio: float = 0.40,
         valley_min_width_frames: int = 3,
         delta_spike_ratio: float = 0.50,
@@ -409,6 +410,7 @@ class AdaptivePresenceSampler:
             self.min_candidates_per_window, max_candidates_per_window
         )
         self.target_yolo_fps = max(0.1, target_yolo_fps)
+        self.opening_scan_s = max(0.0, opening_scan_s)
         self.empty_pixel_threshold = empty_pixel_threshold
         self.sobel_threshold = sobel_threshold
         self.presence_weights_path = presence_weights_path
@@ -737,6 +739,33 @@ class AdaptivePresenceSampler:
         window.frame_candidates = selected
         return window
 
+    def _compute_opening_indices(self) -> list[int]:
+        """Return source frame indices for the unconditional opening scan window.
+
+        Cards resting on a stand at the start of the video may not register
+        as 'card present' in the fast scan because they are static and score
+        below the presence threshold — the scanner treats them as stable
+        background. We unconditionally include sparse frames from the opening
+        window so that a card placed before filming started is never silently
+        skipped.
+
+        This is distinct from the presence-gated windows: these frames are
+        always sent to YOLO regardless of presence score. If no card is
+        present, YOLO returns no detections and the cost is negligible
+        (triage + inference on a handful of frames).
+
+        Returns:
+            Frame indices [0, stride, 2*stride, ...] up to opening_scan_s seconds
+            of source video, at target_yolo_fps density. Empty list if
+            opening_scan_s <= 0.
+        """
+        if self.opening_scan_s <= 0:
+            return []
+        source_fps = self.last_source_fps or 30.0
+        opening_count = int(source_fps * self.opening_scan_s)
+        stride = max(1, int(source_fps / self.target_yolo_fps))
+        return list(range(0, opening_count, stride))
+
     def _decode_selected_frames(self, video_path: Path, frame_indices: list[int]) -> list[FrameSample]:
         if not frame_indices:
             return []
@@ -864,6 +893,15 @@ class AdaptivePresenceSampler:
         for window in scored_windows:
             selected_frame_indices.extend(frame_index for frame_index, _ in window.frame_candidates)
         deduped_frame_indices = sorted(set(selected_frame_indices))
+
+        # Merge opening-scan indices into the selected set.
+        # See _compute_opening_indices for why this is necessary: cards resting
+        # on a stand before presentation begins are invisible to the presence
+        # gate and would be silently dropped without this forced inclusion.
+        opening_indices = self._compute_opening_indices()
+        if opening_indices:
+            deduped_frame_indices = sorted(set(deduped_frame_indices) | set(opening_indices))
+
         self.last_scan_frame_count = len(self._scan_frames)
         self.last_selected_frame_count = len(deduped_frame_indices)
         yield from self._decode_selected_frames(resolved_video_path, deduped_frame_indices)
