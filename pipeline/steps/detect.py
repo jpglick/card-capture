@@ -86,6 +86,7 @@ def run(ctx: RunContext) -> DetectOutput:
 
     # Make sampler_telemetry JSON-serialisable
     sampler_telemetry = _serialise_telemetry(stats.sampler_telemetry)
+    sampler_telemetry.setdefault("target_yolo_fps", ctx.target_yolo_fps)
 
     _save_corner_samples(ctx, detection_rows, output_dir)
 
