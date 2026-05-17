@@ -22,6 +22,39 @@ def _svc(request: Request):
     return request.app.state.video_service
 
 
+def _build_runner(request: Request):
+    """Return VastAIRunner or PipelineRunner based on pipeline_backend config."""
+    import json, os
+    from pathlib import Path as _Path
+    _cfg = _Path(__file__).parent.parent.parent / "card_capture_config.json"
+    cfg: dict = {}
+    if _cfg.exists():
+        try:
+            cfg = json.loads(_cfg.read_text())
+        except Exception:
+            pass
+
+    bus = request.app.state.event_bus
+    db_path = request.app.state.db_path
+
+    if cfg.get("pipeline_backend") == "cuda":
+        api_key = os.environ.get("VAST_API_KEY", "")
+        if not api_key:
+            raise HTTPException(status_code=500, detail="VAST_API_KEY environment variable is not set")
+        from app.services.vast_runner import VastAIRunner
+        return VastAIRunner(
+            bus=bus,
+            db_path=db_path,
+            output_base=db_path.parent,
+            api_key=api_key,
+            gpu_type=cfg.get("cuda_gpu_type", "RTX 4090"),
+            template_id=cfg.get("vast_template_id", ""),
+            idle_timeout_s=int(cfg.get("cuda_idle_timeout_s", 300)),
+        )
+
+    return PipelineRunner(bus=bus, flow_cls=None, db_path=db_path)
+
+
 @router.get("", response_model=list[Video])
 def list_videos(request: Request):
     return _svc(request).list_videos()
@@ -70,7 +103,7 @@ async def start_run(video_id: int, request: Request, bg: BackgroundTasks):
         
     run_id = f"run_{uuid.uuid4().hex[:8]}"
     db_path = request.app.state.db_path
-    runner = PipelineRunner(bus=request.app.state.event_bus, flow_cls=None, db_path=db_path)
+    runner = _build_runner(request)
     _svc(request).update_status(video_id, "processing")
 
     output_dir = Path(_REPO_ROOT) / "card_capture_output" / run_id
