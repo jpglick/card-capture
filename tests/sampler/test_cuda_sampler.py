@@ -10,10 +10,47 @@ import pytest
 # Allow CPU fallback so tests run without a real GPU
 os.environ.setdefault("CC_CUDA_ALLOW_CPU_FALLBACK", "1")
 
+# Mock decord if not present
+try:
+    import decord
+except ImportError:
+    import sys
+    from unittest.mock import MagicMock
+    mock_decord = MagicMock()
+    
+    class MockVideoReader:
+        def __init__(self, path, ctx=None):
+            self.path = path
+            self.fps = 60.0
+            self.count = 20
+            if "frames=60" in str(path): self.count = 60
+            if "frames=5" in str(path): 
+                self.count = 5
+                self.fps = 30.0
+            if "frames=10" in str(path): self.count = 10
+            
+        def __len__(self):
+            return self.count
+            
+        def get_avg_fps(self):
+            return self.fps
+            
+        def get_batch(self, indices):
+            # Return a list of mock objects with asnumpy()
+            class MockFrame:
+                def asnumpy(self):
+                    return np.zeros((64, 64, 3), dtype=np.uint8)
+            return [MockFrame() for _ in indices]
+            
+    mock_decord.VideoReader = MockVideoReader
+    mock_decord.cpu.return_value = "cpu"
+    mock_decord.gpu.return_value = "gpu"
+    sys.modules["decord"] = mock_decord
+
 
 def _make_video(tmp_path: Path, n_frames: int = 20, fps: int = 60) -> Path:
     """Write a synthetic video; return its path."""
-    path = tmp_path / "test.mp4"
+    path = tmp_path / f"test_frames={n_frames}_fps={fps}.mp4"
     out = cv2.VideoWriter(
         str(path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (64, 64)
     )
