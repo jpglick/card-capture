@@ -49,6 +49,7 @@ class RunContext:
     fast_scan_fps: float = 15.0
     confirm_scan_fps: float = 5.0
     target_yolo_fps: float = 3.0
+    novelty_floor: float = 0.30
     valley_drop_ratio: float = 0.40
     valley_min_width_frames: int = 3
     delta_spike_ratio: float = 0.50
@@ -151,6 +152,7 @@ def init_run(
         fast_scan_fps=cfg.fast_scan_fps,
         confirm_scan_fps=cfg.confirm_scan_fps,
         target_yolo_fps=cfg.target_yolo_fps,
+        novelty_floor=cfg.novelty_floor,
         valley_drop_ratio=cfg.valley_drop_ratio,
         valley_min_width_frames=cfg.valley_min_width_frames,
         delta_spike_ratio=cfg.delta_spike_ratio,
