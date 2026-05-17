@@ -121,3 +121,78 @@ def test_compute_valley_splits_coalesces_adjacent_regional_splits(monkeypatch):
     )
 
     assert sampler._compute_valley_splits(scan_frames) == [4]
+
+
+def _make_presence_window(start_frame, end_frame, n_records, base_score=0.8):
+    """Helper: build a PresenceWindow and matching _AdaptiveScanFrame list."""
+    from card_capture.sampler import PresenceWindow, _AdaptiveScanFrame
+    window = PresenceWindow(start_frame=start_frame, end_frame=end_frame)
+    step = (end_frame - start_frame) // max(n_records - 1, 1)
+    records = []
+    for i in range(n_records):
+        fi = start_frame + i * step
+        records.append(_AdaptiveScanFrame(
+            frame_index=fi,
+            timestamp_ms=fi * 16,
+            image=np.zeros((12, 12, 3), dtype=np.uint8),
+            metrics={"edge_density": 1.0},
+            presence_score=base_score + (i % 3) * 0.05,
+        ))
+    return window, records
+
+
+def test_score_sharpness_temporal_spread():
+    """Candidates must be spread across the window, not clustered at high-score frames."""
+    sampler = AdaptivePresenceSampler(target_yolo_fps=3.0)
+    sampler.last_source_fps = 60.0
+    # 10-second window at 60fps = frames 0..600; 60 scan records
+    window, records = _make_presence_window(0, 600, n_records=60)
+    sampler._scan_frames = records
+
+    result = sampler._score_sharpness_in_window(window)
+    candidates = [fi for fi, _ in result.frame_candidates]
+
+    # At 3fps over 10s → ~30 candidates, capped at max_candidates_per_window=24
+    assert 10 <= len(candidates) <= 24
+
+    # Candidates must span at least 80% of the window range
+    assert max(candidates) - min(candidates) >= 0.8 * 600
+
+    # No two consecutive candidates come from the same 5% of the window
+    segment = 600 / 20
+    segments_used = {int(fi / segment) for fi in candidates}
+    assert len(segments_used) >= 10, "candidates are clustered, not temporally spread"
+
+
+def test_score_sharpness_short_window_respects_min():
+    """A very short window still yields at least min_candidates_per_window frames."""
+    sampler = AdaptivePresenceSampler(target_yolo_fps=3.0)
+    sampler.last_source_fps = 60.0
+    # 0.5-second window → ceil(0.5 * 3) = 2, but min is 3
+    window, records = _make_presence_window(0, 30, n_records=5)
+    sampler._scan_frames = records
+
+    result = sampler._score_sharpness_in_window(window)
+    assert len(result.frame_candidates) >= sampler.min_candidates_per_window
+
+
+def test_score_sharpness_picks_best_score_per_bucket():
+    """Within each bucket, the frame with the highest presence_score is chosen."""
+    from card_capture.sampler import PresenceWindow, _AdaptiveScanFrame
+    sampler = AdaptivePresenceSampler(target_yolo_fps=1.0, max_candidates_per_window=2)
+    sampler.last_source_fps = 60.0
+    # 2-second window → 2 buckets; plant known best scores
+    window = PresenceWindow(start_frame=0, end_frame=120)
+    records = [
+        _AdaptiveScanFrame(0,   0,    np.zeros((4,4,3), dtype=np.uint8), {}, presence_score=0.5),
+        _AdaptiveScanFrame(30,  500,  np.zeros((4,4,3), dtype=np.uint8), {}, presence_score=0.9),   # best in bucket 0
+        _AdaptiveScanFrame(60,  1000, np.zeros((4,4,3), dtype=np.uint8), {}, presence_score=0.6),
+        _AdaptiveScanFrame(90,  1500, np.zeros((4,4,3), dtype=np.uint8), {}, presence_score=0.95),  # best in bucket 1
+        _AdaptiveScanFrame(120, 2000, np.zeros((4,4,3), dtype=np.uint8), {}, presence_score=0.4),
+    ]
+    sampler._scan_frames = records
+
+    result = sampler._score_sharpness_in_window(window)
+    chosen_indices = [fi for fi, _ in result.frame_candidates]
+    assert 30 in chosen_indices, "highest-score frame in bucket 0 must be chosen"
+    assert 90 in chosen_indices, "highest-score frame in bucket 1 must be chosen"
