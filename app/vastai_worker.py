@@ -115,6 +115,43 @@ async def _worker_loop():
             _queue.task_done()
 
 
+_CUDA_CONFIG_OVERRIDES: dict = {
+    "detector": "cuda",
+    "device": "cuda",
+    "cuda_stride": 2,
+    "cuda_batch_size": 32,
+    "pipeline_backend": "cuda",
+}
+
+_CONFIG_PATH = Path(__file__).parent.parent / "card_capture_config.json"
+
+
+def _apply_cuda_config() -> dict:
+    """Write CUDA overrides to config; return original values for restore."""
+    cfg: dict = {}
+    if _CONFIG_PATH.exists():
+        try:
+            cfg = json.loads(_CONFIG_PATH.read_text())
+        except Exception:
+            pass
+    original = {k: cfg.get(k) for k in _CUDA_CONFIG_OVERRIDES}
+    cfg.update(_CUDA_CONFIG_OVERRIDES)
+    _CONFIG_PATH.write_text(json.dumps(cfg, indent=2))
+    return original
+
+
+def _restore_config(original: dict) -> None:
+    """Restore config values that were overridden by _apply_cuda_config."""
+    if not _CONFIG_PATH.exists():
+        return
+    try:
+        cfg = json.loads(_CONFIG_PATH.read_text())
+        cfg.update(original)
+        _CONFIG_PATH.write_text(json.dumps(cfg, indent=2))
+    except Exception:
+        pass
+
+
 def _run_pipeline(job: dict) -> None:
     job_id = job["job_id"]
     video_path = job["video_path"]
@@ -123,21 +160,23 @@ def _run_pipeline(job: dict) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     db_path = output_dir / "cards.sqlite"
 
-    # Sub-project B will replace this with the CUDA-native pipeline.
-    # For now, invoke the existing Metaflow pipeline via subprocess.
-    repo_root = Path(__file__).parent.parent
-    cmd = [
-        sys.executable, "-m", "pipeline.card_capture_flow",
-        "--no-pylint", "run",
-        "--video", video_path,
-        "--output-dir", str(output_dir),
-        "--db", str(db_path),
-        "--config-preset", config_preset,
-        "--ui-run-id", job_id,
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(repo_root))
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr[-1000:] or result.stdout[-500:])
+    original = _apply_cuda_config()
+    try:
+        repo_root = Path(__file__).parent.parent
+        cmd = [
+            sys.executable, "-m", "pipeline.card_capture_flow",
+            "--no-pylint", "run",
+            "--video", video_path,
+            "--output-dir", str(output_dir),
+            "--db", str(db_path),
+            "--config-preset", config_preset,
+            "--ui-run-id", job_id,
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(repo_root))
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr[-1000:] or result.stdout[-500:])
+    finally:
+        _restore_config(original)
 
     _package_results(job_id, output_dir, db_path)
 
