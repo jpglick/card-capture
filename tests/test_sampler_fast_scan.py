@@ -196,3 +196,36 @@ def test_score_sharpness_picks_best_score_per_bucket():
     chosen_indices = [fi for fi, _ in result.frame_candidates]
     assert 30 in chosen_indices, "highest-score frame in bucket 0 must be chosen"
     assert 90 in chosen_indices, "highest-score frame in bucket 1 must be chosen"
+
+
+def test_opening_scan_indices_two_seconds():
+    """opening_scan_s=2.0, 60fps, target=3fps → range(0, 120, 20) = 6 frames."""
+    sampler = AdaptivePresenceSampler(opening_scan_s=2.0, target_yolo_fps=3.0)
+    sampler.last_source_fps = 60.0
+    assert sampler._compute_opening_indices() == [0, 20, 40, 60, 80, 100]
+
+
+def test_opening_scan_indices_one_second():
+    """opening_scan_s=1.0, 60fps, target=3fps → range(0, 60, 20) = [0, 20, 40]."""
+    sampler = AdaptivePresenceSampler(opening_scan_s=1.0, target_yolo_fps=3.0)
+    sampler.last_source_fps = 60.0
+    assert sampler._compute_opening_indices() == [0, 20, 40]
+
+
+def test_opening_scan_zero_returns_empty():
+    """opening_scan_s=0 disables the feature."""
+    sampler = AdaptivePresenceSampler(opening_scan_s=0.0, target_yolo_fps=3.0)
+    sampler.last_source_fps = 60.0
+    assert sampler._compute_opening_indices() == []
+
+
+def test_opening_scan_deduped_with_presence_windows():
+    """Opening frame 0 merged with existing indices produces no duplicates."""
+    sampler = AdaptivePresenceSampler(opening_scan_s=1.0, target_yolo_fps=3.0)
+    sampler.last_source_fps = 60.0
+    existing = [0, 15, 30, 45, 60, 75]
+    opening = sampler._compute_opening_indices()  # [0, 20, 40]
+    merged = sorted(set(existing) | set(opening))
+    assert merged.count(0) == 1
+    assert 20 in merged
+    assert 40 in merged
