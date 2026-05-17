@@ -10,7 +10,7 @@ from typing import Optional
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from app.api import cards, config, events, label, regression, runs, training, videos
+from app.api import batch, cards, config, events, label, regression, runs, training, videos
 from app.services.event_bus import EventBus
 from app.services.training_service import TrainingService
 from app.services.labeling_service import LabelingService
@@ -74,6 +74,7 @@ def create_app(db_path: Optional[Path] = None) -> FastAPI:
 
     # Include routers
     app.include_router(videos.router, prefix="/api/v1/videos", tags=["videos"])
+    app.include_router(batch.router, prefix="/api/v1/runs/batch", tags=["batch"])
     app.include_router(runs.router, prefix="/api/v1/runs", tags=["runs"])
     app.include_router(cards.router, prefix="/api/v1/cards", tags=["cards"])
     app.include_router(label.router, prefix="/api/v1/label", tags=["label"])
