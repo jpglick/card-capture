@@ -86,6 +86,8 @@ def run(ctx: RunContext, refine_out: RefineOutput) -> ScoreOutput:
     gate_useful = _novelty_gate_useful(all_novelty_scores)
     novelty_threshold = ctx.novelty_floor if gate_useful else -1.0
     conf_floor = ctx.track_confidence_floor
+    stand_nov_max = ctx.stand_novelty_max
+    stand_shp_max = ctx.stand_sharpness_max
 
     scored_tracks: List[Dict[str, Any]] = []
     pruned_instance_ids: List[str] = []
@@ -105,14 +107,28 @@ def run(ctx: RunContext, refine_out: RefineOutput) -> ScoreOutput:
         ]
         median_quality = float(np.median(quality_scores)) if quality_scores else 1.0
 
+        sharpness_scores = [
+            float(fe.get("quality_components", {}).get("sharpness", 1.0))
+            for fe in frame_entries
+        ]
+        median_sharpness = float(np.median(sharpness_scores)) if sharpness_scores else 1.0
+
         novelty_prune = (bg_model is not None) and gate_useful and (median_novelty < novelty_threshold)
         confidence_prune = conf_floor > 0 and median_quality < conf_floor
-        should_prune = novelty_prune or confidence_prune
+        # Transparent-stand gate: low novelty (see-through) AND low sharpness (soft acrylic edges)
+        stand_prune = (
+            bg_model is not None and
+            stand_nov_max > 0 and
+            median_novelty < stand_nov_max and
+            median_sharpness < stand_shp_max
+        )
+        should_prune = novelty_prune or confidence_prune or stand_prune
 
         track_out = dict(track_dict)
         track_out["pruned"] = should_prune
         track_out["median_novelty"] = median_novelty
         track_out["median_quality"] = median_quality
+        track_out["median_sharpness"] = median_sharpness
 
         scored_tracks.append(track_out)
         if should_prune:
@@ -123,6 +139,7 @@ def run(ctx: RunContext, refine_out: RefineOutput) -> ScoreOutput:
         f"[Stage: Score] | {len(scored_tracks)} tracks scored"
         f" | {len(pruned_instance_ids)} pruned | {active_count} active"
         f" | novelty_gate={'on' if gate_useful else 'off'}"
+        f" | stand_gate={'on' if stand_nov_max > 0 else 'off'}"
         f" | conf_floor={conf_floor:.2f}"
     )
 

@@ -35,6 +35,8 @@ class PipelineConfig:
     target_yolo_fps: float = 3.0
     novelty_floor: float = 0.30
     track_confidence_floor: float = 0.0
+    stand_novelty_max: float = 0.065
+    stand_sharpness_max: float = 0.092
     valley_drop_ratio: float = 0.40
     valley_min_width_frames: int = 3
     delta_spike_ratio: float = 0.50

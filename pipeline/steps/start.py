@@ -51,6 +51,8 @@ class RunContext:
     target_yolo_fps: float = 3.0
     novelty_floor: float = 0.30
     track_confidence_floor: float = 0.0
+    stand_novelty_max: float = 0.065
+    stand_sharpness_max: float = 0.092
     valley_drop_ratio: float = 0.40
     valley_min_width_frames: int = 3
     delta_spike_ratio: float = 0.50
@@ -155,6 +157,8 @@ def init_run(
         target_yolo_fps=cfg.target_yolo_fps,
         novelty_floor=cfg.novelty_floor,
         track_confidence_floor=cfg.track_confidence_floor,
+        stand_novelty_max=cfg.stand_novelty_max,
+        stand_sharpness_max=cfg.stand_sharpness_max,
         valley_drop_ratio=cfg.valley_drop_ratio,
         valley_min_width_frames=cfg.valley_min_width_frames,
         delta_spike_ratio=cfg.delta_spike_ratio,
