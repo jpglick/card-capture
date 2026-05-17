@@ -55,7 +55,6 @@ class PipelineConfig:
     
     # Hardware Acceleration
     use_kornia: bool = True
-    prefer_hw_decode: bool = True
     telemetry_scope: str = "canonical"
     
     debug: DebugConfig = field(default_factory=DebugConfig)
