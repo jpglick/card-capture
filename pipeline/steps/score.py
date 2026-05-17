@@ -48,10 +48,17 @@ class ScoreOutput:
 def run(ctx: RunContext, refine_out: RefineOutput) -> ScoreOutput:
     """Prune empty-workspace tracks and attach quality scores.
 
-    Analyses ctx.observed_novelty_scores distribution to decide if the
-    background model is discriminating enough to use as a gate. When active,
-    prunes any track whose median novelty score falls below ctx.novelty_floor.
-    When the gate is not useful (e.g. hand-held video), no tracks are pruned.
+    Two independent pruning gates, either of which can prune a track:
+
+    1. Novelty gate: activates when the per-video novelty score distribution is
+       bimodal (background model discriminates). Prunes tracks whose median
+       novelty falls below ctx.novelty_floor (default 0.30). Stays off for
+       hand-held/transparent-stand videos where all scores cluster similarly.
+
+    2. Confidence floor: always active when ctx.track_confidence_floor > 0.
+       Prunes tracks whose median frame quality score is below the floor
+       (default 0.60). Catches acrylic/transparent stand false positives that
+       score 0.54–0.57 while real cards score 0.74–0.79.
 
     Args:
         ctx:        RunContext from the start step.
@@ -69,8 +76,16 @@ def run(ctx: RunContext, refine_out: RefineOutput) -> ScoreOutput:
         bg_model = BackgroundModel.__new__(BackgroundModel)
         bg_model.mean_bgr = mean_bgr
 
-    gate_useful = _novelty_gate_useful(ctx.observed_novelty_scores)
-    threshold = ctx.novelty_floor if gate_useful else -1.0
+    # Collect novelty scores from frame entries (ctx.observed_novelty_scores is
+    # not propagated across Metaflow step boundaries; refine_out is reliable)
+    all_novelty_scores = [
+        float(fe.get("novelty_score", 1.0))
+        for track_dict in refine_out.refined_tracks
+        for fe in track_dict.get("frame_entries", [])
+    ]
+    gate_useful = _novelty_gate_useful(all_novelty_scores)
+    novelty_threshold = ctx.novelty_floor if gate_useful else -1.0
+    conf_floor = ctx.track_confidence_floor
 
     scored_tracks: List[Dict[str, Any]] = []
     pruned_instance_ids: List[str] = []
@@ -84,11 +99,20 @@ def run(ctx: RunContext, refine_out: RefineOutput) -> ScoreOutput:
         ]
         median_novelty = float(np.median(novelty_scores)) if novelty_scores else 1.0
 
-        should_prune = (bg_model is not None) and gate_useful and (median_novelty < threshold)
+        quality_scores = [
+            float(fe.get("score_total", fe.get("confidence", 1.0)))
+            for fe in frame_entries
+        ]
+        median_quality = float(np.median(quality_scores)) if quality_scores else 1.0
+
+        novelty_prune = (bg_model is not None) and gate_useful and (median_novelty < novelty_threshold)
+        confidence_prune = conf_floor > 0 and median_quality < conf_floor
+        should_prune = novelty_prune or confidence_prune
 
         track_out = dict(track_dict)
         track_out["pruned"] = should_prune
         track_out["median_novelty"] = median_novelty
+        track_out["median_quality"] = median_quality
 
         scored_tracks.append(track_out)
         if should_prune:
@@ -99,7 +123,7 @@ def run(ctx: RunContext, refine_out: RefineOutput) -> ScoreOutput:
         f"[Stage: Score] | {len(scored_tracks)} tracks scored"
         f" | {len(pruned_instance_ids)} pruned | {active_count} active"
         f" | novelty_gate={'on' if gate_useful else 'off'}"
-        f" | threshold={threshold:.2f}"
+        f" | conf_floor={conf_floor:.2f}"
     )
 
     return ScoreOutput(

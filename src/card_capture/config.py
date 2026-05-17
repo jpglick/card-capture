@@ -34,6 +34,7 @@ class PipelineConfig:
     confirm_scan_fps: float = 5.0
     target_yolo_fps: float = 3.0
     novelty_floor: float = 0.30
+    track_confidence_floor: float = 0.60
     valley_drop_ratio: float = 0.40
     valley_min_width_frames: int = 3
     delta_spike_ratio: float = 0.50
