@@ -1,6 +1,23 @@
 # Vast.ai Base Template Setup
 
-## What to install on the base instance before saving the template
+## Automated setup (recommended)
+
+```bash
+# One-time setup — builds Docker image, pushes to Hub, updates config
+python3 scripts/setup_cuda_template.py --docker-user YOUR_DOCKERHUB_USERNAME
+
+# With smoke test (spins up a real instance, tests health endpoint, destroys it)
+VAST_API_KEY=your_key python3 scripts/setup_cuda_template.py --docker-user YOUR_DOCKERHUB_USERNAME --verify
+
+# Re-run any time — safe to run again (skips push if image unchanged)
+python3 scripts/setup_cuda_template.py --docker-user YOUR_DOCKERHUB_USERNAME
+```
+
+The script writes `vast_template_id` into `card_capture_config.json` automatically.
+
+---
+
+## Manual fallback — what to install on the base instance before saving the template
 
 1. Start a vast.ai instance with a PyTorch+CUDA base image:
    `pytorch/pytorch:2.3.0-cuda12.1-cudnn8-devel`
