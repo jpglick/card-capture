@@ -43,7 +43,8 @@ class Storage:
                     angle TEXT,
                     fused_image_path TEXT,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(run_id, track_id)
                 );
 
                 CREATE TABLE IF NOT EXISTS card_views (
