@@ -122,5 +122,14 @@ export const api = {
         getPlayground: (runId: string) => req<T.ConfigPlayground>('GET', `/config/playground/${runId}`),
         getPipeline: () => req<Record<string, number>>('GET', '/config/pipeline'),
         patchPipeline: (body: Record<string, number>) => req<Record<string, number>>('PATCH', '/config/pipeline', body),
-    }
+    },
+    compute: {
+        get: () => req<T.VastConfig>('GET', '/config/compute'),
+        patch: (body: Partial<T.VastConfig>) => req<T.VastConfig>('PATCH', '/config/compute', body),
+    },
+    batch: {
+        create: (video_ids: string[], config_preset?: string) =>
+            req<{ batch_id: string }>('POST', '/runs/batch', { video_ids, config_preset }),
+        status: (batch_id: string) => req<T.BatchStatus>('GET', `/runs/batch/${batch_id}`),
+    },
 };
