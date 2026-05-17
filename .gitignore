@@ -41,6 +41,7 @@ __pycache__/
 
 # Plan & Spec working files
 .worktrees/
+.claude/
 .pytest_cache/
 
 # Harness reports — track only baselines
