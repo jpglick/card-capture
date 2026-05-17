@@ -58,6 +58,11 @@ def run(ctx: RunContext) -> DetectOutput:
 
     options = _ctx_to_options(ctx, output_dir)
 
+    if ctx.detector == "cuda":
+        detect_out = _run_cuda_inference(ctx, sampler, detector, output_dir, frame_dir)
+        _save_corner_samples(ctx, detect_out.detection_rows, output_dir)
+        return detect_out
+
     stats, consumer_stats, raw_rows = _run_pipeline_workers(
         video_path=video_path,
         video_id=ctx.video_id,
@@ -160,6 +165,18 @@ def _build_sampler_detector(ctx: RunContext):
     if ctx.detector == "fake":
         sampler = SyntheticSampler()
         detector = FakeCardDetector()
+    elif ctx.detector == "cuda":
+        from card_capture.sampler.cuda_sampler import CudaSampler
+        sampler = CudaSampler(
+            video_path=_Path(ctx.video_path),
+            stride=ctx.cuda_stride,
+            opening_scan_s=ctx.opening_scan_s,
+        )
+        detector = CardcaptorUltralyticsDetector(
+            confidence_threshold=ctx.corner_confidence,
+            detection_width=640,
+            device="cuda",   # explicit — hard-fail if CUDA unavailable on instance
+        )
     else:
         from pathlib import Path as _Path
         weights = _Path("models/presence_classifier.pt")
@@ -178,6 +195,93 @@ def _build_sampler_detector(ctx: RunContext):
             device="auto",
         )
     return sampler, detector
+
+
+def _run_cuda_inference(
+    ctx: RunContext,
+    sampler: "CudaSampler",
+    detector: "CardcaptorUltralyticsDetector",
+    output_dir: Path,
+    frame_dir: Path,
+) -> "DetectOutput":
+    """Single-process CUDA inference path: decode → batch YOLO → DetectOutput.
+
+    Used when ctx.detector == "cuda". Bypasses the multiprocessing
+    producer/consumer model — frames are decoded by NVDEC and fed to YOLO
+    in large batches without subprocess overhead.
+    """
+    from card_capture.models import FramePacket
+
+    frames = list(sampler.sample())   # list[FrameSample] — already decoded
+    batch_size = ctx.cuda_batch_size
+
+    detection_rows: list[dict] = []
+    accepted_frame_presence: list[tuple[int, int, bool]] = []
+    det_id = 0
+
+    for batch_start in range(0, len(frames), batch_size):
+        batch = frames[batch_start:batch_start + batch_size]
+
+        # Convert FrameSample → FramePacket for detect_batch
+        packets_in = [
+            FramePacket(
+                frame_index=f.frame_index,
+                timestamp_ms=f.timestamp_ms,
+                image=f.image,
+                width=f.width,
+                height=f.height,
+                triage_metrics={},
+            )
+            for f in batch
+        ]
+
+        packets_out = detector.detect_batch(
+            packets_in, detector.confidence_threshold
+        )
+
+        for f in batch:
+            accepted_frame_presence.append((f.frame_index, f.timestamp_ms, True))
+
+        for pkt in packets_out:
+            cd = pkt.corner_detection
+            detection_rows.append(
+                {
+                    "detection_id": det_id,
+                    "frame_index": pkt.frame_index,
+                    "timestamp_ms": pkt.timestamp_ms,
+                    "width": pkt.width,
+                    "height": pkt.height,
+                    "corners": [(float(p[0]), float(p[1])) for p in cd.corners],
+                    "confidence": float(cd.confidence),
+                    "source_frame_path": "",
+                    "triage_metrics": {},
+                }
+            )
+            det_id += 1
+
+    return DetectOutput(
+        frame_count=len(frames),
+        accepted_frame_count=len(frames),
+        accepted_frame_presence=accepted_frame_presence,
+        detection_rows=detection_rows,
+        sampler_telemetry={
+            "sampler_type": "CudaSampler",
+            "last_selected_frame_count": sampler.last_selected_frame_count,
+            "last_source_fps": sampler.last_source_fps,
+            "cuda_stride": ctx.cuda_stride,
+            "target_yolo_fps": None,
+        },
+        video_id=ctx.video_id,
+        detect_telemetry={
+            "frame_count": len(frames),
+            "accepted_frame_count": len(frames),
+            "triage_pass_rate": 1.0,
+            "yolo_frames": len(frames),
+            "yolo_batches": (len(frames) + batch_size - 1) // batch_size,
+            "yolo_device": "cuda",
+            "sampler_type": "CudaSampler",
+        }
+    )
 
 
 def _ctx_to_options(ctx: RunContext, output_dir: Path):
