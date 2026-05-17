@@ -36,3 +36,8 @@ def get_run_cards(run_id: str, request: Request):
 def get_run_events(run_id: str, request: Request):
     run = _svc(request).get_run_details(run_id)
     return run["events"] if run else []
+
+
+@router.get("/{run_id}/resources")
+def get_run_resources(run_id: str, request: Request):
+    return _svc(request).get_run_resources(run_id)

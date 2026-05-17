@@ -319,9 +319,20 @@ class CardcaptorUltralyticsDetector:
                 "Install with: pip install '.[model]'"
             ) from exc
 
+        # Backend selection notes (benchmarked on M4, YOLO11m-OBB, batch=16):
+        #   MPS PyTorch:          94ms/frame  ← winner
+        #   ONNX+CoreML EP b=1:  325ms/frame  (ANE for 419/441 ops, but loop overhead dominates)
+        #   ONNX CPU b=16:       296ms/frame  (CoreML EP rejects b>1, falls back to CPU)
+        # MPS wins by 3×. ANE excels at lightweight mobile architectures; YOLO11m's
+        # 134 layers saturate the GPU more efficiently. ONNX kept in models/ as a
+        # verified-correct fallback for non-MPS environments.
+
+        # Primary: MPS / CPU
         model_path = _resolve_model_path(self.repo_id, self.filename)
         self._model = YOLO(model_path)
-        self._model.to(self._resolve_device())
+        self._device = self._resolve_device()
+        self._model.to(self._device)
+        print(f"[detector] backend={self._device}", flush=True)
         return self._model
 
     def _resolve_device(self) -> str:

@@ -63,6 +63,7 @@ export const api = {
         telemetry: (id: string) => req<T.RunTelemetry>('GET', `/runs/${id}/telemetry`),
         rejection: (id: string) => req<T.RunRejection[]>('GET', `/runs/${id}/rejection_log`),
         hardCases: (id: string) => req<T.RunHardCase[]>('GET', `/runs/${id}/hard_cases`),
+        resources: (id: string) => req<T.RunResources>('GET', `/runs/${id}/resources`),
     },
     cards: {
         list: (filter: T.CardFilter) => {
@@ -98,9 +99,18 @@ export const api = {
     },
     training: {
         listDatasets: () => req<T.DatasetSummary[]>('GET', '/training/datasets'),
-        retrain: (modelName: string, body: { epochs?: number, learning_rate?: number }) => 
+        retrain: (modelName: string, body: { epochs?: number, learning_rate?: number }) =>
             req<T.TrainingJobSummary>('POST', `/training/retrain/${modelName}`, body),
         getJob: (id: string) => req<T.TrainingJobDetail>('GET', `/training/jobs/${id}`),
+        getStats: () => req<any>('GET', '/training/stats'),
+        nextPresence: () => fetch(`${BASE}/training/presence/next`),
+        labelPresence: (body: { sample_id: number; label: string }) =>
+            fetch(`${BASE}/training/presence/label`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+        nextCorner: () => fetch(`${BASE}/training/corners/next`),
+        labelCorner: (body: { sample_id: number; label: string; corrected_corners?: string }) =>
+            fetch(`${BASE}/training/corners/label`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+        startBenchmark: (n: number) => req<{ job_id: string }>('POST', '/training/benchmark', { n }),
+        getBenchmark: (id: string) => req<any>('GET', `/training/benchmark/${id}`),
     },
     regression: {
         listBaselines: () => req<T.Baseline[]>('GET', '/regression/baselines'),
@@ -110,5 +120,7 @@ export const api = {
         listPresets: () => req<T.ConfigPreset[]>('GET', '/config/presets'),
         createPreset: (payload: T.ConfigPreset) => req<T.ConfigPreset>('POST', '/config/presets', payload),
         getPlayground: (runId: string) => req<T.ConfigPlayground>('GET', `/config/playground/${runId}`),
+        getPipeline: () => req<Record<string, number>>('GET', '/config/pipeline'),
+        patchPipeline: (body: Record<string, number>) => req<Record<string, number>>('PATCH', '/config/pipeline', body),
     }
 };

@@ -33,15 +33,62 @@ export interface Run {
     created_at: string;
 }
 
+export interface ResourceSample {
+    elapsed_s: number;
+    cpu_pct: number | null;
+    mem_used_mb: number | null;
+    mem_pct: number | null;
+    gpu_pct: number | null;
+    vram_used_mb: number | null;
+}
+
+export interface StageMarker {
+    name: string;
+    elapsed_s: number;
+}
+
+export interface HostInfo {
+    hostname?: string;
+    platform?: string;
+    cpu_count_physical?: number;
+    cpu_count_logical?: number;
+    mem_total_gb?: number;
+    gpu_device?: string;
+    gpu_name?: string;
+    vram_total_gb?: number;
+    vram_is_unified?: boolean;
+}
+
+export interface RunResources {
+    run_id: string;
+    host_info: HostInfo | null;
+    samples: ResourceSample[];
+    stage_markers: StageMarker[];
+}
+
+export interface DetectTelemetry {
+    frame_count?: number;
+    accepted_frame_count?: number;
+    triage_pass_rate?: number;
+    yolo_frames?: number;
+    yolo_batches?: number;
+    yolo_elapsed_s?: number;
+    yolo_device?: string;
+    presence_windows?: number;
+    sampler_type?: string;
+}
+
 export interface RunDetail extends RunSummary {
     events: RunEvent[];
+    logs?: string[];
+    stage_timings?: Array<{ stage: string; elapsed_ms: number }>;
+    detect_telemetry?: DetectTelemetry;
 }
 
 export interface RunEvent {
-    timestamp: string;
-    event_name: string;
-    stage_id?: string;
-    artifact_ref?: string;
+    created_at: string;
+    event_type: string;
+    data_json?: string;
 }
 
 export interface RunTelemetry {

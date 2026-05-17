@@ -8,6 +8,10 @@
     let error: string | null = null;
     let saveSuccess: string | null = null;
 
+    // Pipeline performance config
+    let pipelineConfig = $state<Record<string, number>>({});
+    let pipelineSaving = $state(false);
+
     // Edit state
     let editingPreset: ConfigPreset | null = null;
     let newPresetName = '';
@@ -48,8 +52,21 @@
                 api.runs.list(),
                 api.config.listPresets(),
             ]);
+            pipelineConfig = await api.config.getPipeline();
         } catch (e: any) {
             error = e.message;
+        }
+    }
+
+    async function savePipelineConfig() {
+        pipelineSaving = true;
+        try {
+            pipelineConfig = await api.config.patchPipeline(pipelineConfig);
+            saveSuccess = 'Pipeline config saved — takes effect on the next run.';
+        } catch (e: any) {
+            error = e.message;
+        } finally {
+            pipelineSaving = false;
         }
     }
 
@@ -111,6 +128,43 @@
 {#if saveSuccess}
     <div class="banner success">{saveSuccess} <button on:click={() => saveSuccess = null}>✕</button></div>
 {/if}
+
+<section>
+    <h2>Pipeline Performance</h2>
+    <p class="section-desc">Applies to all runs. Changes take effect on the next run.</p>
+    <div class="perf-grid">
+        <div class="perf-field">
+            <label for="batch-size">YOLO Batch Size</label>
+            <span class="perf-tip">Frames per GPU call. Larger = better GPU utilization. 256 is a good max for MPS.</span>
+            <div class="perf-input-row">
+                <input id="batch-size" type="number" min="8" max="512" step="8"
+                    bind:value={pipelineConfig.inference_batch_size} />
+                <span class="perf-unit">frames / batch</span>
+            </div>
+        </div>
+        <div class="perf-field">
+            <label for="triage-pct">Triage Keep %</label>
+            <span class="perf-tip">Fraction of frames sent to YOLO after sharpness ranking. 0.05 = top 5%.</span>
+            <div class="perf-input-row">
+                <input id="triage-pct" type="number" min="0.01" max="1.0" step="0.01"
+                    bind:value={pipelineConfig.triage_keep_percentile} />
+                <span class="perf-unit">ratio</span>
+            </div>
+        </div>
+        <div class="perf-field">
+            <label for="corner-conf">Corner Confidence</label>
+            <span class="perf-tip">Minimum YOLO detection confidence. Lower = more detections, more false positives.</span>
+            <div class="perf-input-row">
+                <input id="corner-conf" type="number" min="0.1" max="0.95" step="0.05"
+                    bind:value={pipelineConfig.corner_confidence} />
+                <span class="perf-unit">threshold</span>
+            </div>
+        </div>
+    </div>
+    <button class="btn-primary" on:click={savePipelineConfig} disabled={pipelineSaving}>
+        {pipelineSaving ? 'Saving…' : 'Save'}
+    </button>
+</section>
 
 <section>
     <div class="section-header">
@@ -379,4 +433,34 @@
     .run-date { color: #6c757d; font-weight: normal; font-size: 0.85rem; }
 
     .empty { color: #6c757d; font-style: italic; font-size: 0.9rem; }
+
+    .perf-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 1rem;
+        margin-bottom: 1rem;
+    }
+    .perf-field {
+        background: white;
+        border-radius: 10px;
+        padding: 1rem 1.25rem;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+    }
+    .perf-field label { font-size: 0.85rem; font-weight: 700; color: #313a46; }
+    .perf-tip { font-size: 0.75rem; color: #6c757d; line-height: 1.4; }
+    .perf-input-row { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.25rem; }
+    .perf-input-row input[type="number"] {
+        width: 90px;
+        padding: 0.4rem 0.6rem;
+        border: 1px solid #ced4da;
+        border-radius: 6px;
+        font-size: 1rem;
+        font-weight: 600;
+        color: #313a46;
+        text-align: right;
+    }
+    .perf-unit { font-size: 0.8rem; color: #6c757d; }
 </style>

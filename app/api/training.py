@@ -52,8 +52,10 @@ def get_job(job_id: str, request: Request):
         "model_name": job.model_name,
         "status": job.status,
         "progress": job.progress,
+        "logs": job.logs,
         "created_at": job.created_at,
         "completed_at": job.completed_at,
+        "error": job.error,
     }
 
 

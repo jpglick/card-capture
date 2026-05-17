@@ -47,6 +47,30 @@ quantity — avoid near-duplicate frames from the same moment in a video.
 | Card completely obscured by hand | Medium | Looks like fist / closed hand |
 | Transition blur frames | Low | Hand moving fast between cards |
 
+### Labeling rule: background / stand cards
+
+**Decision: label by the featured card, not by any card in frame.**
+
+> "Present" = a card is prominently in frame — close, centered, or actively being handled.
+> "Absent" = no featured card, even if a background card (e.g. on a stand behind the
+> action) is visible.
+
+**Rationale:** The sampler's job is to gate expensive YOLO detection, not to detect
+whether any card exists anywhere in the room.  Frames where a background-stand card is
+the only visible card are not useful for YOLO — the featured card isn't there.
+
+| Scenario | Label | Why |
+|---|---|---|
+| Card held toward camera | **present** | Featured card is the subject |
+| Card on stand, nothing else | **absent** | No subject card; sampler should skip |
+| Card being held, stand card also visible | **present** | Featured card is there |
+| Stand card only (featured card picked up / not shown) | **absent** | Featured card gone |
+| Transition — card leaving frame | **absent** | YOLO won't find a clean detection |
+
+**Consistency matters most.** Applying this rule ~95 % of the time is enough; a few
+mislabelled frames won't hurt. What does hurt is mixing rules across different videos
+(e.g. treating stand-card-visible as "present" in one session and "absent" in another).
+
 ### What to avoid
 - Frames where it is genuinely ambiguous whether a card is present
 - Near-duplicates from the same still hold (sample ≤ 1 frame per 0.5 s of stable hold)

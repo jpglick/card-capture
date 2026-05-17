@@ -72,17 +72,28 @@ def train_presence(
     val_loader = DataLoader(val_ds, batch_size=batch_size)
 
     device = _get_device()
-    model = mobilenet_v3_small(weights=None)
+    from torchvision.models import MobileNet_V3_Small_Weights
+    model = mobilenet_v3_small(weights=MobileNet_V3_Small_Weights.IMAGENET1K_V1)
     model.classifier[3] = nn.Linear(model.classifier[3].in_features, 2)
     model = model.to(device)
 
-    opt = torch.optim.Adam(model.parameters(), lr=lr)
+    # Freeze backbone, only train classifier head for first half of epochs
+    for p in model.features.parameters():
+        p.requires_grad = False
+    head_params = list(model.classifier.parameters())
+    opt = torch.optim.Adam(head_params, lr=lr)
     criterion = nn.CrossEntropyLoss()
 
     best_acc = 0.0
     best_state = None
 
     for epoch in range(1, epochs + 1):
+        # Unfreeze backbone halfway through for full fine-tuning
+        if epoch == epochs // 2 + 1:
+            for p in model.features.parameters():
+                p.requires_grad = True
+            opt = torch.optim.Adam(model.parameters(), lr=lr * 0.1)
+
         model.train()
         for x, y in train_loader:
             x, y = x.to(device), y.to(device)

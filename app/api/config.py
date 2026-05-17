@@ -8,8 +8,20 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
+
+_CONFIG_PATH = Path(__file__).parent.parent.parent / "card_capture_config.json"
+
+# Fields exposed via /config/pipeline — performance knobs only
+_PIPELINE_FIELDS = {
+    "inference_batch_size": int,
+    "triage_keep_percentile": float,
+    "queue_size": int,
+    "corner_confidence": float,
+    "presence_threshold": float,
+}
 
 from app.schemas.v1 import ConfigPlayground, ConfigPreset
 
@@ -106,6 +118,33 @@ def create_preset(payload: ConfigPreset, request: Request):
     except sqlite3.OperationalError as exc:
         raise HTTPException(status_code=500, detail=f"Database error: {exc}")
     return payload
+
+
+@router.get("/pipeline")
+def get_pipeline_config(_request: Request):
+    """Return the current pipeline performance config."""
+    try:
+        data = json.loads(_CONFIG_PATH.read_text()) if _CONFIG_PATH.exists() else {}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return {k: data.get(k) for k in _PIPELINE_FIELDS if k in data}
+
+
+@router.patch("/pipeline")
+def patch_pipeline_config(body: dict, _request: Request):
+    """Update one or more pipeline performance fields in card_capture_config.json."""
+    unknown = set(body) - set(_PIPELINE_FIELDS)
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"Unknown fields: {sorted(unknown)}")
+    try:
+        data = json.loads(_CONFIG_PATH.read_text()) if _CONFIG_PATH.exists() else {}
+        for key, cast in _PIPELINE_FIELDS.items():
+            if key in body:
+                data[key] = cast(body[key])
+        _CONFIG_PATH.write_text(json.dumps(data, indent=4))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return {k: data.get(k) for k in _PIPELINE_FIELDS if k in data}
 
 
 @router.get("/playground/{run_id}", response_model=ConfigPlayground)

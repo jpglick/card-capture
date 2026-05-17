@@ -3,7 +3,7 @@
     "presence_threshold": 0.0,
     "reader_backend": "auto",
     "queue_size": 256,
-    "inference_batch_size": 16,
+    "inference_batch_size": 8,
     "corner_confidence": 0.5,
     "blur_threshold": 30.0,
     "variance_threshold": 20.0,

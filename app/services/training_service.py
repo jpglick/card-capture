@@ -23,6 +23,7 @@ class TrainingJob:
     epochs: int = 30
     completed_at: Optional[str] = None
     progress: dict[str, Any] = field(default_factory=dict)
+    logs: list[str] = field(default_factory=list)
     error: Optional[str] = None
 
 
@@ -365,10 +366,16 @@ class TrainingService:
         try:
             with self._lock:
                 job.status = "running"
+                job.logs = [f"Starting {job.model_name} training ({job.epochs} epochs)…"]
 
             def _progress(p: dict):
+                epoch = p.get("epoch", "?")
+                total = p.get("total_epochs", "?")
+                acc = p.get("val_accuracy", 0)
+                line = f"Epoch {epoch}/{total}  val_acc={acc:.3f}"
                 with self._lock:
                     job.progress = p
+                    job.logs.append(line)
 
             if job.model_name == "presence":
                 from card_capture.training.presence_trainer import train_presence
@@ -395,6 +402,7 @@ class TrainingService:
                 job.status = "completed"
                 job.completed_at = datetime.now().isoformat()
                 job.progress = metrics
+                job.logs.append(f"Done — accuracy={metrics.get('accuracy', '?')}, val_samples={metrics.get('val_samples', '?')}")
 
         except Exception as exc:
             logger.exception("Training job %s failed", job.job_id)
@@ -402,16 +410,18 @@ class TrainingService:
                 job.status = "failed"
                 job.error = str(exc)
                 job.completed_at = datetime.now().isoformat()
+                job.logs.append(f"FAILED: {exc}")
 
     def _record_model_version(self, model_name: str, metrics: dict) -> None:
-        import sqlite3, json
+        import sqlite3, json, time
+        training_set_hash = str(int(time.time()))
         with sqlite3.connect(str(self.db_path)) as conn:
             conn.execute(
                 "INSERT INTO model_versions (model_name, training_set_hash, eval_metrics_json, checkpoint_path) "
                 "VALUES (?, ?, ?, ?)",
                 (
                     model_name,
-                    "",
+                    training_set_hash,
                     json.dumps(metrics),
                     f"models/{model_name}.pt",
                 ),

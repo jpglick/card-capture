@@ -13,8 +13,7 @@ export function createTrainingStore() {
   async function refresh() {
     loading = true;
     try {
-      const r = await api.get('/training/stats');
-      stats = await r.json();
+      stats = await api.training.getStats();
     } finally {
       loading = false;
     }

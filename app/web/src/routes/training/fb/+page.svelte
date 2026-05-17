@@ -9,14 +9,14 @@
   let labeled = $state(0);
 
   async function fetchNext() {
-    const r = await api.get('/label/fb/next');
-    if (r.status === 204) { done = true; return; }
-    sample = await r.json();
+    const result = await api.label.nextFB();
+    if (!result || !('instance_id' in result)) { done = true; return; }
+    sample = result;
   }
 
   async function submit(side: string) {
     if (!sample) return;
-    await api.post('/label/fb', { instance_id: sample.instance_id, frame_index: sample.frame_index, side });
+    await api.label.postFB({ instance_id: sample.instance_id, frame_index: sample.frame_index, side });
     labeled++;
     await fetchNext();
   }
@@ -38,7 +38,13 @@
   <div class="container">
     <header>
       <button onclick={() => goto('/training')} class="back">← Training</button>
-      <span class="counter">{labeled} labeled this session</span>
+      <span class="counter">
+        {#if sample?.pending_count != null}
+          {sample.pending_count} remaining · {labeled} labeled this session
+        {:else}
+          {labeled} labeled this session
+        {/if}
+      </span>
     </header>
 
     {#if done}
@@ -49,7 +55,9 @@
     {:else if sample}
       <div class="label-area">
         <div class="card-box">
-          <img src={sample.canonical_url} alt="card" class="card-img" />
+          <img src={sample.canonical_url} alt="card" class="card-img"
+            onerror={(e) => { (e.target as HTMLImageElement).style.outline = '2px solid red'; }} />
+          <div class="img-meta">{sample.instance_id?.slice(0, 8)} · frame {sample.frame_index}</div>
         </div>
 
         <div class="question">Which side is this?</div>
@@ -86,6 +94,7 @@
   .label-area { display: flex; flex-direction: column; gap: 1.5rem; align-items: center; }
   .card-box { background: #111; border-radius: 8px; padding: 0.75rem; }
   .card-img { width: 280px; height: auto; display: block; border-radius: 4px; }
+  .img-meta { font-size: 0.7rem; color: #555; margin-top: 0.4rem; font-family: monospace; }
   .question { font-size: 1.1rem; font-weight: 600; }
   .actions { display: flex; gap: 0.75rem; flex-wrap: wrap; justify-content: center; }
   button { display: flex; flex-direction: column; align-items: center; padding: 0.65rem 1.2rem;

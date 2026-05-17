@@ -10,25 +10,28 @@ from typing import Any, List, Optional
 def _to_file_url(path: Optional[str]) -> Optional[str]:
     """Convert an absolute or relative filesystem path to a /files/ URL.
 
-    The FastAPI app mounts card_capture_output/ at /files/. Paths that are
-    already relative to that directory are served directly; absolute paths
-    outside it fall back to None so broken images don't show.
+    The FastAPI app mounts card_capture_output/ at /files/. Works for both
+    relative paths (card_capture_output/...) and absolute paths that contain
+    card_capture_output somewhere in the path.
     """
     if not path:
         return None
     p = Path(path)
-    # Try to make path relative to card_capture_output/
+    # Relative path already rooted at card_capture_output
     try:
         rel = p.relative_to("card_capture_output")
         return f"/files/{rel}"
     except ValueError:
         pass
-    # Already a relative path starting with card_capture_output
+    # Absolute path: find card_capture_output in parts and take the tail
     parts = p.parts
-    if parts and parts[0] == "card_capture_output":
-        return "/files/" + "/".join(parts[1:])
-    # Absolute path not under output dir — return filename only as best-effort
-    return f"/files/crops/{p.name}" if p.suffix else None
+    try:
+        idx = parts.index("card_capture_output")
+        rel = "/".join(parts[idx + 1:])
+        return f"/files/{rel}" if rel else None
+    except ValueError:
+        pass
+    return None
 
 
 class CardService:
@@ -46,15 +49,15 @@ class CardService:
         query = "SELECT * FROM card_instances"
         count_query = "SELECT COUNT(*) FROM card_instances"
         params = []
-        where_clauses = []
-        
+        where_clauses = ["hidden = 0"]
+
         if run_id:
             where_clauses.append("(run_id = ? OR (run_id IS NULL AND 'legacy-' || video_id = ?))")
             params.extend([run_id, run_id])
         if video_id:
             where_clauses.append("video_id = ?")
             params.append(video_id)
-            
+
         if where_clauses:
             clause = " WHERE " + " AND ".join(where_clauses)
             query += clause
@@ -109,7 +112,7 @@ class CardService:
         with sqlite3.connect(str(self.db_path)) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
-                "SELECT * FROM card_instances WHERE id = ?",
+                "SELECT * FROM card_instances WHERE id = ? AND hidden = 0",
                 (card_instance_id,),
             ).fetchone()
             if not row:

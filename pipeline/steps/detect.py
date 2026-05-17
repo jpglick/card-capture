@@ -28,6 +28,8 @@ class DetectOutput:
     # Sampler telemetry dict (all values must be JSON-serialisable)
     sampler_telemetry: Dict[str, Any]
     video_id: int
+    # Diagnostic snapshot for the detect stage (frames, YOLO device/timing, triage rate)
+    detect_telemetry: Dict[str, Any] = field(default_factory=dict)
 
 
 def run(ctx: RunContext) -> DetectOutput:
@@ -43,7 +45,7 @@ def run(ctx: RunContext) -> DetectOutput:
         A fully-populated ``DetectOutput``.
     """
     from pathlib import Path as _Path
-    from card_capture.pipeline import (
+    from card_capture.workers import (
         ProcessingOptions,
         _run_pipeline_workers,
     )
@@ -56,7 +58,7 @@ def run(ctx: RunContext) -> DetectOutput:
 
     options = _ctx_to_options(ctx, output_dir)
 
-    stats, raw_rows = _run_pipeline_workers(
+    stats, consumer_stats, raw_rows = _run_pipeline_workers(
         video_path=video_path,
         video_id=ctx.video_id,
         frame_dir=frame_dir,
@@ -90,6 +92,22 @@ def run(ctx: RunContext) -> DetectOutput:
 
     _save_corner_samples(ctx, detection_rows, output_dir)
 
+    triage_pass_rate = (
+        stats.accepted_frame_count / stats.frame_count
+        if stats.frame_count > 0 else 0.0
+    )
+    detect_telemetry: Dict[str, Any] = {
+        "frame_count": stats.frame_count,
+        "accepted_frame_count": stats.accepted_frame_count,
+        "triage_pass_rate": round(triage_pass_rate, 4),
+        "yolo_frames": consumer_stats.yolo_frames,
+        "yolo_batches": consumer_stats.yolo_batches,
+        "yolo_elapsed_s": round(consumer_stats.yolo_elapsed_s, 2),
+        "yolo_device": consumer_stats.device_resolved,
+        "presence_windows": stats.sampler_telemetry.get("last_presence_window_count"),
+        "sampler_type": stats.sampler_telemetry.get("sampler_type"),
+    }
+
     return DetectOutput(
         frame_count=stats.frame_count,
         accepted_frame_count=stats.accepted_frame_count,
@@ -97,6 +115,7 @@ def run(ctx: RunContext) -> DetectOutput:
         detection_rows=detection_rows,
         sampler_telemetry=sampler_telemetry,
         video_id=ctx.video_id,
+        detect_telemetry=detect_telemetry,
     )
 
 
@@ -120,7 +139,7 @@ def _save_corner_samples(ctx: RunContext, detection_rows: list, output_dir: Path
                         predicted_corners, confidence)
                        VALUES (?, ?, ?, ?, ?, ?)""",
                     (
-                        ctx.ui_run_id or "",
+                        getattr(ctx, 'ui_run_id', None) or "",
                         ctx.video_id or 0,
                         d["frame_index"],
                         d.get("source_frame_path", ""),
@@ -162,7 +181,7 @@ def _build_sampler_detector(ctx: RunContext):
 
 def _ctx_to_options(ctx: RunContext, output_dir: Path):
     """Build a ``ProcessingOptions`` from a ``RunContext``."""
-    from card_capture.pipeline import ProcessingOptions
+    from card_capture.workers import ProcessingOptions
     return ProcessingOptions(
         output_dir=output_dir,
         queue_size=ctx.queue_size,

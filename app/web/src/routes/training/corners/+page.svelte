@@ -18,7 +18,7 @@
 
   async function fetchNext() {
     adjusting = false;
-    const r = await api.get('/training/corners/next');
+    const r = await api.training.nextCorner();
     if (r.status === 204) { done = true; return; }
     sample = await r.json();
     corners = JSON.parse(sample.predicted_corners);
@@ -28,7 +28,7 @@
     if (!sample) return;
     const body: any = { sample_id: sample.sample_id, label };
     if (corrected) body.corrected_corners = JSON.stringify(corrected);
-    await api.post('/training/corners/label', body);
+    await api.training.labelCorner(body);
     labeled++;
     await fetchNext();
   }

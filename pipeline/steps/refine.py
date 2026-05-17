@@ -56,7 +56,7 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
     from card_capture.fuser import find_glare_centroid
     from card_capture.scoring import QualityScorer
     from card_capture.presence.background_novelty import quad_novelty
-    from card_capture.pipeline import _select_canonical_entries, _glare_mask, _laplacian_heatmap, _compress_array
+    from card_capture.pipeline_utils import _select_canonical_entries, _glare_mask, _laplacian_heatmap, _compress_array
     from card_capture.ingestion import _open_capture
     from card_capture.selector import ScoredCandidate
     from card_capture.models import QualityScore

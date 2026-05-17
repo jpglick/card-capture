@@ -1,4 +1,8 @@
-"""Train the Front/Back classifier (MobileNetV3-Small) from fb_labels."""
+"""Train the Front/Back classifier (FBClassifier / ResNet-18) from fb_labels.
+
+Uses the same FBClassifier architecture that FBPredictor loads at inference time,
+so training and production inference are guaranteed to be compatible.
+"""
 from __future__ import annotations
 
 import sqlite3
@@ -11,7 +15,6 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
-from torchvision.models import mobilenet_v3_small
 
 # 'uncertain' and 'no_card' are excluded — not useful for the FB task
 _LABEL_MAP = {"front": 0, "back": 1}
@@ -74,15 +77,25 @@ def train_fb(
     val_loader = DataLoader(val_ds, batch_size=batch_size)
 
     device = _get_device()
-    model = mobilenet_v3_small(weights=None)
-    model.classifier[3] = nn.Linear(model.classifier[3].in_features, 2)
+    from card_capture.ml.fb_classifier import FBClassifier
+    model = FBClassifier(pretrained=True)
     model = model.to(device)
 
-    opt = torch.optim.Adam(model.parameters(), lr=lr)
+    # Freeze backbone, only train the final fc layer first
+    for p in model.backbone.parameters():
+        p.requires_grad = False
+    for p in model.backbone.fc.parameters():
+        p.requires_grad = True
+    opt = torch.optim.Adam(model.backbone.fc.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss()
     best_acc, best_state = 0.0, None
 
     for epoch in range(1, epochs + 1):
+        if epoch == epochs // 2 + 1:
+            for p in model.backbone.parameters():
+                p.requires_grad = True
+            opt = torch.optim.Adam(model.parameters(), lr=lr * 0.1)
+
         model.train()
         for x, y in train_loader:
             x, y = x.to(device), y.to(device)
@@ -115,13 +128,13 @@ def _load_labeled_rows(db_path: Path) -> list[dict]:
     with sqlite3.connect(str(db_path)) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            """SELECT fl.id, cv.rectified_path AS image_path, fl.side AS label
+            """SELECT fl.label_id AS id, cv.rectified_path AS image_path, fl.side AS label
                FROM fb_labels fl
                JOIN card_instances ci ON ci.track_id = fl.instance_id
-               JOIN card_views cv ON cv.instance_id = ci.id
+               JOIN card_views cv ON cv.card_instance_id = ci.id
                    AND cv.frame_index = fl.frame_index
                WHERE fl.side IN ('front', 'back')
-               ORDER BY fl.id"""
+               ORDER BY fl.label_id"""
         ).fetchall()
     return [dict(r) for r in rows]
 

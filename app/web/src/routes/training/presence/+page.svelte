@@ -9,14 +9,14 @@
   let labeled = $state(0);
 
   async function fetchNext() {
-    const r = await api.get('/training/presence/next');
+    const r = await api.training.nextPresence();
     if (r.status === 204) { done = true; return; }
     sample = await r.json();
   }
 
   async function submit(label: 'present' | 'absent') {
     if (!sample) return;
-    await api.post('/training/presence/label', { sample_id: sample.sample_id, label });
+    await api.training.labelPresence({ sample_id: sample.sample_id, label });
     labeled++;
     await fetchNext();
   }

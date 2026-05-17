@@ -15,10 +15,14 @@ def _to_file_url(path: "Optional[str]") -> "Optional[str]":
     try:
         return "/files/" + str(p.relative_to("card_capture_output"))
     except ValueError:
-        parts = p.parts
-        if parts and parts[0] == "card_capture_output":
-            return "/files/" + "/".join(parts[1:])
-        return f"/files/crops/{p.name}" if p.suffix else None
+        pass
+    parts = p.parts
+    try:
+        idx = parts.index("card_capture_output")
+        rel = "/".join(parts[idx + 1:])
+        return f"/files/{rel}" if rel else None
+    except ValueError:
+        return None
 from typing import Optional, Any
 
 from harness.schema import TruthFile
@@ -66,7 +70,7 @@ class LabelingService:
         source_run_id: Optional[int] = None,
     ) -> int:
         """Record a human (or model) front/back label."""
-        if side not in ("front", "back", "uncertain"):
+        if side not in ("front", "back", "uncertain", "no_card"):
             raise ValueError(f"Invalid side: {side}")
             
         with sqlite3.connect(str(self.db_path)) as conn:
@@ -77,6 +81,11 @@ class LabelingService:
                 """,
                 (source_run_id, instance_id, frame_index, side, labeler),
             )
+            if side == "no_card":
+                conn.execute(
+                    "UPDATE card_instances SET hidden=1 WHERE track_id=?",
+                    (instance_id,),
+                )
             conn.commit()
             return cur.lastrowid
 
@@ -111,15 +120,23 @@ class LabelingService:
         
         if not row:
             return None
-            
-        # Get progress stats
+
         with sqlite3.connect(str(self.db_path)) as conn:
             labels_collected = conn.execute("SELECT COUNT(*) FROM fb_labels").fetchone()[0]
+            # Count distinct unlabeled instances that have a canonical view
+            pending_count = conn.execute("""
+                SELECT COUNT(DISTINCT ci.track_id)
+                FROM card_views cv
+                JOIN card_instances ci ON ci.id = cv.card_instance_id
+                LEFT JOIN fb_labels fl ON fl.instance_id = ci.track_id
+                WHERE cv.is_canonical = 1 AND fl.label_id IS NULL
+            """).fetchone()[0]
 
         res = dict(row)
         res["canonical_url"] = _to_file_url(res.get("canonical_url"))
         res["labels_collected"] = labels_collected
         res["labels_target"] = 500
+        res["pending_count"] = pending_count
         return res
 
     def list_clusters(self, status: Optional[str] = None) -> list[dict[str, Any]]:

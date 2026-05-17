@@ -46,11 +46,8 @@ def run(ctx: RunContext, novelty_out: NoveltyOutput) -> TrackOutput:
         ``TrackOutput`` with finalised tracks and session metadata.
     """
     import numpy as np
-    from card_capture.pipeline import (
-        ProcessingOptions,
-        _build_candidates,
-        adaptive_min_track_length,
-    )
+    from card_capture.workers import ProcessingOptions, _DetectionEnvelope
+    from card_capture.pipeline_utils import _build_candidates, adaptive_min_track_length
     from card_capture.adaptive_gap import compute_session_gap_frames
     from card_capture.storage import Storage
 
@@ -61,7 +58,6 @@ def run(ctx: RunContext, novelty_out: NoveltyOutput) -> TrackOutput:
 
     # Reconstruct _DetectionEnvelope-compatible objects from the serialised dicts
     from card_capture.models import CornerDetection as ModelCornerDetection, DetectionPacket, PerformanceTelemetry
-    from card_capture.pipeline import _DetectionEnvelope
 
     raw_rows = []
     for row in detection_rows:

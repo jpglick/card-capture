@@ -108,12 +108,26 @@ class RunDetail(RunSummary):
                     {"stage_id": "detect", "elapsed_ms": 12000},
                     {"stage_id": "novelty", "elapsed_ms": 300},
                 ],
+                "detect_telemetry": {
+                    "frame_count": 15000,
+                    "accepted_frame_count": 847,
+                    "triage_pass_rate": 0.056,
+                    "yolo_frames": 847,
+                    "yolo_batches": 53,
+                    "yolo_elapsed_s": 347.2,
+                    "yolo_device": "mps",
+                    "presence_windows": 12,
+                    "sampler_type": "AdaptivePresenceSampler",
+                },
             }
         }
     )
 
     config_json: Optional[dict[str, Any]] = None
     stage_timings: list[dict[str, Any]] = []
+    detect_telemetry: Optional[dict[str, Any]] = None
+    logs: list[str] = []
+    events: list[dict[str, Any]] = []
 
 
 class RunCreateRequest(BaseModel):

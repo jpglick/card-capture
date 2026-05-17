@@ -25,6 +25,7 @@ pipeline_v21 = [
 model = [
   "huggingface-hub",
   "ultralytics",
+  "coremltools",
 ]
 review = [
   "fastapi",

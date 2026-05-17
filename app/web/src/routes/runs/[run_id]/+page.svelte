@@ -2,14 +2,33 @@
     import { onMount, onDestroy } from 'svelte';
     import { page } from '$app/state';
     import { api } from '$lib/api/client';
-    import type { RunDetail } from '$lib/api/types';
+    import type { RunDetail, RunResources, ResourceSample, StageMarker } from '$lib/api/types';
+    import ResourceChart from '$lib/components/ResourceChart.svelte';
 
-    const runId = page.params.run_id;
-    let run: RunDetail | null = $state(null);
+    const runId = page.params.run_id!;
+    let run = $state<RunDetail | null>(null);
+    let resources = $state<RunResources | null>(null);
     let loading = $state(true);
     let error = $state<string | null>(null);
     let liveLines = $state<string[]>([]);
     let evtSource: EventSource | null = null;
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+    // Stage colors — shared between the legend and chart markers
+    const STAGE_COLORS: Record<string, string> = {
+        detect:  '#6366f1',
+        novelty: '#10b981',
+        track:   '#f59e0b',
+        refine:  '#ef4444',
+        score:   '#3b82f6',
+        resolve: '#8b5cf6',
+        dedup:   '#f97316',
+        store:   '#06b6d4',
+    };
+
+    function stageColor(name: string): string {
+        return STAGE_COLORS[name] ?? '#6c757d';
+    }
 
     async function loadRun() {
         try {
@@ -22,6 +41,12 @@
         }
     }
 
+    async function loadResources() {
+        try {
+            resources = await api.runs.resources(runId);
+        } catch { /* no-op — endpoint may not have data yet */ }
+    }
+
     function connectSSE() {
         evtSource = new EventSource(`/events/${runId}`);
         evtSource.addEventListener('log', (e: any) => {
@@ -32,7 +57,9 @@
         });
         evtSource.addEventListener('run_completed', () => {
             evtSource?.close();
-            loadRun(); // refresh summary stats
+            if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+            loadRun();
+            loadResources();
         });
         evtSource.addEventListener('run_failed', (e: any) => {
             try {
@@ -40,24 +67,66 @@
                 if (d.payload?.error) liveLines = [...liveLines, `ERROR: ${d.payload.error}`];
             } catch {}
             evtSource?.close();
+            if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
             loadRun();
+            loadResources();
         });
         evtSource.onerror = () => evtSource?.close();
     }
 
     onMount(() => {
         loadRun().then(() => {
-            if (run?.status === 'running') connectSSE();
+            loadResources();
+            if (run?.status === 'running') {
+                connectSSE();
+                pollTimer = setInterval(loadResources, 3000);
+            }
         });
     });
 
-    onDestroy(() => evtSource?.close());
+    onDestroy(() => {
+        evtSource?.close();
+        if (pollTimer) clearInterval(pollTimer);
+    });
 
     function fmt(ms: number) {
         if (ms < 1000) return `${ms}ms`;
         if (ms < 60000) return `${(ms/1000).toFixed(1)}s`;
         return `${Math.floor(ms/60000)}m ${Math.floor((ms%60000)/1000)}s`;
     }
+
+    // Derived chart data from resources
+    const stagesWithColor = $derived.by(() => {
+        const markers: StageMarker[] = resources?.stage_markers ?? [];
+        return markers.map(m => ({ ...m, color: stageColor(m.name) }));
+    });
+
+    const cpuSamples = $derived.by(() => {
+        const s: ResourceSample[] = resources?.samples ?? [];
+        return s.map(r => ({ elapsed_s: r.elapsed_s, value: r.cpu_pct }));
+    });
+    const memSamples = $derived.by(() => {
+        const s: ResourceSample[] = resources?.samples ?? [];
+        return s.map(r => ({ elapsed_s: r.elapsed_s, value: r.mem_pct }));
+    });
+    const gpuSamples = $derived.by(() => {
+        const s: ResourceSample[] = resources?.samples ?? [];
+        return s.map(r => ({ elapsed_s: r.elapsed_s, value: r.gpu_pct }));
+    });
+    const vramSamples = $derived.by(() => {
+        const hi = resources?.host_info;
+        const totalMb = hi?.vram_total_gb ? hi.vram_total_gb * 1000 : null;
+        const s: ResourceSample[] = resources?.samples ?? [];
+        return s.map(r => ({
+            elapsed_s: r.elapsed_s,
+            value: r.vram_used_mb != null && totalMb ? (r.vram_used_mb / totalMb) * 100 : null,
+        }));
+    });
+
+    const hasGpu = $derived.by(() => (resources?.samples ?? []).some((s: ResourceSample) => s.gpu_pct != null));
+    const hasVram = $derived.by(() => (resources?.samples ?? []).some((s: ResourceSample) => s.vram_used_mb != null));
+    const isUnified = $derived(resources?.host_info?.vram_is_unified ?? false);
+    const knownStageNames = $derived([...new Set(stagesWithColor.map(s => s.name))]);
 </script>
 
 <div class="page-header">
@@ -99,12 +168,158 @@
         <a href="/cards?run_id={runId}" class="view-cards-btn">View {run.cards_extracted} cards →</a>
     {/if}
 
+    {#if (run.stage_timings?.length ?? 0) > 0}
+        <h2>Stage timings</h2>
+        <table class="timings-table">
+            <thead>
+                <tr><th>Stage</th><th>Elapsed</th></tr>
+            </thead>
+            <tbody>
+                {#each run.stage_timings as t}
+                    <tr>
+                        <td class="stage-name">{t.stage}</td>
+                        <td class="stage-time">{fmt(t.elapsed_ms)}</td>
+                    </tr>
+                {/each}
+            </tbody>
+        </table>
+    {/if}
+
+    {#if run.detect_telemetry}
+        {@const dt = run.detect_telemetry}
+        <h2>Detect diagnostics</h2>
+        <div class="diag-grid">
+            <div class="diag-section">
+                <div class="diag-title">Frame pipeline</div>
+                <div class="diag-row">
+                    <span class="diag-label">Sampled frames</span>
+                    <span class="diag-value">{dt.frame_count?.toLocaleString() ?? '—'}</span>
+                </div>
+                <div class="diag-row">
+                    <span class="diag-label">Passed triage → YOLO</span>
+                    <span class="diag-value">
+                        {dt.accepted_frame_count?.toLocaleString() ?? '—'}
+                        {#if dt.triage_pass_rate != null}
+                            <span class="diag-pct {dt.triage_pass_rate < 0.02 ? 'pct-warn' : ''}">
+                                ({(dt.triage_pass_rate * 100).toFixed(1)}%)
+                            </span>
+                        {/if}
+                    </span>
+                </div>
+                <div class="diag-row">
+                    <span class="diag-label">Presence windows</span>
+                    <span class="diag-value">{dt.presence_windows ?? '—'}</span>
+                </div>
+                <div class="diag-row">
+                    <span class="diag-label">Sampler</span>
+                    <span class="diag-value small">{dt.sampler_type ?? '—'}</span>
+                </div>
+            </div>
+
+            <div class="diag-section">
+                <div class="diag-title">YOLO inference</div>
+                <div class="diag-row">
+                    <span class="diag-label">Device</span>
+                    <span class="diag-value device-badge device-{dt.yolo_device ?? 'unknown'}">
+                        {dt.yolo_device ?? '—'}
+                    </span>
+                </div>
+                <div class="diag-row">
+                    <span class="diag-label">Frames processed</span>
+                    <span class="diag-value">{dt.yolo_frames?.toLocaleString() ?? '—'}</span>
+                </div>
+                <div class="diag-row">
+                    <span class="diag-label">Batches (×{dt.yolo_frames && dt.yolo_batches ? Math.round(dt.yolo_frames / dt.yolo_batches) : '?'} frames)</span>
+                    <span class="diag-value">{dt.yolo_batches ?? '—'}</span>
+                </div>
+                <div class="diag-row">
+                    <span class="diag-label">Total YOLO time</span>
+                    <span class="diag-value">{dt.yolo_elapsed_s != null ? fmt(dt.yolo_elapsed_s * 1000) : '—'}</span>
+                </div>
+                {#if dt.yolo_elapsed_s && dt.yolo_frames}
+                    <div class="diag-row">
+                        <span class="diag-label">ms / frame</span>
+                        <span class="diag-value">{((dt.yolo_elapsed_s * 1000) / dt.yolo_frames).toFixed(1)} ms</span>
+                    </div>
+                {/if}
+            </div>
+        </div>
+    {/if}
+
+    {#if resources?.host_info || (resources?.samples?.length ?? 0) > 0}
+        <h2>Resource usage</h2>
+
+        {#if resources?.host_info}
+            {@const hi = resources.host_info}
+            <div class="host-bar">
+                {#if hi.hostname}<span class="host-chip"><span class="host-key">host</span>{hi.hostname}</span>{/if}
+                {#if hi.platform}<span class="host-chip"><span class="host-key">platform</span>{hi.platform}</span>{/if}
+                {#if hi.cpu_count_physical}<span class="host-chip"><span class="host-key">cpu</span>{hi.cpu_count_physical}c / {hi.cpu_count_logical}t</span>{/if}
+                {#if hi.mem_total_gb}<span class="host-chip"><span class="host-key">ram</span>{hi.mem_total_gb} GB{hi.vram_is_unified ? ' (unified)' : ''}</span>{/if}
+                {#if hi.gpu_name}<span class="host-chip"><span class="host-key">gpu</span>{hi.gpu_name}</span>{/if}
+                {#if hi.vram_total_gb && !hi.vram_is_unified}<span class="host-chip"><span class="host-key">vram</span>{hi.vram_total_gb} GB</span>{/if}
+            </div>
+        {/if}
+
+        {#if knownStageNames.length > 0}
+            <div class="stage-legend">
+                {#each knownStageNames as name}
+                    <span class="legend-item">
+                        <span class="legend-swatch" style="background:{stageColor(name)}"></span>
+                        {name}
+                    </span>
+                {/each}
+            </div>
+        {/if}
+
+        <div class="charts-grid">
+            <ResourceChart
+                samples={cpuSamples}
+                stages={stagesWithColor}
+                label="CPU %"
+                color="#727cf5"
+                noData={cpuSamples.length === 0}
+            />
+            <ResourceChart
+                samples={memSamples}
+                stages={stagesWithColor}
+                label="Memory %"
+                color="#0acf97"
+                noData={memSamples.length === 0}
+            />
+            {#if hasGpu}
+                <ResourceChart
+                    samples={gpuSamples}
+                    stages={stagesWithColor}
+                    label="GPU %"
+                    color="#fa5c7c"
+                    noData={gpuSamples.length === 0}
+                />
+            {/if}
+            {#if hasVram}
+                <ResourceChart
+                    samples={vramSamples}
+                    stages={stagesWithColor}
+                    label={isUnified ? 'VRAM % (unified)' : 'VRAM %'}
+                    color="#ffbc00"
+                    noData={vramSamples.length === 0}
+                />
+            {/if}
+        </div>
+    {/if}
+
     <h2>{run.status === 'running' ? 'Live log' : 'Run log'}</h2>
     <div class="log-box">
         {#if run.status === 'running' && liveLines.length === 0}
             <span class="muted">Waiting for pipeline output…</span>
-        {:else if run.status !== 'running' && liveLines.length === 0 && (!run.events || run.events.length === 0)}
+        {:else if run.status !== 'running' && liveLines.length === 0 && (!run.logs || run.logs.length === 0) && (!run.events || run.events.length === 0)}
             <span class="muted">No log lines recorded for this run.</span>
+        {/if}
+
+        {#if (run.logs?.length ?? 0) > 0 && liveLines.length === 0}
+            {#each run.logs as line}
+                <div class="log-line">{line}</div>
+            {/each}
         {/if}
 
         {#each liveLines as line}
@@ -194,4 +409,129 @@
 
     .muted { color: #6c757d; font-style: italic; }
     .error { color: #fa5c7c; }
+
+    .timings-table {
+        width: 100%;
+        max-width: 480px;
+        border-collapse: collapse;
+        margin-bottom: 1.5rem;
+        background: white;
+        border-radius: 8px;
+        overflow: hidden;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.07);
+        font-size: 0.9rem;
+    }
+    .timings-table th {
+        background: #f0f1f9;
+        color: #6c757d;
+        text-transform: uppercase;
+        font-size: 0.75rem;
+        letter-spacing: 0.05em;
+        padding: 0.5rem 1rem;
+        text-align: left;
+    }
+    .timings-table td { padding: 0.45rem 1rem; border-top: 1px solid #f0f1f9; }
+    .stage-name { font-weight: 600; color: #313a46; text-transform: capitalize; }
+    .stage-time { color: #727cf5; font-family: monospace; }
+
+    .diag-grid {
+        display: flex;
+        gap: 1rem;
+        flex-wrap: wrap;
+        margin-bottom: 1.5rem;
+    }
+    .diag-section {
+        background: white;
+        border-radius: 10px;
+        padding: 1rem 1.25rem;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.07);
+        min-width: 260px;
+        flex: 1;
+    }
+    .diag-title {
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.07em;
+        color: #6c757d;
+        font-weight: 700;
+        margin-bottom: 0.75rem;
+    }
+    .diag-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 1rem;
+        padding: 0.3rem 0;
+        border-bottom: 1px solid #f8f9fa;
+        font-size: 0.875rem;
+    }
+    .diag-row:last-child { border-bottom: none; }
+    .diag-label { color: #6c757d; }
+    .diag-value { font-weight: 600; color: #313a46; font-family: monospace; }
+    .diag-value.small { font-size: 0.78rem; font-family: sans-serif; font-weight: 500; }
+    .diag-pct { color: #6c757d; font-size: 0.8rem; font-weight: 400; margin-left: 0.3rem; }
+    .diag-pct.pct-warn { color: #fa5c7c; }
+
+    .device-badge { padding: 0.1rem 0.5rem; border-radius: 4px; font-size: 0.8rem; }
+    .device-mps   { background: #e8f5e9; color: #2e7d32; }
+    .device-cuda  { background: #e3f2fd; color: #1565c0; }
+    .device-cpu   { background: #fff3e0; color: #e65100; }
+    .device-unknown { background: #f5f5f5; color: #757575; }
+
+    /* Resource usage */
+    .host-bar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-bottom: 0.75rem;
+    }
+    .host-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        background: white;
+        border-radius: 6px;
+        padding: 0.25rem 0.6rem;
+        font-size: 0.82rem;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.07);
+        color: #313a46;
+        font-weight: 500;
+    }
+    .host-key {
+        font-size: 0.68rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: #6c757d;
+        font-weight: 700;
+    }
+
+    .stage-legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem 1rem;
+        margin-bottom: 0.75rem;
+    }
+    .legend-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        font-size: 0.8rem;
+        color: #495057;
+    }
+    .legend-swatch {
+        width: 10px;
+        height: 10px;
+        border-radius: 2px;
+        flex-shrink: 0;
+    }
+
+    .charts-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.75rem;
+        margin-bottom: 1.5rem;
+    }
+    @media (max-width: 700px) {
+        .charts-grid { grid-template-columns: 1fr; }
+    }
 </style>

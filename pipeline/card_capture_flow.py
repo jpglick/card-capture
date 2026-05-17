@@ -5,11 +5,46 @@ in the step modules; this file is the orchestration spine and stays small.
 """
 from __future__ import annotations
 
+import time as _time
+
 from metaflow import FlowSpec, Parameter, current, step
 
 from pipeline.steps import (
     detect, novelty, track, refine, score, resolve, fuse, dedup, store,
 )
+
+
+def _record_stage_timing(db: str, run_id: str, video_id: int, stage: str, elapsed_ms: int) -> None:
+    """Write a stage timing event to pipeline_events. Never raises."""
+    try:
+        import sqlite3
+        with sqlite3.connect(db) as conn:
+            conn.execute(
+                """
+                INSERT INTO pipeline_events
+                    (video_id, run_id, stage_id, frame_index, timestamp_ms, event_type, data_json)
+                VALUES (?, ?, ?, 0, 0, ?, ?)
+                """,
+                (video_id, run_id, stage, f"stage_{stage}",
+                 f'{{"elapsed_ms": {elapsed_ms}}}'),
+            )
+    except Exception:
+        pass
+
+
+def _record_detect_telemetry(db: str, run_id: str, telemetry: dict) -> None:
+    """Persist detect stage diagnostics to pipeline_runs.detect_telemetry_json. Never raises."""
+    if not db or not run_id:
+        return
+    try:
+        import sqlite3, json
+        with sqlite3.connect(db) as conn:
+            conn.execute(
+                "UPDATE pipeline_runs SET detect_telemetry_json = ? WHERE run_id = ?",
+                (json.dumps(telemetry), run_id),
+            )
+    except Exception:
+        pass
 
 
 class CardCaptureFlow(FlowSpec):
@@ -41,32 +76,58 @@ class CardCaptureFlow(FlowSpec):
 
     @step
     def detect(self):
+        _t0 = _time.time()
         self.detect_out = detect.run(self.run_context)
+        _elapsed_ms = int((_time.time() - _t0) * 1000)
+        ctx = self.run_context
+        _run_id = self.ui_run_id or current.run_id
+        _record_stage_timing(ctx.db_path, _run_id, ctx.video_id or 0, "detect", _elapsed_ms)
+        _record_detect_telemetry(ctx.db_path, _run_id, self.detect_out.detect_telemetry)
         self.next(self.novelty)
 
     @step
     def novelty(self):
+        _t0 = _time.time()
         self.novelty_out = novelty.run(self.run_context, self.detect_out)
+        _elapsed_ms = int((_time.time() - _t0) * 1000)
+        ctx = self.run_context
+        _record_stage_timing(ctx.db_path, self.ui_run_id or current.run_id, ctx.video_id or 0, "novelty", _elapsed_ms)
         self.next(self.track)
 
     @step
     def track(self):
+        _t0 = _time.time()
         self.track_out = track.run(self.run_context, self.novelty_out)
+        _elapsed_ms = int((_time.time() - _t0) * 1000)
+        ctx = self.run_context
+        _record_stage_timing(ctx.db_path, self.ui_run_id or current.run_id, ctx.video_id or 0, "track", _elapsed_ms)
         self.next(self.refine)
 
     @step
     def refine(self):
+        _t0 = _time.time()
         self.refine_out = refine.run(self.run_context, self.track_out)
+        _elapsed_ms = int((_time.time() - _t0) * 1000)
+        ctx = self.run_context
+        _record_stage_timing(ctx.db_path, self.ui_run_id or current.run_id, ctx.video_id or 0, "refine", _elapsed_ms)
         self.next(self.score)
 
     @step
     def score(self):
+        _t0 = _time.time()
         self.score_out = score.run(self.run_context, self.refine_out)
+        _elapsed_ms = int((_time.time() - _t0) * 1000)
+        ctx = self.run_context
+        _record_stage_timing(ctx.db_path, self.ui_run_id or current.run_id, ctx.video_id or 0, "score", _elapsed_ms)
         self.next(self.resolve)
 
     @step
     def resolve(self):
+        _t0 = _time.time()
         self.resolve_out = resolve.run(self.run_context, self.score_out)
+        _elapsed_ms = int((_time.time() - _t0) * 1000)
+        ctx = self.run_context
+        _record_stage_timing(ctx.db_path, self.ui_run_id or current.run_id, ctx.video_id or 0, "resolve", _elapsed_ms)
         self.next(self.fuse_fanout)
 
     @step
@@ -93,18 +154,26 @@ class CardCaptureFlow(FlowSpec):
 
     @step
     def dedup(self):
+        _t0 = _time.time()
         self.dedup_out = dedup.run(self.run_context, self.fused_canonicals)
+        _elapsed_ms = int((_time.time() - _t0) * 1000)
+        ctx = self.run_context
+        _record_stage_timing(ctx.db_path, self.ui_run_id or current.run_id, ctx.video_id or 0, "dedup", _elapsed_ms)
         self.next(self.store)
 
     @step
     def store(self):
+        _t0 = _time.time()
         self.store_out = store.run(
-            self.run_context, 
-            self.dedup_out.dedup_groups, 
+            self.run_context,
+            self.dedup_out.dedup_groups,
             self.fused_canonicals,
             prepared_tracks=self.resolve_out.prepared_tracks,
             run_id=self.ui_run_id or current.run_id
         )
+        _elapsed_ms = int((_time.time() - _t0) * 1000)
+        ctx = self.run_context
+        _record_stage_timing(ctx.db_path, self.ui_run_id or current.run_id, ctx.video_id or 0, "store", _elapsed_ms)
         self.next(self.end)
 
     @step

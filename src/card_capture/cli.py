@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from .detectors import CardcaptorUltralyticsDetector, FakeCardDetector, probe_torch_device_status
-from .pipeline import ProcessingOptions, VideoProcessor
 from .sampler import AdaptivePresenceSampler, SyntheticSampler
 from .storage import Storage
 from .config import load_config, save_config
@@ -189,49 +188,6 @@ def _run_process(args: argparse.Namespace) -> int:
             ]
         res = subprocess.run(cmd, env=env)
         return res.returncode
-    else:
-        import warnings
-        warnings.warn(
-            "The 'monolith' pipeline path is deprecated and will be removed "
-            "in Wave 5. Use --pipeline metaflow (the default).", 
-            DeprecationWarning
-        )
-
-        processor = VideoProcessor(storage=storage, sampler=sampler, detector=detector)
-        result = processor.process(
-            args.video_path,
-            config.to_options(args.output_dir),
-            debug_config=config.debug
-        )
-        print(
-            f"Processed video_id={result.video_id}: "
-            f"{result.frame_count} frames ({result.accepted_frame_count} accepted), "
-            f"{result.detection_count} detections, {result.saved_instance_count} saved"
-        )
-        if isinstance(result.telemetry, dict) and result.telemetry:
-            telemetry = result.telemetry
-            t_high = telemetry.get("tracker_t_high", 0.0)
-            try:
-                t_high_display = f"{float(t_high):.3f}"
-            except (TypeError, ValueError):
-                t_high_display = "n/a"
-            print(
-                "Telemetry: "
-                f"windows={telemetry.get('last_presence_window_count', 0)}, "
-                f"selected_frames={telemetry.get('last_selected_frame_count', 0)}, "
-                f"tracks={telemetry.get('tracks_finalized', 0)}, "
-                f"duplicates={telemetry.get('duplicate_tracks', 0)}, "
-                f"tracker_events={telemetry.get('tracker_event_count', 0)}, "
-                f"t_high={t_high_display}, "
-                f"status={telemetry.get('status', 'unknown')}"
-            )
-            telemetry_path = telemetry.get("telemetry_path")
-            if telemetry_path:
-                print(f"Telemetry written to {telemetry_path}")
-            tracker_events_path = telemetry.get("tracker_association_events_path")
-            if tracker_events_path:
-                print(f"Tracker events written to {tracker_events_path}")
-        return 0
 
 
 def _confirm_cpu_fallback(device_status) -> bool:

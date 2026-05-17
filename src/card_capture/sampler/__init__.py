@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import platform
 import time
 import heapq
 from dataclasses import dataclass, field
@@ -135,8 +136,51 @@ class VideoSampler:
     def _sample_with_decord(self, video_path: Path, sample_fps: float) -> Iterator[FrameSample]:
         yield from self._sample_with_cv2(video_path, sample_fps)
 
+    @staticmethod
+    def _open_pyav_container(video_path: Path):
+        """Open a PyAV container, preferring VideoToolbox hw-decode on macOS."""
+        import av
+        if platform.system() == "Darwin":
+            try:
+                container = av.open(str(video_path), options={"hwaccel": "videotoolbox"})
+                return container, True
+            except Exception:
+                pass
+        return av.open(str(video_path)), False
+
     def _sample_with_pyav(self, video_path: Path, sample_fps: float) -> Iterator[FrameSample]:
-        yield from self._sample_with_cv2(video_path, sample_fps)
+        import av
+        container, hw = self._open_pyav_container(video_path)
+        print(f"[sampler] pyav decoder={'videotoolbox' if hw else 'software'}", flush=True)
+        try:
+            video_stream = next(
+                (s for s in container.streams if s.type == "video"), None
+            )
+            if video_stream is None:
+                raise ValueError(f"No video stream found in: {video_path}")
+            source_fps = float(video_stream.average_rate or video_stream.guessed_rate or sample_fps)
+            frame_step = max(1, int(round(source_fps / sample_fps))) if sample_fps > 0 else 1
+            frame_index = 0
+            for packet in container.demux(video_stream):
+                for av_frame in packet.decode():
+                    if frame_index % frame_step == 0:
+                        frame_bgr = av_frame.to_ndarray(format="bgr24")
+                        height, width = frame_bgr.shape[:2]
+                        timestamp_ms = int(
+                            (av_frame.pts or 0)
+                            * video_stream.time_base
+                            * 1000
+                        )
+                        yield FrameSample(
+                            frame_index=frame_index,
+                            timestamp_ms=timestamp_ms,
+                            image=frame_bgr,
+                            width=width,
+                            height=height,
+                        )
+                    frame_index += 1
+        finally:
+            container.close()
 
 class StabilityBasedSampler:
     def __init__(self, scan_fps: float = 10.0, scan_width: int = 160, motion_threshold: float = 8.0, min_stable_frames: int = 5, candidates_per_window: int = 5):

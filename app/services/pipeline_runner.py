@@ -5,11 +5,25 @@ import logging
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Optional, Type
 
 _REPO_ROOT = str(Path(__file__).parent.parent.parent)
 logger = logging.getLogger(__name__)
+
+# macOS objc runtime prints duplicate-dylib warnings when cv2 and av both ship
+# libavdevice. They're harmless noise — filter before logging or persisting.
+_NOISE_SUBSTRINGS = (
+    "objc[",
+    "implemented in both",
+    "One of the duplicates must be removed",
+    "This may cause spurious casting failures",
+)
+
+
+def _is_noise(line: str) -> bool:
+    return any(s in line for s in _NOISE_SUBSTRINGS)
 
 from app.services.event_bus import Event, EventBus
 from app.services import _event_bus_registry
@@ -86,6 +100,7 @@ class PipelineRunner:
                 cmd = [
                     sys.executable, "-m", "pipeline.card_capture_flow",
                     "--no-pylint", "run",
+                    "--max-num-splits", "500",
                     "--video", abs_video,
                     "--output-dir", abs_output,
                     "--db", abs_db,
@@ -95,17 +110,28 @@ class PipelineRunner:
                 ]
                 print(f"[{run_id}] running: {' '.join(cmd)}", flush=True)
 
-                proc = subprocess.Popen(
-                    cmd, env=env, cwd=_REPO_ROOT,
-                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                    text=True, bufsize=1,
-                )
-                for line in proc.stdout:
-                    line = line.rstrip()
-                    if line:
-                        print(f"[{run_id}] {line}", flush=True)
-                        self.bus.emit(run_id, Event(name="log", payload={"line": line}))
-                proc.wait()
+                start_time = time.time()
+                sampler = None
+                if self.db_path:
+                    from app.services.resource_sampler import ResourceSampler
+                    sampler = ResourceSampler(run_id, self.db_path, time.monotonic())
+                    sampler.start()
+                try:
+                    proc = subprocess.Popen(
+                        cmd, env=env, cwd=_REPO_ROOT,
+                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                        text=True, bufsize=1,
+                    )
+                    for line in proc.stdout:
+                        line = line.rstrip()
+                        if line and not _is_noise(line):
+                            print(f"[{run_id}] {line}", flush=True)
+                            self.bus.emit(run_id, Event(name="log", payload={"line": line}))
+                            self._persist_log(run_id, line)
+                    proc.wait()
+                finally:
+                    if sampler is not None:
+                        sampler.stop()
 
                 if proc.returncode != 0:
                     raise RuntimeError(f"Pipeline exited with code {proc.returncode}")
@@ -139,6 +165,17 @@ class PipelineRunner:
                 )
         except Exception as exc:
             print(f"[{run_id}] could not record run start: {exc}", flush=True)
+        try:
+            import sqlite3, json as _json
+            from app.services.resource_sampler import get_host_info
+            host_info = get_host_info()
+            with sqlite3.connect(str(self.db_path)) as conn:
+                conn.execute(
+                    "UPDATE pipeline_runs SET host_info_json = ? WHERE run_id = ?",
+                    (_json.dumps(host_info), run_id),
+                )
+        except Exception as exc:
+            print(f"[{run_id}] could not record host info: {exc}", flush=True)
 
     def _record_run_finish(self, run_id: str, status: str) -> None:
         if not self.db_path:
@@ -173,6 +210,19 @@ class PipelineRunner:
             print(f"[{run_id}] queued {n} presence frames for labeling", flush=True)
         except Exception as exc:
             print(f"[{run_id}] presence sampling skipped: {exc}", flush=True)
+
+    def _persist_log(self, run_id: str, line: str) -> None:
+        if not self.db_path:
+            return
+        try:
+            import sqlite3
+            with sqlite3.connect(str(self.db_path)) as conn:
+                conn.execute(
+                    "INSERT INTO pipeline_run_logs (run_id, line) VALUES (?, ?)",
+                    (run_id, line),
+                )
+        except Exception:
+            pass  # never let a DB error kill the pipeline
 
     def _set_video_status(self, video_id: int, status: str) -> None:
         if not self.db_path:
