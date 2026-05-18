@@ -20,7 +20,8 @@ def test_search_offers_returns_sorted_list():
         {"id": 1, "dph_total": 0.8, "gpu_name": "RTX 4090"},
         {"id": 2, "dph_total": 0.4, "gpu_name": "RTX 4090"},
     ]
-    with patch("httpx.get", return_value=_mock_response({"offers": offers})):
+    # search_offers uses POST /bundles/ with a JSON body
+    with patch("httpx.post", return_value=_mock_response({"offers": offers})):
         result = client.search_offers("RTX 4090")
     assert result[0]["dph_total"] == 0.4
 

@@ -47,22 +47,26 @@ class VastAIClient:
         r.raise_for_status()
 
     def search_offers(self, gpu_type: str) -> list[dict]:
-        """Return available offers matching the GPU type, cheapest first."""
-        import json as _json
-        # vast.ai /bundles/ uses a JSON query object in the 'q' param
-        q: dict = {"rentable": {"eq": True}, "num_gpus": {"eq": 1}}
+        """Return available offers matching the GPU type, cheapest first.
+
+        Uses POST /bundles/ with a JSON body — the vast.ai API does not accept
+        GET with a query string for this endpoint.
+        """
+        q: dict = {
+            "verified": {"eq": True},
+            "external": {"eq": False},
+            "rentable": {"eq": True},
+            "rented": {"eq": False},
+            "num_gpus": {"eq": 1},
+            "order": [["dph_total", "asc"]],
+            "type": "on-demand",
+            "allocated_storage": 5.0,
+        }
         if gpu_type in ("RTX 4090", "RTX 5060 Ti"):
             q["gpu_name"] = {"eq": gpu_type}
-        r = httpx.get(
-            f"{_BASE}/bundles/",
-            headers=self._headers,
-            params={"q": _json.dumps(q), "order": "dph_total", "type": "on-demand"},
-            timeout=30,
-        )
+        r = httpx.post(f"{_BASE}/bundles/", headers=self._headers, json=q, timeout=30)
         r.raise_for_status()
-        offers = r.json().get("offers", [])
-        offers.sort(key=lambda o: o.get("dph_total", 999))
-        return offers
+        return r.json().get("offers", [])
 
     def provision(
         self,
