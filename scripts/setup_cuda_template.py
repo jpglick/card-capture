@@ -297,35 +297,32 @@ def main() -> None:
     else:
         print("── Step 1: Dockerfile.cuda unchanged — skipping write ──\n")
 
-    # ── Step 2: Build ─────────────────────────────────────────────────────────
-    print("── Step 2: Building Docker image (layer cache makes this fast on re-runs) ──")
-    run(["docker", "build", "-f", str(dockerfile_path), "-t", image_name, str(REPO_ROOT)])
+    # ── Step 2: Auth check ────────────────────────────────────────────────────
+    print("── Step 2: Checking ghcr.io auth ──")
+    ensure_ghcr_login(args.docker_user)
+
+    # ── Step 3: Build + push for linux/amd64 ──────────────────────────────────
+    # Must target linux/amd64 — vast.ai instances are x86_64 regardless of the
+    # build host architecture. Building on Apple Silicon without --platform
+    # produces an ARM64 image that fails to start on the vast.ai instance with
+    # "No such container" (the container exits immediately due to arch mismatch).
+    print("── Step 3: Building for linux/amd64 and pushing to ghcr.io ──")
+    print("  (Cross-compilation via QEMU — slower than native, ~20-40min first build)")
+    try:
+        run([
+            "docker", "buildx", "build",
+            "--platform", "linux/amd64",
+            "-f", str(dockerfile_path),
+            "-t", image_name,
+            "--push",   # push directly during build — no separate push step needed
+            str(REPO_ROOT),
+        ])
+    except subprocess.CalledProcessError as exc:
+        print(f"\n❌ Build/push failed (exit code {exc.returncode}).")
+        print("   If buildx is not set up: docker buildx create --use --name amd64-builder")
+        print("   Then re-run this script.")
+        sys.exit(1)
     print()
-
-    # ── Step 3: Push (skip if digest matches) ────────────────────────────────
-    print("── Step 3: Comparing digests ──")
-    local_digest = image_digest_local(image_name)
-    remote_digest = image_digest_remote(image_name)
-    print(f"  local:  {local_digest or '(not built yet)'}")
-    print(f"  remote: {remote_digest or '(not pushed yet)'}")
-
-    if not args.force_push and local_digest and remote_digest and local_digest == remote_digest:
-        print("  Digests match — skipping push (use --force-push to override)\n")
-    else:
-        print("── Step 3b: Checking ghcr.io auth ──")
-        ensure_ghcr_login(args.docker_user)
-        print("── Pushing to Docker Hub ──")
-        try:
-            run(["docker", "push", image_name])
-        except subprocess.CalledProcessError as exc:
-            print(f"\n❌ Push failed (exit code {exc.returncode}).")
-            print("   Common fixes:")
-            print(f"   1. Re-authenticate:  echo YOUR_PAT | docker login {REGISTRY} --username {args.docker_user} --password-stdin")
-            print("   2. Ensure your PAT has write:packages scope")
-            print("   3. The package will be created automatically on first push (no manual repo creation needed)")
-            print("   4. Re-run this script.")
-            sys.exit(1)
-        print()
 
     # ── Step 4: Update config ─────────────────────────────────────────────────
     print("── Step 4: Updating card_capture_config.json ──")
