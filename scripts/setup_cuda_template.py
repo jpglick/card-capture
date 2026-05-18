@@ -116,6 +116,38 @@ def run(cmd: list[str], check: bool = True, capture: bool = False) -> subprocess
     )
 
 
+def ensure_docker_login(docker_user: str) -> None:
+    """Check Docker Hub auth; prompt for login if not authenticated."""
+    # A cheap way to check auth: inspect the Docker config for a token for docker.io
+    config_path = Path.home() / ".docker" / "config.json"
+    if config_path.exists():
+        try:
+            cfg = json.loads(config_path.read_text())
+            auths = cfg.get("auths", {})
+            creds_store = cfg.get("credsStore") or cfg.get("credStore")
+            # If using a credential store, assume it's configured (can't inspect easily)
+            if creds_store:
+                return
+            # Check for a token for any docker.io variant
+            docker_keys = [k for k in auths if "docker.io" in k or "index.docker.io" in k]
+            if docker_keys and auths[docker_keys[0]].get("auth"):
+                return  # Token present
+        except Exception:
+            pass
+
+    # Not logged in — prompt
+    print(f"\n⚠️  Not logged in to Docker Hub as {docker_user!r}.")
+    print("  Run:  docker login")
+    print("  Then re-run this script.\n")
+    ans = input("  Try running 'docker login' now? [y/N] ").strip().lower()
+    if ans == "y":
+        result = subprocess.run(["docker", "login"], check=False)
+        if result.returncode != 0:
+            sys.exit("docker login failed — cannot push image.")
+    else:
+        sys.exit("Aborted. Run 'docker login' first.")
+
+
 def image_digest_local(image: str) -> str | None:
     """Return the local image digest, or None if not present."""
     result = subprocess.run(
@@ -270,8 +302,19 @@ def main() -> None:
     if not args.force_push and local_digest and remote_digest and local_digest == remote_digest:
         print("  Digests match — skipping push (use --force-push to override)\n")
     else:
+        print("── Step 3b: Checking Docker Hub auth ──")
+        ensure_docker_login(args.docker_user)
         print("── Pushing to Docker Hub ──")
-        run(["docker", "push", image_name])
+        try:
+            run(["docker", "push", image_name])
+        except subprocess.CalledProcessError as exc:
+            print(f"\n❌ Push failed (exit code {exc.returncode}).")
+            print("   Common fixes:")
+            print("   1. docker login   — re-authenticate with Docker Hub")
+            print(f"   2. Create the repository at https://hub.docker.com/repository/create")
+            print(f"      (name: card-capture-cuda, visibility: public)")
+            print("   3. Then re-run this script.")
+            sys.exit(1)
         print()
 
     # ── Step 4: Update config ─────────────────────────────────────────────────
