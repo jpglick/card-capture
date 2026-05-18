@@ -4,6 +4,22 @@
     import { api } from '$lib/api/client';
 
     export let video: { video_id: string; filename: string; status: string };
+    export let onReset: (() => void) | undefined = undefined;
+
+    let resetting = false;
+
+    async function resetVideo() {
+        resetting = true;
+        try {
+            await api.videos.reset(video.video_id);
+            video = { ...video, status: 'pending' };
+            onReset?.();
+        } catch (e: any) {
+            progress = `Reset failed: ${e.message}`;
+        } finally {
+            resetting = false;
+        }
+    }
 
     let runId: string | null = null;
     let progress: string = '';
@@ -74,6 +90,11 @@
     {#if !runId && video.status !== 'processing'}
         <button class="process-btn" on:click={startProcessing}>▶ Process</button>
     {/if}
+    {#if video.status === 'processing' && !runId}
+        <button class="reset-btn" on:click={resetVideo} disabled={resetting}>
+            {resetting ? 'Resetting…' : '↺ Reset'}
+        </button>
+    {/if}
     {#if runId && (stage === 'completed' || video.status === 'completed')}
         <a href="/runs/{runId}" class="view-link">View results →</a>
     {/if}
@@ -142,4 +163,18 @@
         font-weight: 600;
     }
     .view-link:hover { text-decoration: underline; }
+
+    .reset-btn {
+        margin-top: 0.5rem;
+        padding: 0.3rem 0.9rem;
+        background: #fff3cd;
+        color: #856404;
+        border: 1px solid #ffc107;
+        border-radius: 6px;
+        font-size: 0.8rem;
+        font-weight: 600;
+        cursor: pointer;
+    }
+    .reset-btn:hover:not(:disabled) { background: #ffeaa7; }
+    .reset-btn:disabled { opacity: 0.6; cursor: default; }
 </style>

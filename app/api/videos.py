@@ -94,6 +94,16 @@ def delete_video(video_id: int, request: Request):
     _svc(request).delete_video(video_id)
 
 
+@router.post("/{video_id}/reset", status_code=200)
+def reset_video(video_id: int, request: Request):
+    """Reset a stuck processing/failed video back to pending so it can be re-queued."""
+    video = _svc(request).get_video(video_id)
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+    _svc(request).update_status(video_id, "pending")
+    return {"video_id": video_id, "status": "pending"}
+
+
 @router.post("/{video_id}/process", response_model=RunSummary, status_code=202)
 async def start_run(video_id: int, request: Request, bg: BackgroundTasks):
     """Enqueue a pipeline run for *video_id*, returning a run_id immediately."""

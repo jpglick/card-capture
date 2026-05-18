@@ -48,21 +48,19 @@ class VastAIClient:
 
     def search_offers(self, gpu_type: str) -> list[dict]:
         """Return available offers matching the GPU type, cheapest first."""
-        query = GPU_TYPE_QUERIES.get(gpu_type, f"gpu_name={gpu_type.replace(' ', '+')}&num_gpus=1")
-        # vast.ai search endpoint accepts query params
+        import json as _json
+        # vast.ai /bundles/ uses a JSON query object in the 'q' param
+        q: dict = {"rentable": {"eq": True}, "num_gpus": {"eq": 1}}
+        if gpu_type in ("RTX 4090", "RTX 5060 Ti"):
+            q["gpu_name"] = {"eq": gpu_type}
         r = httpx.get(
             f"{_BASE}/bundles/",
             headers=self._headers,
-            params={"q": f"{{\"rentable\":{{\"eq\":true}},\"num_gpus\":{{\"eq\":1}},\"verified\":{{\"eq\":true}}}}", "order": "dph_total", "type": "on-demand"},
+            params={"q": _json.dumps(q), "order": "dph_total", "type": "on-demand"},
             timeout=30,
         )
         r.raise_for_status()
-        data = r.json()
-        offers = data.get("offers", [])
-        # Filter by GPU name if a known type
-        gpu_name = gpu_type.replace("RTX ", "RTX ").strip()
-        if gpu_type in ("RTX 4090", "RTX 5060 Ti"):
-            offers = [o for o in offers if gpu_name.lower() in o.get("gpu_name", "").lower()]
+        offers = r.json().get("offers", [])
         offers.sort(key=lambda o: o.get("dph_total", 999))
         return offers
 

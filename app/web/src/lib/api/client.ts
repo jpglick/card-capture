@@ -50,6 +50,7 @@ export const api = {
             });
         },
         process: (videoId: string) => req<T.RunSummary>('POST', `/videos/${videoId}/process`),
+        reset: (videoId: string) => req<{ video_id: string; status: string }>('POST', `/videos/${videoId}/reset`),
         delete: (id: string) => req<void>('DELETE', `/videos/${id}`),
     },
     runs: {
