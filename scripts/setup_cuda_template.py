@@ -289,13 +289,14 @@ def main() -> None:
     print(f"  Image:    {image_name}")
     print(f"{'─'*60}\n")
 
-    # ── Step 1: Write Dockerfile ──────────────────────────────────────────────
-    if not dockerfile_path.exists() or dockerfile_path.read_text() != DOCKERFILE:
-        print("── Step 1: Writing Dockerfile.cuda ──")
-        dockerfile_path.write_text(DOCKERFILE)
-        print("  Written.\n")
-    else:
-        print("── Step 1: Dockerfile.cuda unchanged — skipping write ──\n")
+    # ── Step 1: Use Dockerfile.cuda from repo root (source of truth) ─────────
+    # The file is now maintained directly in the repo rather than generated
+    # by the script, so we just verify it exists.
+    print("── Step 1: Checking Dockerfile.cuda ──")
+    if not dockerfile_path.exists():
+        print(f"  ❌ {dockerfile_path} not found — run from the repo root.")
+        sys.exit(1)
+    print(f"  Found {dockerfile_path} ({dockerfile_path.stat().st_size} bytes)\n")
 
     # ── Step 2: Auth check ────────────────────────────────────────────────────
     print("── Step 2: Checking ghcr.io auth ──")
