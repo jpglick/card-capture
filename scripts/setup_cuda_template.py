@@ -139,13 +139,21 @@ def ensure_docker_login(docker_user: str) -> None:
     print(f"\n⚠️  Not logged in to Docker Hub as {docker_user!r}.")
     print("  Run:  docker login")
     print("  Then re-run this script.\n")
-    ans = input("  Try running 'docker login' now? [y/N] ").strip().lower()
-    if ans == "y":
-        result = subprocess.run(["docker", "login"], check=False)
+    print("  On macOS the browser-based login often fails with a Keychain error.")
+    print("  Use a Personal Access Token instead:")
+    print("    1. hub.docker.com → Account Settings → Security → New Access Token")
+    print(f"   2. echo YOUR_TOKEN | docker login --username {docker_user} --password-stdin")
+    print("    3. Re-run this script.\n")
+    token = input("  Or paste your Docker Hub access token here (leave blank to abort): ").strip()
+    if token:
+        result = subprocess.run(
+            ["docker", "login", "--username", docker_user, "--password-stdin"],
+            input=token, text=True, check=False,
+        )
         if result.returncode != 0:
-            sys.exit("docker login failed — cannot push image.")
+            sys.exit("docker login failed — check your token and username.")
     else:
-        sys.exit("Aborted. Run 'docker login' first.")
+        sys.exit("Aborted. Create a token at hub.docker.com → Account Settings → Security.")
 
 
 def image_digest_local(image: str) -> str | None:
