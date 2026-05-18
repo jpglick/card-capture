@@ -3,8 +3,33 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
+import sys
+from pathlib import Path
 from typing import Optional
+
+
+def _find_vastai() -> str:
+    """Return the absolute path to the vastai CLI binary.
+
+    Checks PATH first, then falls back to the directory containing the current
+    Python executable (i.e. the active venv's bin/). Raises RuntimeError if
+    vastai is not installed.
+    """
+    cmd = shutil.which("vastai")
+    if cmd:
+        return cmd
+    # Fallback: look next to sys.executable (covers venv without activated PATH)
+    candidate = Path(sys.executable).parent / "vastai"
+    if candidate.exists():
+        return str(candidate)
+    raise RuntimeError(
+        "vastai CLI not found. Install with: pip install vastai"
+    )
+
+
+_VASTAI_CMD = _find_vastai()
 
 GPU_TYPE_QUERIES: dict[str, str] = {
     "RTX 4090": "gpu_name=RTX_4090 num_gpus=1 reliability>0.95",
@@ -28,7 +53,7 @@ class VastAIClient:
 
     def _run(self, *args: str) -> object:
         result = subprocess.run(
-            ["vastai", *args, "--raw"],
+            [_VASTAI_CMD, *args, "--raw"],
             capture_output=True, text=True, env=self._env, check=True,
         )
         return json.loads(result.stdout)
