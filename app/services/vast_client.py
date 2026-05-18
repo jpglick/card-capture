@@ -18,13 +18,6 @@ GPU_TYPE_QUERIES: dict[str, str] = {
 
 _BASE = "https://console.vast.ai/api/v0"
 
-_BOOT_SCRIPT = (
-    "cd /workspace/card-capture && "
-    "git pull origin {branch} -q && "
-    "pip install -e '.[app]' -q && "
-    "nohup uvicorn app.vastai_worker:app --host 0.0.0.0 --port 8765 &"
-)
-
 
 class VastAIClient:
     """Thin wrapper around the vast.ai v0 REST API."""
@@ -74,15 +67,15 @@ class VastAIClient:
         self,
         offer_id: int,
         template_id: str,
-        branch: str = "main",
     ) -> dict:
         """Launch an instance. Returns the instance dict with at least {"id": int}."""
-        script = _BOOT_SCRIPT.format(branch=branch)
+        # No runtype/onstart — the Dockerfile CMD is the full boot sequence:
+        #   git pull && pip install -e '.[app]' && uvicorn app.vastai_worker:app
+        # Using runtype="ssh" caused "No such container" because our image has
+        # no sshd and vast.ai couldn't exec the onstart script into it.
         body = {
             "client_id": "me",
             "image": template_id,
-            "onstart": script,
-            "runtype": "ssh",
             "disk": 40,
             "extra_env": {"open_ports": "8765/tcp"},
         }

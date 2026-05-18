@@ -38,8 +38,10 @@ RUN pip install -e ".[model,app]"
 # first inference and are then cached in ~/.cache on the instance disk.
 # This saves ~500MB from the image at the cost of ~1-2min on the very first run.
 
-# On each boot the vastai_worker onstart script runs:
-#   git pull origin main -q && pip install -e '.[app]' -q &&
-#   uvicorn app.vastai_worker:app --host 0.0.0.0 --port 8765
-# The CMD below is only used when running outside vast.ai.
-CMD ["uvicorn", "app.vastai_worker:app", "--host", "0.0.0.0", "--port", "8765"]
+# Boot sequence — runs automatically when the container starts on vast.ai.
+# Pulls latest code, installs the app layer, then starts the worker.
+# No onstart/SSH mechanism needed — vast.ai just runs this CMD.
+CMD ["bash", "-c", \
+     "cd /workspace/card-capture && git pull origin main -q && \
+      pip install -e '.[app]' -q && \
+      exec uvicorn app.vastai_worker:app --host 0.0.0.0 --port 8765"]

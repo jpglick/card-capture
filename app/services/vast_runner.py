@@ -201,7 +201,7 @@ class VastAIRunner:
         offer_id = offers[0]["id"]
 
         # Provision
-        result = self._client.provision(offer_id, self._template_id, self._branch)
+        result = self._client.provision(offer_id, self._template_id)
         self._instance_id = result["id"]
         _save_active_instance(self._instance_id)
 
