@@ -112,6 +112,18 @@ class VastAIClient:
         except Exception as e:
             print(f"[VastAIClient] Warning: destroy {instance_id} failed: {e}")
 
+    def get_instance_details(self, instance_id: int) -> dict:
+        """Return the full instance dict (includes ssh_host, ssh_port, status_msg, etc)."""
+        try:
+            r = httpx.get(f"{_BASE}/instances/", headers=self._headers, timeout=30)
+            r.raise_for_status()
+            for inst in r.json().get("instances", []):
+                if inst.get("id") == instance_id:
+                    return inst
+        except Exception:
+            pass
+        return {}
+
     def get_instance_ip(self, instance_id: int) -> Optional[str]:
         """Return the public IP of a running instance, or None if not yet assigned."""
         try:

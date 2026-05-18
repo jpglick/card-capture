@@ -217,9 +217,27 @@ class VastAIRunner:
 
         self._worker = InstanceWorkerClient(f"http://{ip}:8765")
 
+        # Fetch SSH connection details so the user can debug via console if needed
+        try:
+            details = self._client.get_instance_details(self._instance_id)
+            ssh_host = details.get("ssh_host", "")
+            ssh_port = details.get("ssh_port", "")
+            if ssh_host and ssh_port:
+                print(f"[vast.ai] SSH: ssh -p {ssh_port} root@{ssh_host}", flush=True)
+                print(f"[vast.ai] Worker log: cat /tmp/worker.log", flush=True)
+        except Exception:
+            pass
+
         # Wait for health (up to 8 minutes — first pull of 12-15 GB image takes time)
-        for _ in range(96):
-            if await self._worker.health_check():
+        for i in range(96):
+            healthy = await self._worker.health_check()
+            if healthy:
                 return
+            if i % 6 == 0:  # every 30s
+                print(f"[vast.ai] Waiting for worker on {ip}:8765… ({i*5}s)", flush=True)
             await asyncio.sleep(5)
-        raise RuntimeError("Instance worker did not become healthy within 11 minutes")
+        raise RuntimeError(
+            f"Instance worker did not become healthy within 8 minutes. "
+            f"SSH in to debug: ssh -p {ssh_port} root@{ssh_host} "
+            f"then check: cat /tmp/worker.log"
+        )
