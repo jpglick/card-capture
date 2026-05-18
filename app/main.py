@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 import os
+
+# Load .env from the project root before anything else reads os.environ.
+# Safe to call even if the file doesn't exist (no-op).
+from dotenv import load_dotenv
+load_dotenv()
 import sqlite3
 from pathlib import Path
 from typing import Optional
