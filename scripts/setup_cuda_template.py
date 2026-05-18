@@ -127,17 +127,15 @@ REGISTRY = "ghcr.io"
 def ensure_ghcr_login(github_user: str) -> None:
     """Check ghcr.io auth; prompt for GitHub PAT if not authenticated."""
     config_path = Path.home() / ".docker" / "config.json"
+    cfg: dict = {}
     if config_path.exists():
         try:
             cfg = json.loads(config_path.read_text())
-            auths = cfg.get("auths", {})
-            creds_store = cfg.get("credsStore") or cfg.get("credStore")
-            if creds_store:
-                return  # Credential store present — assume it's configured
-            if REGISTRY in auths and auths[REGISTRY].get("auth"):
-                return  # Token present in config
         except Exception:
             pass
+    auths = cfg.get("auths", {})
+    if REGISTRY in auths and auths[REGISTRY].get("auth"):
+        return  # Already authenticated — token present in config
 
     # Not logged in — prompt for GitHub PAT
     print(f"\n⚠️  Not logged in to {REGISTRY} as {github_user!r}.")
@@ -147,12 +145,16 @@ def ensure_ghcr_login(github_user: str) -> None:
     token = input("  Paste your GitHub PAT here (leave blank to abort): ").strip()
     if not token:
         sys.exit("Aborted. Create a PAT at github.com → Settings → Developer settings.")
-    result = subprocess.run(
-        ["docker", "login", REGISTRY, "--username", github_user, "--password-stdin"],
-        input=token, text=True, check=False,
-    )
-    if result.returncode != 0:
-        sys.exit(f"docker login {REGISTRY} failed — check your token and GitHub username.")
+
+    # Write auth directly to ~/.docker/config.json — avoids macOS Keychain which
+    # blocks 'docker login' from the terminal with "User interaction is not allowed".
+    import base64
+    encoded = base64.b64encode(f"{github_user}:{token}".encode()).decode()
+    cfg.setdefault("auths", {})[REGISTRY] = {"auth": encoded}
+    # Also strip credsStore if present — Docker Desktop puts this back sometimes
+    cfg.pop("credsStore", None)
+    config_path.write_text(json.dumps(cfg, indent=2))
+    print(f"  ✅ Credentials written directly to {config_path} (bypasses macOS Keychain)")
 
 
 def image_digest_local(image: str) -> str | None:
