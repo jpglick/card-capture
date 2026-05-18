@@ -8,6 +8,11 @@ Usage:
     python3 scripts/setup_cuda_template.py --docker-user jpglick --verify
     python3 scripts/setup_cuda_template.py --docker-user jpglick --tag v2
 
+Prerequisites:
+    GitHub PAT with scopes: write:packages  read:packages  delete:packages
+    Create at:  github.com → Settings → Developer settings → Personal access tokens (classic)
+    The script will prompt for the token on first run and log in to ghcr.io for you.
+
 What it does:
   1. Writes Dockerfile.cuda to the repo root (if different from what's there).
   2. Builds the image — idempotent via Docker layer cache.
@@ -116,44 +121,38 @@ def run(cmd: list[str], check: bool = True, capture: bool = False) -> subprocess
     )
 
 
-def ensure_docker_login(docker_user: str) -> None:
-    """Check Docker Hub auth; prompt for login if not authenticated."""
-    # A cheap way to check auth: inspect the Docker config for a token for docker.io
+REGISTRY = "ghcr.io"
+
+
+def ensure_ghcr_login(github_user: str) -> None:
+    """Check ghcr.io auth; prompt for GitHub PAT if not authenticated."""
     config_path = Path.home() / ".docker" / "config.json"
     if config_path.exists():
         try:
             cfg = json.loads(config_path.read_text())
             auths = cfg.get("auths", {})
             creds_store = cfg.get("credsStore") or cfg.get("credStore")
-            # If using a credential store, assume it's configured (can't inspect easily)
             if creds_store:
-                return
-            # Check for a token for any docker.io variant
-            docker_keys = [k for k in auths if "docker.io" in k or "index.docker.io" in k]
-            if docker_keys and auths[docker_keys[0]].get("auth"):
-                return  # Token present
+                return  # Credential store present — assume it's configured
+            if REGISTRY in auths and auths[REGISTRY].get("auth"):
+                return  # Token present in config
         except Exception:
             pass
 
-    # Not logged in — prompt
-    print(f"\n⚠️  Not logged in to Docker Hub as {docker_user!r}.")
-    print("  Run:  docker login")
-    print("  Then re-run this script.\n")
-    print("  On macOS the browser-based login often fails with a Keychain error.")
-    print("  Use a Personal Access Token instead:")
-    print("    1. hub.docker.com → Account Settings → Security → New Access Token")
-    print(f"   2. echo YOUR_TOKEN | docker login --username {docker_user} --password-stdin")
-    print("    3. Re-run this script.\n")
-    token = input("  Or paste your Docker Hub access token here (leave blank to abort): ").strip()
-    if token:
-        result = subprocess.run(
-            ["docker", "login", "--username", docker_user, "--password-stdin"],
-            input=token, text=True, check=False,
-        )
-        if result.returncode != 0:
-            sys.exit("docker login failed — check your token and username.")
-    else:
-        sys.exit("Aborted. Create a token at hub.docker.com → Account Settings → Security.")
+    # Not logged in — prompt for GitHub PAT
+    print(f"\n⚠️  Not logged in to {REGISTRY} as {github_user!r}.")
+    print("  GitHub Container Registry uses a Personal Access Token (classic).")
+    print("  Required scopes:  write:packages  read:packages  delete:packages")
+    print("  Create one at:  github.com → Settings → Developer settings → Personal access tokens\n")
+    token = input("  Paste your GitHub PAT here (leave blank to abort): ").strip()
+    if not token:
+        sys.exit("Aborted. Create a PAT at github.com → Settings → Developer settings.")
+    result = subprocess.run(
+        ["docker", "login", REGISTRY, "--username", github_user, "--password-stdin"],
+        input=token, text=True, check=False,
+    )
+    if result.returncode != 0:
+        sys.exit(f"docker login {REGISTRY} failed — check your token and GitHub username.")
 
 
 def image_digest_local(image: str) -> str | None:
@@ -273,18 +272,19 @@ def verify_with_vastai(image_name: str, api_key: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--docker-user", required=True, help="Docker Hub username (e.g. jpglick)")
+    parser.add_argument("--docker-user", required=True, help="GitHub username for ghcr.io (e.g. jpglick)")
     parser.add_argument("--tag", default="latest", help="Image tag (default: latest)")
     parser.add_argument("--verify", action="store_true", help="Spin up a test instance after push to verify the image")
     parser.add_argument("--force-push", action="store_true", help="Push even if remote digest matches local")
     args = parser.parse_args()
 
-    image_name = f"{args.docker_user}/card-capture-cuda:{args.tag}"
+    image_name = f"{REGISTRY}/{args.docker_user}/card-capture-cuda:{args.tag}"
     dockerfile_path = REPO_ROOT / "Dockerfile.cuda"
 
     print(f"\n{'─'*60}")
     print(f"  card-capture CUDA template setup")
-    print(f"  Image: {image_name}")
+    print(f"  Registry: {REGISTRY}")
+    print(f"  Image:    {image_name}")
     print(f"{'─'*60}\n")
 
     # ── Step 1: Write Dockerfile ──────────────────────────────────────────────
@@ -310,18 +310,18 @@ def main() -> None:
     if not args.force_push and local_digest and remote_digest and local_digest == remote_digest:
         print("  Digests match — skipping push (use --force-push to override)\n")
     else:
-        print("── Step 3b: Checking Docker Hub auth ──")
-        ensure_docker_login(args.docker_user)
+        print("── Step 3b: Checking ghcr.io auth ──")
+        ensure_ghcr_login(args.docker_user)
         print("── Pushing to Docker Hub ──")
         try:
             run(["docker", "push", image_name])
         except subprocess.CalledProcessError as exc:
             print(f"\n❌ Push failed (exit code {exc.returncode}).")
             print("   Common fixes:")
-            print("   1. docker login   — re-authenticate with Docker Hub")
-            print(f"   2. Create the repository at https://hub.docker.com/repository/create")
-            print(f"      (name: card-capture-cuda, visibility: public)")
-            print("   3. Then re-run this script.")
+            print(f"   1. Re-authenticate:  echo YOUR_PAT | docker login {REGISTRY} --username {args.docker_user} --password-stdin")
+            print("   2. Ensure your PAT has write:packages scope")
+            print("   3. The package will be created automatically on first push (no manual repo creation needed)")
+            print("   4. Re-run this script.")
             sys.exit(1)
         print()
 

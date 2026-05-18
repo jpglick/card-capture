@@ -2,18 +2,23 @@
 
 ## Automated setup (recommended)
 
+Uses **GitHub Container Registry** (`ghcr.io`) — no Docker Hub account needed, just your existing GitHub credentials.
+
+**Prerequisites:** GitHub PAT (classic) with `write:packages`, `read:packages`, `delete:packages` scopes.
+Create at: **github.com → Settings → Developer settings → Personal access tokens (classic)**
+
 ```bash
-# One-time setup — builds Docker image, pushes to Hub, updates config
-python3 scripts/setup_cuda_template.py --docker-user YOUR_DOCKERHUB_USERNAME
+# One-time setup — builds Docker image, pushes to ghcr.io, updates config
+python3 scripts/setup_cuda_template.py --docker-user YOUR_GITHUB_USERNAME
 
 # With smoke test (spins up a real instance, tests health endpoint, destroys it)
-VAST_API_KEY=your_key python3 scripts/setup_cuda_template.py --docker-user YOUR_DOCKERHUB_USERNAME --verify
+VAST_API_KEY=your_key python3 scripts/setup_cuda_template.py --docker-user YOUR_GITHUB_USERNAME --verify
 
 # Re-run any time — safe to run again (skips push if image unchanged)
-python3 scripts/setup_cuda_template.py --docker-user YOUR_DOCKERHUB_USERNAME
+python3 scripts/setup_cuda_template.py --docker-user YOUR_GITHUB_USERNAME
 ```
 
-The script writes `vast_template_id` into `card_capture_config.json` automatically.
+The script prompts for your GitHub PAT on first run, logs in to `ghcr.io`, and writes `vast_template_id` into `card_capture_config.json` automatically.
 
 ---
 
