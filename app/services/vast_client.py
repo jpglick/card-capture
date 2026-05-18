@@ -69,13 +69,22 @@ class VastAIClient:
         template_id: str,
     ) -> dict:
         """Launch an instance. Returns the instance dict with at least {"id": int}."""
-        # No runtype/onstart — the Dockerfile CMD is the full boot sequence:
-        #   git pull && pip install -e '.[app]' && uvicorn app.vastai_worker:app
-        # Using runtype="ssh" caused "No such container" because our image has
-        # no sshd and vast.ai couldn't exec the onstart script into it.
+        # vast.ai always runs instances with SSH as the main process (overrides
+        # our Dockerfile CMD). The onstart script is executed via SSH once the
+        # container is ready — this is the correct mechanism for custom images.
+        # The previous "No such container" errors were caused by the ARM64 image
+        # crashing before SSH was ready; the AMD64 image fixes that.
+        onstart = (
+            "cd /workspace/card-capture && "
+            "git pull origin main -q && "
+            "pip install -e '.[app]' -q 2>&1 | tail -3 && "
+            "nohup uvicorn app.vastai_worker:app --host 0.0.0.0 --port 8765 "
+            "--log-level info > /tmp/worker.log 2>&1 &"
+        )
         body = {
             "client_id": "me",
             "image": template_id,
+            "onstart": onstart,
             "disk": 40,
             "extra_env": {"open_ports": "8765/tcp"},
         }
