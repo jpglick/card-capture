@@ -205,21 +205,21 @@ class VastAIRunner:
         self._instance_id = result["id"]
         _save_active_instance(self._instance_id)
 
-        # Wait for IP (up to 2 minutes)
+        # Wait for IP (up to 3 minutes — image pull can delay container start)
         ip: Optional[str] = None
-        for _ in range(24):
+        for _ in range(36):
             await asyncio.sleep(5)
             ip = self._client.get_instance_ip(self._instance_id)
             if ip:
                 break
         if not ip:
-            raise RuntimeError("Instance did not receive an IP within 2 minutes")
+            raise RuntimeError("Instance did not receive an IP within 3 minutes")
 
         self._worker = InstanceWorkerClient(f"http://{ip}:8765")
 
-        # Wait for health (up to 3 more minutes)
-        for _ in range(36):
+        # Wait for health (up to 8 minutes — first pull of 12-15 GB image takes time)
+        for _ in range(96):
             if await self._worker.health_check():
                 return
             await asyncio.sleep(5)
-        raise RuntimeError("Instance worker did not become healthy within 5 minutes")
+        raise RuntimeError("Instance worker did not become healthy within 11 minutes")
