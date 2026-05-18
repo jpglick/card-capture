@@ -66,7 +66,9 @@ class VastAIClient:
             q["gpu_name"] = {"eq": gpu_type}
         r = httpx.post(f"{_BASE}/bundles/", headers=self._headers, json=q, timeout=30)
         r.raise_for_status()
-        return r.json().get("offers", [])
+        offers = r.json().get("offers", [])
+        offers.sort(key=lambda o: o.get("dph_total", 999))
+        return offers
 
     def provision(
         self,
