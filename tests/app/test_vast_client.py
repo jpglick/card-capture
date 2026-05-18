@@ -1,6 +1,4 @@
-"""Tests for VastAIClient — mocks subprocess so no real API calls needed."""
-import json
-import subprocess
+"""Tests for VastAIClient — mocks httpx so no real API calls are made."""
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -8,52 +6,51 @@ import pytest
 from app.services.vast_client import VastAIClient, GPU_TYPE_QUERIES
 
 
-def _mock_run(stdout_data):
-    """Return a mock CompletedProcess with JSON stdout."""
+def _mock_response(data: object, status_code: int = 200):
     m = MagicMock()
-    m.stdout = json.dumps(stdout_data)
+    m.status_code = status_code
+    m.json.return_value = data
+    m.raise_for_status = MagicMock()
     return m
 
 
-def test_search_offers_returns_list():
+def test_search_offers_returns_sorted_list():
     client = VastAIClient(api_key="test-key")
-    offers = [{"id": 1, "dph_total": 0.5}, {"id": 2, "dph_total": 0.3}]
-    with patch("subprocess.run", return_value=_mock_run(offers)) as mock_run:
+    offers = [
+        {"id": 1, "dph_total": 0.8, "gpu_name": "RTX 4090"},
+        {"id": 2, "dph_total": 0.4, "gpu_name": "RTX 4090"},
+    ]
+    with patch("httpx.get", return_value=_mock_response({"offers": offers})):
         result = client.search_offers("RTX 4090")
-    assert result == [{"id": 2, "dph_total": 0.3}, {"id": 1, "dph_total": 0.5}]
-    call_args = mock_run.call_args[0][0]
-    cmd_str = " ".join(call_args)
-    assert "RTX_4090" in cmd_str or "RTX 4090" in cmd_str
+    assert result[0]["dph_total"] == 0.4
 
 
 def test_provision_returns_instance_dict():
     client = VastAIClient(api_key="test-key")
-    instance = {"id": 42, "status": "created"}
-    with patch("subprocess.run", return_value=_mock_run(instance)):
-        result = client.provision(offer_id=1, template_id="pytorch/pytorch:latest")
+    with patch("httpx.put", return_value=_mock_response({"new_contract": 42, "success": True})):
+        result = client.provision(offer_id=1, template_id="ghcr.io/jpglick/card-capture-cuda:latest")
     assert result["id"] == 42
 
 
-def test_destroy_calls_vastai():
+def test_destroy_calls_api():
     client = VastAIClient(api_key="test-key")
-    with patch("subprocess.run", return_value=_mock_run({"success": True})) as mock_run:
+    with patch("httpx.delete", return_value=_mock_response({})) as mock_del:
         client.destroy(instance_id=42)
-    call_args = mock_run.call_args[0][0]
-    assert "destroy" in call_args
-    assert "42" in call_args
+    assert mock_del.called
+    assert "42" in mock_del.call_args[0][0]
 
 
 def test_get_instance_ip_found():
     client = VastAIClient(api_key="test-key")
     instances = [{"id": 42, "public_ipaddr": "1.2.3.4"}, {"id": 99, "public_ipaddr": "5.6.7.8"}]
-    with patch("subprocess.run", return_value=_mock_run(instances)):
+    with patch("httpx.get", return_value=_mock_response({"instances": instances})):
         ip = client.get_instance_ip(42)
     assert ip == "1.2.3.4"
 
 
 def test_get_instance_ip_not_found():
     client = VastAIClient(api_key="test-key")
-    with patch("subprocess.run", return_value=_mock_run([])):
+    with patch("httpx.get", return_value=_mock_response({"instances": []})):
         ip = client.get_instance_ip(999)
     assert ip is None
 

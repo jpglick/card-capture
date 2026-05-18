@@ -1,41 +1,22 @@
-"""Thin wrapper around the vastai CLI for instance provisioning."""
+"""Vast.ai REST API client for instance provisioning.
+
+Uses httpx to call the vast.ai v0 API directly instead of the CLI,
+which requires Python 3.10+ and is incompatible with this project's venv.
+"""
 from __future__ import annotations
 
-import json
 import os
-import shutil
-import subprocess
-import sys
-from pathlib import Path
 from typing import Optional
 
-
-def _find_vastai() -> str:
-    """Return the absolute path to the vastai CLI binary.
-
-    Checks PATH first, then falls back to the directory containing the current
-    Python executable (i.e. the active venv's bin/). Raises RuntimeError if
-    vastai is not installed.
-    """
-    cmd = shutil.which("vastai")
-    if cmd:
-        return cmd
-    # Fallback: look next to sys.executable (covers venv without activated PATH)
-    candidate = Path(sys.executable).parent / "vastai"
-    if candidate.exists():
-        return str(candidate)
-    raise RuntimeError(
-        "vastai CLI not found. Install with: pip install vastai"
-    )
-
-
-_VASTAI_CMD = _find_vastai()
+import httpx
 
 GPU_TYPE_QUERIES: dict[str, str] = {
-    "RTX 4090": "gpu_name=RTX_4090 num_gpus=1 reliability>0.95",
-    "Flagship": "num_gpus=1 reliability>0.99",   # sorted by TFLOPS at provision time
-    "RTX 5060 Ti": "gpu_name=RTX_5060_Ti num_gpus=1 reliability>0.95",
+    "RTX 4090": "gpu_name=RTX+4090&num_gpus=1&reliability2>0.95",
+    "Flagship": "num_gpus=1&reliability2>0.99&rentable=true&order=flops_per_dphtotal-",
+    "RTX 5060 Ti": "gpu_name=RTX+5060+Ti&num_gpus=1&reliability2>0.95",
 }
+
+_BASE = "https://console.vast.ai/api/v0"
 
 _BOOT_SCRIPT = (
     "cd /workspace/card-capture && "
@@ -46,25 +27,44 @@ _BOOT_SCRIPT = (
 
 
 class VastAIClient:
-    """Wraps the vastai CLI. All calls require VAST_API_KEY in the environment."""
+    """Thin wrapper around the vast.ai v0 REST API."""
 
     def __init__(self, api_key: str) -> None:
-        self._env = {**os.environ, "VAST_API_KEY": api_key}
+        self._headers = {"Authorization": f"Bearer {api_key}"}
 
-    def _run(self, *args: str) -> object:
-        result = subprocess.run(
-            [_VASTAI_CMD, *args, "--raw"],
-            capture_output=True, text=True, env=self._env, check=True,
-        )
-        return json.loads(result.stdout)
+    def _get(self, path: str, params: Optional[dict] = None) -> object:
+        r = httpx.get(f"{_BASE}{path}", headers=self._headers, params=params, timeout=30)
+        r.raise_for_status()
+        return r.json()
+
+    def _put(self, path: str, body: dict) -> object:
+        r = httpx.put(f"{_BASE}{path}", headers=self._headers, json=body, timeout=30)
+        r.raise_for_status()
+        return r.json()
+
+    def _delete(self, path: str) -> None:
+        r = httpx.delete(f"{_BASE}{path}", headers=self._headers, timeout=30)
+        r.raise_for_status()
 
     def search_offers(self, gpu_type: str) -> list[dict]:
         """Return available offers matching the GPU type, cheapest first."""
-        query = GPU_TYPE_QUERIES.get(gpu_type, gpu_type)
-        offers = self._run("search", "offers", query)
-        if isinstance(offers, list):
-            offers.sort(key=lambda o: o.get("dph_total", 999))
-        return offers if isinstance(offers, list) else []
+        query = GPU_TYPE_QUERIES.get(gpu_type, f"gpu_name={gpu_type.replace(' ', '+')}&num_gpus=1")
+        # vast.ai search endpoint accepts query params
+        r = httpx.get(
+            f"{_BASE}/bundles/",
+            headers=self._headers,
+            params={"q": f"{{\"rentable\":{{\"eq\":true}},\"num_gpus\":{{\"eq\":1}},\"verified\":{{\"eq\":true}}}}", "order": "dph_total", "type": "on-demand"},
+            timeout=30,
+        )
+        r.raise_for_status()
+        data = r.json()
+        offers = data.get("offers", [])
+        # Filter by GPU name if a known type
+        gpu_name = gpu_type.replace("RTX ", "RTX ").strip()
+        if gpu_type in ("RTX 4090", "RTX 5060 Ti"):
+            offers = [o for o in offers if gpu_name.lower() in o.get("gpu_name", "").lower()]
+        offers.sort(key=lambda o: o.get("dph_total", 999))
+        return offers
 
     def provision(
         self,
@@ -74,25 +74,49 @@ class VastAIClient:
     ) -> dict:
         """Launch an instance. Returns the instance dict with at least {"id": int}."""
         script = _BOOT_SCRIPT.format(branch=branch)
-        result = self._run(
-            "create", "instance", str(offer_id),
-            "--image", template_id,
-            "--onstart", script,
-            "--ports", "8765",
+        body = {
+            "client_id": "me",
+            "image": template_id,
+            "onstart": script,
+            "runtype": "ssh",
+            "disk": 40,
+            "extra_env": {"open_ports": "8765/tcp"},
+        }
+        r = httpx.put(
+            f"{_BASE}/asks/{offer_id}/",
+            headers=self._headers,
+            json=body,
+            timeout=60,
         )
-        return result if isinstance(result, dict) else {"id": result}
+        r.raise_for_status()
+        data = r.json()
+        # API returns {"success": true, "new_contract": 12345}
+        instance_id = data.get("new_contract") or data.get("id")
+        return {"id": instance_id, **data}
 
     def destroy(self, instance_id: int) -> None:
         """Destroy a running instance. Billing stops immediately."""
-        self._run("destroy", "instance", str(instance_id))
+        try:
+            r = httpx.delete(
+                f"{_BASE}/instances/{instance_id}/",
+                headers=self._headers,
+                timeout=30,
+            )
+            r.raise_for_status()
+        except Exception as e:
+            print(f"[VastAIClient] Warning: destroy {instance_id} failed: {e}")
 
     def get_instance_ip(self, instance_id: int) -> Optional[str]:
         """Return the public IP of a running instance, or None if not yet assigned."""
         try:
-            instances = self._run("show", "instances")
-        except subprocess.CalledProcessError:
-            return None
-        if not isinstance(instances, list):
+            r = httpx.get(
+                f"{_BASE}/instances/",
+                headers=self._headers,
+                timeout=30,
+            )
+            r.raise_for_status()
+            instances = r.json().get("instances", [])
+        except Exception:
             return None
         for inst in instances:
             if inst.get("id") == instance_id:
