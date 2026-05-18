@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 from pathlib import Path
 from typing import Optional
 
@@ -10,6 +11,7 @@ from app.services.event_bus import Event, EventBus
 from app.services.vast_client import VastAIClient
 from app.services.worker_client import InstanceWorkerClient
 from app.services.result_importer import ResultImporter
+from app.services import _event_bus_registry
 
 _CONFIG_PATH = Path(__file__).parent.parent.parent / "card_capture_config.json"
 
@@ -75,36 +77,95 @@ class VastAIRunner:
         **_kw,
     ) -> None:
         """Provision instance (if needed), run job, download results, destroy."""
+        video_id: Optional[int] = _kw.get("video_id")
+
+        # Register event bus so SSE stream can deliver events to the browser
+        _event_bus_registry.set(run_id, self.bus)
+
         try:
+            # Create pipeline_runs record so the run appears in the UI immediately
+            self._record_run_start(run_id, video_id, db)
+
+            print(f"[{run_id}] vast.ai: provisioning {self._gpu_type} instance…", flush=True)
             await self._ensure_instance()
             self.bus.emit(run_id, Event(name="run_started"))
+            self.bus.emit(run_id, Event(name="log", payload={"line": f"Instance ready — uploading video…"}))
+            print(f"[{run_id}] vast.ai: instance ready, uploading video…", flush=True)
 
             server_path = await self._worker.upload_video(Path(video))
+            self.bus.emit(run_id, Event(name="log", payload={"line": "Upload complete — running CUDA pipeline…"}))
+            print(f"[{run_id}] vast.ai: video uploaded, submitting job…", flush=True)
             await self._worker.submit_job(run_id, server_path, {"config_preset": config_preset})
 
             # Poll until complete or failed
+            poll_count = 0
             while True:
                 status = await self._worker.poll_status(run_id)
-                if status["status"] == "complete":
+                state = status.get("status", "unknown")
+                if state == "complete":
                     break
-                if status["status"] == "failed":
+                if state == "failed":
                     raise RuntimeError(f"Remote job failed: {status.get('error', 'unknown')}")
+                if poll_count % 10 == 0:  # log every 30s
+                    pct = status.get("progress_pct", 0)
+                    msg = f"Processing on cloud GPU… {pct}%"
+                    self.bus.emit(run_id, Event(name="log", payload={"line": msg}))
+                    print(f"[{run_id}] vast.ai: {msg}", flush=True)
+                poll_count += 1
                 await asyncio.sleep(3)
+
+            print(f"[{run_id}] vast.ai: job complete, downloading results…", flush=True)
+            self.bus.emit(run_id, Event(name="log", payload={"line": "Pipeline complete — downloading results…"}))
 
             # Download and import results
             tarball = Path(output_dir) / f"{run_id}_results.tar.gz"
             Path(output_dir).mkdir(parents=True, exist_ok=True)
             await self._worker.download_results(run_id, tarball)
             await self._worker.confirm_downloaded(run_id)
-            self._importer.import_tarball(tarball, run_id)
+            n_cards = self._importer.import_tarball(tarball, run_id)
             tarball.unlink(missing_ok=True)
 
+            self._record_run_finish(run_id, n_cards, db)
+            print(f"[{run_id}] vast.ai: done — {n_cards} cards imported", flush=True)
             self.bus.emit(run_id, Event(name="run_completed"))
         except Exception as exc:
+            print(f"[{run_id}] vast.ai: FAILED — {exc}", flush=True)
+            self._record_run_fail(run_id, db)
             self.bus.emit(run_id, Event(name="run_failed", payload={"error": str(exc)}))
             raise
         finally:
+            _event_bus_registry.clear(run_id)
             await self.destroy_instance()
+
+    def _record_run_start(self, run_id: str, video_id: Optional[int], db: str) -> None:
+        try:
+            with sqlite3.connect(db) as conn:
+                conn.execute(
+                    "INSERT OR IGNORE INTO pipeline_runs (run_id, video_id, status) VALUES (?, ?, 'running')",
+                    (run_id, video_id),
+                )
+        except Exception as exc:
+            print(f"[{run_id}] could not record run start: {exc}", flush=True)
+
+    def _record_run_finish(self, run_id: str, n_cards: int, db: str) -> None:
+        try:
+            with sqlite3.connect(db) as conn:
+                conn.execute(
+                    "UPDATE pipeline_runs SET status='completed', cards_extracted=?, finished_at=datetime('now') WHERE run_id=?",
+                    (n_cards, run_id),
+                )
+        except Exception as exc:
+            print(f"[{run_id}] could not record run finish: {exc}", flush=True)
+
+    def _record_run_fail(self, run_id: str, db: str) -> None:
+        try:
+            with sqlite3.connect(db) as conn:
+                conn.execute(
+                    "UPDATE pipeline_runs SET status='failed', finished_at=datetime('now') WHERE run_id=?",
+                    (run_id,),
+                )
+        except Exception as exc:
+            print(f"[{run_id}] could not record run failure: {exc}", flush=True)
 
     async def run_batch_async(self, jobs: list[dict]) -> None:
         """Process multiple videos on one instance, destroy when all done."""
