@@ -27,7 +27,8 @@ RUN apt-get update -q && \
         "fastapi>=0.110.0" \
         "uvicorn[standard]>=0.29.0" \
         "python-multipart>=0.0.9" \
-        "python-dotenv>=1.0.0"
+        "python-dotenv>=1.0.0" \
+        "metaflow>=2.10.0"
 
 # Clone repo and install the app layer (heavy ML deps already above)
 RUN git clone https://github.com/jpglick/card-capture.git /workspace/card-capture
