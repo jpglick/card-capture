@@ -239,23 +239,24 @@ class VastAIRunner:
         if ssh_host and ssh_port:
             # Wait for the SSH proxy port to accept connections — it lags behind
             # the instance IP assignment by 30-90 seconds on vast.ai's infrastructure.
-            import socket as _socket
+            # Use asyncio.open_connection (non-blocking) to avoid stalling the event loop.
             print(f"[vast.ai] Waiting for SSH proxy {ssh_host}:{ssh_port}…", flush=True)
-            for i in range(36):  # up to 3 minutes
+            for i in range(60):  # up to 5 minutes
                 try:
-                    s = _socket.socket()
-                    s.settimeout(3)
-                    ok = s.connect_ex((ssh_host, ssh_port)) == 0
-                    s.close()
-                    if ok:
-                        print(f"[vast.ai] SSH proxy ready after {i*5}s", flush=True)
-                        break
-                except Exception:
-                    pass
+                    _, w = await asyncio.wait_for(
+                        asyncio.open_connection(ssh_host, ssh_port), timeout=4
+                    )
+                    w.close()
+                    await w.wait_closed()
+                    print(f"[vast.ai] SSH proxy ready after {i*5}s", flush=True)
+                    break
+                except Exception as e:
+                    if i % 6 == 0:
+                        print(f"[vast.ai] SSH proxy not ready yet ({i*5}s): {type(e).__name__}", flush=True)
                 await asyncio.sleep(5)
             else:
                 raise RuntimeError(
-                    f"SSH proxy {ssh_host}:{ssh_port} not accepting connections after 3 minutes"
+                    f"SSH proxy {ssh_host}:{ssh_port} not accepting connections after 5 minutes"
                 )
 
             print(f"[vast.ai] Opening SSH tunnel via {ssh_host}:{ssh_port}…", flush=True)
