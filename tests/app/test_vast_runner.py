@@ -52,17 +52,22 @@ async def test_run_async_emits_started_and_completed(tmp_path):
     fake_proc.terminate = MagicMock()
     fake_proc.wait = AsyncMock()
 
-    with patch("app.services.vast_runner.InstanceWorkerClient", return_value=worker):
-        with patch("app.services.vast_runner._save_active_instance"):
-            with patch("app.services.vast_runner._clear_active_instance"):
-                with patch("asyncio.create_subprocess_exec", return_value=fake_proc):
-                    (tmp_path / "run-1").mkdir()
-                    await runner.run_async(
-                        "run-1",
-                        video=str(tmp_path / "video.mp4"),
-                        output_dir=str(tmp_path / "run-1"),
-                        db=str(tmp_path / "cards.sqlite"),
-                    )
+    mock_sock = MagicMock()
+    mock_sock.connect_ex.return_value = 0  # port "open" immediately
+    mock_sock.close = MagicMock()
+
+    with patch("app.services.vast_runner.InstanceWorkerClient", return_value=worker), \
+         patch("app.services.vast_runner._save_active_instance"), \
+         patch("app.services.vast_runner._clear_active_instance"), \
+         patch("asyncio.create_subprocess_exec", return_value=fake_proc), \
+         patch("socket.socket", return_value=mock_sock):
+        (tmp_path / "run-1").mkdir()
+        await runner.run_async(
+            "run-1",
+            video=str(tmp_path / "video.mp4"),
+            output_dir=str(tmp_path / "run-1"),
+            db=str(tmp_path / "cards.sqlite"),
+        )
 
     event_names = [call.args[1].name for call in runner.bus.emit.call_args_list]
     assert "run_started" in event_names
