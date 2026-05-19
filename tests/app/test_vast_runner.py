@@ -28,7 +28,11 @@ async def test_run_async_emits_started_and_completed(tmp_path):
     runner._client = MagicMock()
     runner._client.search_offers.return_value = [{"id": 1, "dph_total": 0.5}]
     runner._client.provision.return_value = {"id": 42}
-    runner._client.get_instance_ip.return_value = "1.2.3.4"
+    runner._client.get_instance_details.return_value = {
+        "public_ipaddr": "1.2.3.4",
+        "ssh_host": "ssh1.vast.ai",
+        "ssh_port": 12345,
+    }
 
     worker = AsyncMock()
     worker.health_check.return_value = True
@@ -42,16 +46,23 @@ async def test_run_async_emits_started_and_completed(tmp_path):
     importer.import_tarball.return_value = 3
     runner._importer = importer
 
+    # Mock subprocess so no real SSH is attempted
+    fake_proc = MagicMock()
+    fake_proc.returncode = None  # tunnel still running (not exited)
+    fake_proc.terminate = MagicMock()
+    fake_proc.wait = AsyncMock()
+
     with patch("app.services.vast_runner.InstanceWorkerClient", return_value=worker):
         with patch("app.services.vast_runner._save_active_instance"):
             with patch("app.services.vast_runner._clear_active_instance"):
-                (tmp_path / "run-1").mkdir()
-                await runner.run_async(
-                    "run-1",
-                    video=str(tmp_path / "video.mp4"),
-                    output_dir=str(tmp_path / "run-1"),
-                    db=str(tmp_path / "cards.sqlite"),
-                )
+                with patch("asyncio.create_subprocess_exec", return_value=fake_proc):
+                    (tmp_path / "run-1").mkdir()
+                    await runner.run_async(
+                        "run-1",
+                        video=str(tmp_path / "video.mp4"),
+                        output_dir=str(tmp_path / "run-1"),
+                        db=str(tmp_path / "cards.sqlite"),
+                    )
 
     event_names = [call.args[1].name for call in runner.bus.emit.call_args_list]
     assert "run_started" in event_names
