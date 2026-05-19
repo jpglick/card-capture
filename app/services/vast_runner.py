@@ -60,6 +60,7 @@ class VastAIRunner:
         self._idle_timeout_s = idle_timeout_s
         self._instance_id: Optional[int] = None
         self._worker: Optional[InstanceWorkerClient] = None
+        self._ssh_tunnel: Optional[asyncio.subprocess.Process] = None
         self._importer = ResultImporter(db_path=db_path, output_base=output_base)
 
     # ------------------------------------------------------------------
@@ -182,6 +183,13 @@ class VastAIRunner:
         if self._worker:
             await self._worker.close()
             self._worker = None
+        if self._ssh_tunnel:
+            try:
+                self._ssh_tunnel.terminate()
+                await asyncio.wait_for(self._ssh_tunnel.wait(), timeout=3)
+            except Exception:
+                pass
+            self._ssh_tunnel = None
         self._client.destroy(self._instance_id)
         _clear_active_instance()
         self._instance_id = None
@@ -205,39 +213,57 @@ class VastAIRunner:
         self._instance_id = result["id"]
         _save_active_instance(self._instance_id)
 
-        # Wait for IP (up to 3 minutes — image pull can delay container start)
+        # Wait for SSH details + IP (up to 3 minutes)
+        ssh_host: str = ""
+        ssh_port: int = 0
         ip: Optional[str] = None
         for _ in range(36):
             await asyncio.sleep(5)
-            ip = self._client.get_instance_ip(self._instance_id)
-            if ip:
+            details = self._client.get_instance_details(self._instance_id)
+            ip = details.get("public_ipaddr") or None
+            ssh_host = details.get("ssh_host", "")
+            ssh_port = int(details.get("ssh_port", 0) or 0)
+            if ip and ssh_host and ssh_port:
                 break
         if not ip:
             raise RuntimeError("Instance did not receive an IP within 3 minutes")
 
-        self._worker = InstanceWorkerClient(f"http://{ip}:8765")
+        print(f"[vast.ai] Instance {self._instance_id} up — IP {ip}", flush=True)
+        print(f"[vast.ai] SSH: ssh -p {ssh_port} root@{ssh_host}", flush=True)
 
-        # Fetch SSH connection details so the user can debug via console if needed
-        try:
-            details = self._client.get_instance_details(self._instance_id)
-            ssh_host = details.get("ssh_host", "")
-            ssh_port = details.get("ssh_port", "")
-            if ssh_host and ssh_port:
-                print(f"[vast.ai] SSH: ssh -p {ssh_port} root@{ssh_host}", flush=True)
-                print(f"[vast.ai] Worker log: cat /tmp/worker.log", flush=True)
-        except Exception:
-            pass
+        # vast.ai blocks arbitrary ports via their firewall — port 8765 is not
+        # directly accessible from outside. We create an SSH tunnel so the Mac
+        # connects to localhost:8765 which forwards to the instance's port 8765.
+        if ssh_host and ssh_port:
+            print(f"[vast.ai] Opening SSH tunnel localhost:8765 → instance:8765…", flush=True)
+            self._ssh_tunnel = await asyncio.create_subprocess_exec(
+                "ssh", "-N",
+                "-L", "8765:localhost:8765",
+                "-p", str(ssh_port),
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null",
+                "-o", "ServerAliveInterval=30",
+                "-o", "ConnectTimeout=30",
+                f"root@{ssh_host}",
+            )
+            # Give the tunnel a moment to establish
+            await asyncio.sleep(4)
+            self._worker = InstanceWorkerClient("http://localhost:8765")
+        else:
+            # Fallback: try direct connection (may not work through vast.ai firewall)
+            print(f"[vast.ai] No SSH details — trying direct connection to {ip}:8765", flush=True)
+            self._worker = InstanceWorkerClient(f"http://{ip}:8765")
 
-        # Wait for health (up to 8 minutes — first pull of 12-15 GB image takes time)
+        # Wait for health (up to 8 minutes — image pull + startup takes time)
         for i in range(96):
             healthy = await self._worker.health_check()
             if healthy:
+                print(f"[vast.ai] Worker healthy after {i*5}s ✓", flush=True)
                 return
-            if i % 6 == 0:  # every 30s
-                print(f"[vast.ai] Waiting for worker on {ip}:8765… ({i*5}s)", flush=True)
+            if i % 6 == 0:
+                print(f"[vast.ai] Waiting for worker… ({i*5}s)", flush=True)
             await asyncio.sleep(5)
         raise RuntimeError(
             f"Instance worker did not become healthy within 8 minutes. "
-            f"SSH in to debug: ssh -p {ssh_port} root@{ssh_host} "
-            f"then check: cat /tmp/worker.log"
+            f"SSH in: ssh -p {ssh_port} root@{ssh_host}  |  cat /tmp/worker.log"
         )
