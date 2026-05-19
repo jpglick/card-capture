@@ -52,15 +52,15 @@ async def test_run_async_emits_started_and_completed(tmp_path):
     fake_proc.terminate = MagicMock()
     fake_proc.wait = AsyncMock()
 
-    mock_sock = MagicMock()
-    mock_sock.connect_ex.return_value = 0  # port "open" immediately
-    mock_sock.close = MagicMock()
+    mock_writer = AsyncMock()
+    mock_writer.close = MagicMock()
+    mock_writer.wait_closed = AsyncMock()
 
     with patch("app.services.vast_runner.InstanceWorkerClient", return_value=worker), \
          patch("app.services.vast_runner._save_active_instance"), \
          patch("app.services.vast_runner._clear_active_instance"), \
          patch("asyncio.create_subprocess_exec", return_value=fake_proc), \
-         patch("socket.socket", return_value=mock_sock):
+         patch("asyncio.open_connection", return_value=(AsyncMock(), mock_writer)):
         (tmp_path / "run-1").mkdir()
         await runner.run_async(
             "run-1",
