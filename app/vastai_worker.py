@@ -172,7 +172,12 @@ def _run_pipeline(job: dict) -> None:
             "--config-preset", config_preset,
             "--ui-run-id", job_id,
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(repo_root))
+        # Metaflow requires $USERNAME to identify the user. Inside Docker
+        # containers running as root this variable is often unset, so we set it.
+        env = os.environ.copy()
+        env.setdefault("USERNAME", "root")
+        env.setdefault("USER", "root")
+        result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(repo_root), env=env)
         if result.returncode != 0:
             raise RuntimeError(result.stderr[-1000:] or result.stdout[-500:])
     finally:
