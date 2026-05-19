@@ -249,14 +249,27 @@ class VastAIRunner:
                 f"root@{ssh_host}",
             ]
             print(f"[vast.ai] Running: {' '.join(tunnel_cmd)}", flush=True)
-            self._ssh_tunnel = await asyncio.create_subprocess_exec(*tunnel_cmd)
+            self._ssh_tunnel = await asyncio.create_subprocess_exec(
+                *tunnel_cmd,
+                stderr=asyncio.subprocess.PIPE,
+            )
             # Give tunnel time to establish
             await asyncio.sleep(6)
             if self._ssh_tunnel.returncode is not None:
+                # Read stderr for diagnosis
+                ssh_err = ""
+                try:
+                    ssh_err_bytes = await asyncio.wait_for(
+                        self._ssh_tunnel.stderr.read(2000), timeout=2
+                    )
+                    ssh_err = ssh_err_bytes.decode(errors="replace").strip()
+                except Exception:
+                    pass
+                print(f"[vast.ai] SSH tunnel stderr: {ssh_err}", flush=True)
                 raise RuntimeError(
-                    f"SSH tunnel exited immediately (code {self._ssh_tunnel.returncode}). "
-                    f"Ensure your SSH key is registered at cloud.vast.ai → Account → SSH Keys. "
-                    f"Manual test: ssh -p {ssh_port} root@{ssh_host} -N -L 8765:localhost:8765"
+                    f"SSH tunnel exited (code {self._ssh_tunnel.returncode}): {ssh_err or 'no output'}. "
+                    f"Fix: chmod 600 ~/.ssh/id_* && chmod 700 ~/.ssh  "
+                    f"Test: ssh -v -p {ssh_port} root@{ssh_host} echo ok"
                 )
             self._worker = InstanceWorkerClient("http://localhost:8765")
         else:
