@@ -237,6 +237,27 @@ class VastAIRunner:
         # vast.ai blocks arbitrary ports via their firewall — port 8765 is not
         # directly accessible. Create an SSH tunnel: Mac localhost:8765 → instance:8765.
         if ssh_host and ssh_port:
+            # Wait for the SSH proxy port to accept connections — it lags behind
+            # the instance IP assignment by 30-90 seconds on vast.ai's infrastructure.
+            import socket as _socket
+            print(f"[vast.ai] Waiting for SSH proxy {ssh_host}:{ssh_port}…", flush=True)
+            for i in range(36):  # up to 3 minutes
+                try:
+                    s = _socket.socket()
+                    s.settimeout(3)
+                    ok = s.connect_ex((ssh_host, ssh_port)) == 0
+                    s.close()
+                    if ok:
+                        print(f"[vast.ai] SSH proxy ready after {i*5}s", flush=True)
+                        break
+                except Exception:
+                    pass
+                await asyncio.sleep(5)
+            else:
+                raise RuntimeError(
+                    f"SSH proxy {ssh_host}:{ssh_port} not accepting connections after 3 minutes"
+                )
+
             print(f"[vast.ai] Opening SSH tunnel via {ssh_host}:{ssh_port}…", flush=True)
             tunnel_cmd = [
                 "ssh", "-N",
