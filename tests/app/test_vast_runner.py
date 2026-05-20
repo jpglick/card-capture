@@ -107,3 +107,9 @@ async def test_destroy_calls_client(tmp_path):
 
     runner._client.destroy.assert_called_once_with(42)
     assert runner._instance_id is None
+
+
+def test_vastai_runner_satisfies_gpu_runner_protocol(tmp_path):
+    from app.services.gpu_runner import GPURunner
+    runner = _make_runner(tmp_path)
+    assert isinstance(runner, GPURunner)
