@@ -19,7 +19,7 @@ from app.services.event_bus import Event, EventBus
 from app.services.result_importer import ResultImporter
 from app.services import _event_bus_registry
 
-_RUNPOD_API = "https://api.runpod.io/v2"
+_RUNPOD_API = "https://api.runpod.ai/v2"
 
 
 def _r2_client(account_id: str, access_key_id: str, secret_access_key: str):
