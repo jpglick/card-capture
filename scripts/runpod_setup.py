@@ -128,9 +128,11 @@ def create_endpoint(api_key: str, cfg: dict) -> None:
     r2_access_key_id = cfg.get("r2_access_key_id", "")
     r2_secret_access_key = cfg.get("r2_secret_access_key", "")
 
-    print(f"Creating serverless template from {DOCKER_IMAGE}…")
+    import time
+    template_name = f"{ENDPOINT_NAME}-{int(time.time())}"
+    print(f"Creating serverless template '{template_name}' from {DOCKER_IMAGE}…")
     template = runpod.create_template(
-        name=ENDPOINT_NAME,
+        name=template_name,
         image_name=DOCKER_IMAGE,
         docker_start_cmd="python3 -m app.runpod_handler",
         container_disk_in_gb=20,
@@ -154,7 +156,7 @@ def create_endpoint(api_key: str, cfg: dict) -> None:
     endpoint = runpod.create_endpoint(
         name=ENDPOINT_NAME,
         template_id=template_id,
-        gpu_ids="NVIDIA GeForce RTX 4090,NVIDIA GeForce RTX 5090",
+        gpu_ids="ADA_24",  # RTX 4090 pool (Ada Lovelace 24GB); add BLACKWELL_96 when 5090 available
         workers_min=0,
         workers_max=3,
         idle_timeout=30,
