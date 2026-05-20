@@ -23,9 +23,11 @@ def _svc(request: Request):
 
 
 def _build_runner(request: Request):
-    """Return VastAIRunner or PipelineRunner based on pipeline_backend config."""
-    import json, os
+    """Return the appropriate GPU runner based on pipeline_backend config."""
+    import json
+    import os
     from pathlib import Path as _Path
+
     _cfg = _Path(__file__).parent.parent.parent / "card_capture_config.json"
     cfg: dict = {}
     if _cfg.exists():
@@ -36,8 +38,9 @@ def _build_runner(request: Request):
 
     bus = request.app.state.event_bus
     db_path = request.app.state.db_path
+    backend = cfg.get("pipeline_backend", "mps")
 
-    if cfg.get("pipeline_backend") == "cuda":
+    if backend == "cuda":
         api_key = os.environ.get("VAST_API_KEY", "")
         if not api_key:
             raise HTTPException(status_code=500, detail="VAST_API_KEY environment variable is not set")
@@ -49,7 +52,50 @@ def _build_runner(request: Request):
             api_key=api_key,
             gpu_type=cfg.get("cuda_gpu_type", "RTX 4090"),
             template_id=cfg.get("vast_template_id", ""),
-            idle_timeout_s=int(cfg.get("cuda_idle_timeout_s", 300)),
+            idle_timeout_s=int(cfg.get("cuda_idle_timeout_s", 600)),
+        )
+
+    if backend == "beam":
+        api_key = cfg.get("beam_api_key") or os.environ.get("BEAM_API_KEY", "")
+        if not api_key:
+            raise HTTPException(status_code=500, detail="beam_api_key config or BEAM_API_KEY env var is not set")
+        volume_id = cfg.get("beam_volume_id", "")
+        endpoint_id = cfg.get("beam_endpoint_id", "")
+        if not volume_id or not endpoint_id:
+            raise HTTPException(status_code=500, detail="beam_volume_id and beam_endpoint_id must be configured")
+        from app.services.beam_runner import BeamRunner
+        return BeamRunner(
+            bus=bus,
+            db_path=db_path,
+            output_base=db_path.parent,
+            api_key=api_key,
+            volume_id=volume_id,
+            endpoint_id=endpoint_id,
+        )
+
+    if backend == "runpod":
+        api_key = cfg.get("runpod_api_key") or os.environ.get("RUNPOD_API_KEY", "")
+        if not api_key:
+            raise HTTPException(status_code=500, detail="runpod_api_key config or RUNPOD_API_KEY env var is not set")
+        endpoint_id = cfg.get("runpod_endpoint_id", "")
+        s3_bucket = cfg.get("runpod_s3_bucket", "")
+        s3_access_key_id = cfg.get("runpod_s3_access_key_id", "")
+        s3_secret_access_key = cfg.get("runpod_s3_secret_access_key", "")
+        if not endpoint_id or not s3_bucket:
+            raise HTTPException(
+                status_code=500,
+                detail="runpod_endpoint_id and runpod_s3_bucket must be configured",
+            )
+        from app.services.runpod_runner import RunPodRunner
+        return RunPodRunner(
+            bus=bus,
+            db_path=db_path,
+            output_base=db_path.parent,
+            api_key=api_key,
+            endpoint_id=endpoint_id,
+            s3_bucket=s3_bucket,
+            s3_access_key_id=s3_access_key_id,
+            s3_secret_access_key=s3_secret_access_key,
         )
 
     return PipelineRunner(bus=bus, flow_cls=None, db_path=db_path)
