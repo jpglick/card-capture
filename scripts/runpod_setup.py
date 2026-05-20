@@ -154,10 +154,10 @@ def create_endpoint(api_key: str, cfg: dict) -> None:
     endpoint = runpod.create_endpoint(
         name=ENDPOINT_NAME,
         template_id=template_id,
-        gpu_ids="AMPERE_24,AMPERE_48",
+        gpu_ids="NVIDIA GeForce RTX 4090,NVIDIA GeForce RTX 5090",
         workers_min=0,
         workers_max=3,
-        idle_timeout=60,
+        idle_timeout=30,
         scaler_type="QUEUE_DELAY",
         scaler_value=4,
     )
