@@ -28,13 +28,31 @@ _COMPUTE_FIELDS = {
     "cuda_gpu_type": str,
     "vast_template_id": str,
     "cuda_idle_timeout_s": int,
+    # Beam
+    "beam_api_key": str,
+    "beam_volume_id": str,
+    "beam_endpoint_id": str,
+    # RunPod
+    "runpod_api_key": str,
+    "runpod_endpoint_id": str,
+    "runpod_s3_bucket": str,
+    "runpod_s3_access_key_id": str,
+    "runpod_s3_secret_access_key": str,
 }
 
 _COMPUTE_DEFAULTS = {
     "pipeline_backend": "mps",
     "cuda_gpu_type": "RTX 4090",
     "vast_template_id": "",
-    "cuda_idle_timeout_s": 300,
+    "cuda_idle_timeout_s": 600,
+    "beam_api_key": "",
+    "beam_volume_id": "",
+    "beam_endpoint_id": "",
+    "runpod_api_key": "",
+    "runpod_endpoint_id": "",
+    "runpod_s3_bucket": "",
+    "runpod_s3_access_key_id": "",
+    "runpod_s3_secret_access_key": "",
 }
 
 from app.schemas.v1 import ConfigPlayground, ConfigPreset
