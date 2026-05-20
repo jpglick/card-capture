@@ -6,17 +6,14 @@ Start with:  uvicorn app.vastai_worker:app --host 0.0.0.0 --port 8765
 from __future__ import annotations
 
 import asyncio
-import io
-import json
 import os
-import subprocess
-import sys
-import tarfile
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.responses import FileResponse
+
+from app.worker_core import apply_cuda_config, restore_config, run_pipeline, package_results
 
 app = FastAPI(title="card-capture vast.ai worker")
 
@@ -115,100 +112,21 @@ async def _worker_loop():
             _queue.task_done()
 
 
-_CUDA_CONFIG_OVERRIDES: dict = {
-    "detector": "cuda",
-    "device": "cuda",
-    "cuda_stride": 2,
-    "cuda_batch_size": 32,
-    "pipeline_backend": "cuda",
-}
-
-_CONFIG_PATH = Path(__file__).parent.parent / "card_capture_config.json"
-
-
-def _apply_cuda_config() -> dict:
-    """Write CUDA overrides to config; return original values for restore."""
-    cfg: dict = {}
-    if _CONFIG_PATH.exists():
-        try:
-            cfg = json.loads(_CONFIG_PATH.read_text())
-        except Exception:
-            pass
-    original = {k: cfg.get(k) for k in _CUDA_CONFIG_OVERRIDES}
-    cfg.update(_CUDA_CONFIG_OVERRIDES)
-    _CONFIG_PATH.write_text(json.dumps(cfg, indent=2))
-    return original
-
-
-def _restore_config(original: dict) -> None:
-    """Restore config values that were overridden by _apply_cuda_config."""
-    if not _CONFIG_PATH.exists():
-        return
-    try:
-        cfg = json.loads(_CONFIG_PATH.read_text())
-        cfg.update(original)
-        _CONFIG_PATH.write_text(json.dumps(cfg, indent=2))
-    except Exception:
-        pass
-
-
 def _run_pipeline(job: dict) -> None:
     job_id = job["job_id"]
     video_path = job["video_path"]
     config_preset = job.get("config_preset", "balanced")
     output_dir = _OUTPUT_DIR / job_id
-    output_dir.mkdir(parents=True, exist_ok=True)
-    db_path = output_dir / "cards.sqlite"
 
-    original = _apply_cuda_config()
+    original = apply_cuda_config()
     try:
-        repo_root = Path(__file__).parent.parent
-        cmd = [
-            sys.executable, "-m", "pipeline.card_capture_flow",
-            "--no-pylint", "run",
-            "--video", video_path,
-            "--output-dir", str(output_dir),
-            "--db", str(db_path),
-            "--config-preset", config_preset,
-            "--ui-run-id", job_id,
-        ]
-        # Metaflow requires $USERNAME to identify the user. Inside Docker
-        # containers running as root this variable is often unset, so we set it.
-        env = os.environ.copy()
-        env.setdefault("USERNAME", "root")
-        env.setdefault("USER", "root")
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(repo_root), env=env)
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr[-1000:] or result.stdout[-500:])
+        db_path = run_pipeline(job_id, video_path, config_preset, output_dir)
+        tarball_bytes = package_results(job_id, output_dir, db_path)
     finally:
-        _restore_config(original)
-
-    _package_results(job_id, output_dir, db_path)
-
-
-def _package_results(job_id: str, output_dir: Path, db_path: Path) -> None:
-    """Bundle crops + export.json into a gzipped tarball."""
-    import sqlite3
-
-    cards: list[dict] = []
-    if db_path.exists():
-        with sqlite3.connect(db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                "SELECT track_id, session_id, fused_image_path, angle FROM card_instances WHERE run_id=?",
-                (job_id,),
-            ).fetchall()
-            cards = [dict(r) for r in rows]
+        restore_config(original)
 
     tarball = _OUTPUT_DIR / f"{job_id}.tar.gz"
-    with tarfile.open(tarball, "w:gz") as tar:
-        crops_dir = output_dir / "crops"
-        if crops_dir.exists():
-            tar.add(crops_dir, arcname="crops")
-        export_bytes = json.dumps(cards).encode()
-        info = tarfile.TarInfo(name="export.json")
-        info.size = len(export_bytes)
-        tar.addfile(info, io.BytesIO(export_bytes))
+    tarball.write_bytes(tarball_bytes)
 
 
 def _shutdown() -> None:
