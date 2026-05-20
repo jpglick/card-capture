@@ -29,6 +29,7 @@ class RunPodRunner:
         s3_bucket: str,
         s3_access_key_id: str,
         s3_secret_access_key: str,
+        s3_endpoint_url: str = _RUNPOD_S3_ENDPOINT,
     ) -> None:
         self.bus = bus
         self._api_key = api_key
@@ -36,7 +37,7 @@ class RunPodRunner:
         self._s3_bucket = s3_bucket
         self._s3 = boto3.client(
             "s3",
-            endpoint_url=_RUNPOD_S3_ENDPOINT,
+            endpoint_url=s3_endpoint_url,
             aws_access_key_id=s3_access_key_id,
             aws_secret_access_key=s3_secret_access_key,
         )
