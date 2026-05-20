@@ -35,10 +35,11 @@ _COMPUTE_FIELDS = {
     # RunPod
     "runpod_api_key": str,
     "runpod_endpoint_id": str,
-    "runpod_s3_endpoint_url": str,
-    "runpod_s3_bucket": str,
-    "runpod_s3_access_key_id": str,
-    "runpod_s3_secret_access_key": str,
+    # Cloudflare R2 (shared transfer storage for RunPod)
+    "r2_account_id": str,
+    "r2_bucket": str,
+    "r2_access_key_id": str,
+    "r2_secret_access_key": str,
 }
 
 _COMPUTE_DEFAULTS = {
@@ -51,10 +52,10 @@ _COMPUTE_DEFAULTS = {
     "beam_endpoint_id": "",
     "runpod_api_key": "",
     "runpod_endpoint_id": "",
-    "runpod_s3_endpoint_url": "",
-    "runpod_s3_bucket": "",
-    "runpod_s3_access_key_id": "",
-    "runpod_s3_secret_access_key": "",
+    "r2_account_id": "",
+    "r2_bucket": "",
+    "r2_access_key_id": "",
+    "r2_secret_access_key": "",
 }
 
 from app.schemas.v1 import ConfigPlayground, ConfigPreset

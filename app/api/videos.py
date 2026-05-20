@@ -78,14 +78,14 @@ def _build_runner(request: Request):
         if not api_key:
             raise HTTPException(status_code=500, detail="runpod_api_key config or RUNPOD_API_KEY env var is not set")
         endpoint_id = cfg.get("runpod_endpoint_id", "")
-        s3_bucket = cfg.get("runpod_s3_bucket", "")
-        s3_endpoint_url = cfg.get("runpod_s3_endpoint_url", "")
-        s3_access_key_id = cfg.get("runpod_s3_access_key_id", "")
-        s3_secret_access_key = cfg.get("runpod_s3_secret_access_key", "")
-        if not endpoint_id or not s3_bucket or not s3_endpoint_url:
+        r2_account_id = cfg.get("r2_account_id", "")
+        r2_bucket = cfg.get("r2_bucket", "")
+        r2_access_key_id = cfg.get("r2_access_key_id", "")
+        r2_secret_access_key = cfg.get("r2_secret_access_key", "")
+        if not endpoint_id or not r2_account_id or not r2_bucket:
             raise HTTPException(
                 status_code=500,
-                detail="runpod_endpoint_id, runpod_s3_bucket, and runpod_s3_endpoint_url must be configured",
+                detail="runpod_endpoint_id, r2_account_id, and r2_bucket must be configured",
             )
         from app.services.runpod_runner import RunPodRunner
         return RunPodRunner(
@@ -94,10 +94,10 @@ def _build_runner(request: Request):
             output_base=db_path.parent,
             api_key=api_key,
             endpoint_id=endpoint_id,
-            s3_bucket=s3_bucket,
-            s3_access_key_id=s3_access_key_id,
-            s3_secret_access_key=s3_secret_access_key,
-            s3_endpoint_url=s3_endpoint_url,
+            r2_account_id=r2_account_id,
+            r2_bucket=r2_bucket,
+            r2_access_key_id=r2_access_key_id,
+            r2_secret_access_key=r2_secret_access_key,
         )
 
     return PipelineRunner(bus=bus, flow_cls=None, db_path=db_path)

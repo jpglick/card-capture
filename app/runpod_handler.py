@@ -3,33 +3,43 @@
 Deploy by building a Docker image with this file as the entrypoint:
     CMD ["python", "-m", "app.runpod_handler"]
 
-RunPod injects AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY as env vars
-for the built-in S3 storage.
+R2 credentials are injected as RunPod endpoint environment variables:
+    R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import boto3
 import runpod
+from botocore.config import Config as BotocoreConfig
 
 from app.worker_core import apply_cuda_config, restore_config, run_pipeline, package_results
 
-# Confirm from https://docs.runpod.io/storage/s3-api before deploying
-_RUNPOD_S3_ENDPOINT = "https://storage.runpod.io"
+
+def _r2_client():
+    account_id = os.environ["R2_ACCOUNT_ID"]
+    return boto3.client(
+        "s3",
+        endpoint_url=f"https://{account_id}.r2.cloudflarestorage.com",
+        region_name="auto",
+        aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
+        aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
+        config=BotocoreConfig(s3={"addressing_style": "path"}),
+    )
 
 
 def handler(job: dict) -> dict:
     """RunPod calls this for each submitted job."""
     inp = job["input"]
     run_id = inp["run_id"]
-    video_key = inp["video_s3_key"]
-    results_key = inp["results_s3_key"]
-    bucket = inp["bucket"]
+    video_key = inp["video_r2_key"]
+    results_key = inp["results_r2_key"]
+    bucket = inp["r2_bucket"]
     config_preset = inp.get("config_preset", "balanced")
 
-    # Credentials are injected by RunPod as standard AWS env vars
-    s3 = boto3.client("s3", endpoint_url=_RUNPOD_S3_ENDPOINT)
+    s3 = _r2_client()
 
     video_path = Path(f"/tmp/{run_id}_input.mov")
     s3.download_file(bucket, video_key, str(video_path))

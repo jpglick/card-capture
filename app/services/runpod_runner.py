@@ -1,4 +1,9 @@
-"""RunPodRunner — orchestrates RunPod serverless endpoint for GPU pipeline runs."""
+"""RunPodRunner — orchestrates RunPod serverless endpoint for GPU pipeline runs.
+
+File transfer uses Cloudflare R2 (S3-compatible, zero egress fees).
+R2 credentials are also injected into the RunPod endpoint as env vars so the
+worker handler can access the same bucket without embedding secrets in job payloads.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -8,14 +13,29 @@ from typing import Optional
 
 import boto3
 import httpx
+from botocore.config import Config as BotocoreConfig
 
 from app.services.event_bus import Event, EventBus
 from app.services.result_importer import ResultImporter
 from app.services import _event_bus_registry
 
 _RUNPOD_API = "https://api.runpod.io/v2"
-# Confirm this URL from https://docs.runpod.io/storage/s3-api before deploying
-_RUNPOD_S3_ENDPOINT = "https://storage.runpod.io"
+
+
+def _r2_client(account_id: str, access_key_id: str, secret_access_key: str):
+    return boto3.client(
+        "s3",
+        endpoint_url=f"https://{account_id}.r2.cloudflarestorage.com",
+        region_name="auto",
+        aws_access_key_id=access_key_id,
+        aws_secret_access_key=secret_access_key,
+        config=BotocoreConfig(
+            connect_timeout=30,
+            read_timeout=300,
+            retries={"max_attempts": 2},
+            s3={"addressing_style": "path"},
+        ),
+    )
 
 
 class RunPodRunner:
@@ -26,21 +46,19 @@ class RunPodRunner:
         output_base: Path,
         api_key: str,
         endpoint_id: str,
-        s3_bucket: str,
-        s3_access_key_id: str,
-        s3_secret_access_key: str,
-        s3_endpoint_url: str = _RUNPOD_S3_ENDPOINT,
+        r2_account_id: str,
+        r2_bucket: str,
+        r2_access_key_id: str,
+        r2_secret_access_key: str,
     ) -> None:
         self.bus = bus
         self._api_key = api_key
         self._endpoint_id = endpoint_id
-        self._s3_bucket = s3_bucket
-        self._s3 = boto3.client(
-            "s3",
-            endpoint_url=s3_endpoint_url,
-            aws_access_key_id=s3_access_key_id,
-            aws_secret_access_key=s3_secret_access_key,
-        )
+        self._r2_bucket = r2_bucket
+        self._r2_account_id = r2_account_id
+        self._r2_access_key_id = r2_access_key_id
+        self._r2_secret_access_key = r2_secret_access_key
+        self._s3 = _r2_client(r2_account_id, r2_access_key_id, r2_secret_access_key)
         self._importer = ResultImporter(db_path=db_path, output_base=output_base)
         self._headers = {
             "Authorization": f"Bearer {api_key}",
@@ -67,8 +85,8 @@ class RunPodRunner:
             self._record_run_start(run_id, video_id, db)
             self.bus.emit(run_id, Event(name="run_started"))
 
-            self.bus.emit(run_id, Event(name="log", payload={"line": "Uploading video to RunPod storage…"}))
-            print(f"[{run_id}] runpod: uploading video…", flush=True)
+            self.bus.emit(run_id, Event(name="log", payload={"line": "Uploading video to R2…"}))
+            print(f"[{run_id}] runpod: uploading video to R2…", flush=True)
             await asyncio.get_event_loop().run_in_executor(
                 None, self._upload_video, video_key, Path(video)
             )
@@ -91,7 +109,7 @@ class RunPodRunner:
                 poll_count += 1
                 await asyncio.sleep(3)
 
-            self.bus.emit(run_id, Event(name="log", payload={"line": "Downloading results…"}))
+            self.bus.emit(run_id, Event(name="log", payload={"line": "Downloading results from R2…"}))
             tarball = Path(output_dir) / f"{run_id}_results.tar.gz"
             Path(output_dir).mkdir(parents=True, exist_ok=True)
             await asyncio.get_event_loop().run_in_executor(
@@ -110,7 +128,7 @@ class RunPodRunner:
             raise
         finally:
             _event_bus_registry.clear(run_id)
-            await self._cleanup_s3(run_id)
+            await self._cleanup_r2(run_id)
 
     async def run_batch_async(self, jobs: list[dict]) -> None:
         for job in jobs:
@@ -120,10 +138,10 @@ class RunPodRunner:
         pass  # RunPod manages container lifecycle
 
     def _upload_video(self, key: str, path: Path) -> None:
-        self._s3.upload_file(str(path), self._s3_bucket, key)
+        self._s3.upload_file(str(path), self._r2_bucket, key)
 
     def _download_results(self, key: str, dest: Path) -> None:
-        self._s3.download_file(self._s3_bucket, key, str(dest))
+        self._s3.download_file(self._r2_bucket, key, str(dest))
 
     async def _submit_job(
         self, run_id: str, video_key: str, results_key: str, config_preset: str
@@ -135,9 +153,9 @@ class RunPodRunner:
                 json={
                     "input": {
                         "run_id": run_id,
-                        "video_s3_key": video_key,
-                        "results_s3_key": results_key,
-                        "bucket": self._s3_bucket,
+                        "video_r2_key": video_key,
+                        "results_r2_key": results_key,
+                        "r2_bucket": self._r2_bucket,
                         "config_preset": config_preset,
                     }
                 },
@@ -153,13 +171,13 @@ class RunPodRunner:
             r.raise_for_status()
             return r.json().get("status", "UNKNOWN")
 
-    async def _cleanup_s3(self, run_id: str) -> None:
+    async def _cleanup_r2(self, run_id: str) -> None:
         loop = asyncio.get_event_loop()
         for key in [f"runs/{run_id}/input.mov", f"runs/{run_id}/results.tar.gz"]:
             try:
                 await loop.run_in_executor(
                     None,
-                    lambda k=key: self._s3.delete_object(Bucket=self._s3_bucket, Key=k),
+                    lambda k=key: self._s3.delete_object(Bucket=self._r2_bucket, Key=k),
                 )
             except Exception:
                 pass
