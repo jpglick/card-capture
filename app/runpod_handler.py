@@ -107,7 +107,8 @@ def _print_db_diagnostics(run_id: str, db_path: Path, output_dir: Path) -> None:
 
             print(f"[diag] pipeline_events rows: {count('pipeline_events')}", flush=True)
             print(f"[diag] card_instances total: {count('card_instances')}", flush=True)
-            print(f"[diag] card_instances this run: {count('card_instances', f'run_id=\"{run_id}\"')}", flush=True)
+            run_filter = 'run_id="' + run_id + '"'
+            print(f"[diag] card_instances this run: {count('card_instances', run_filter)}", flush=True)
             print(f"[diag] card_views total: {count('card_views')}", flush=True)
 
             # Show event counts by type for this run
