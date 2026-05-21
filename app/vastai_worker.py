@@ -120,7 +120,7 @@ def _run_pipeline(job: dict) -> None:
 
     original = apply_cuda_config()
     try:
-        db_path = run_pipeline(job_id, video_path, config_preset, output_dir)
+        db_path, _ = run_pipeline(job_id, video_path, config_preset, output_dir)
         tarball_bytes = package_results(job_id, output_dir, db_path)
     finally:
         restore_config(original)

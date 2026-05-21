@@ -55,21 +55,28 @@ def handler(job: dict) -> dict:
     video_path = Path(f"/tmp/{run_id}_input.mov")
     s3.download_file(bucket, video_key, str(video_path))
     video_mb = video_path.stat().st_size / 1_048_576
-    t0 = _t(f"R2 download ({video_mb:.1f} MB)", t0)
+    t_download = time.time() - t0
+    print(f"[diag] R2 download ({video_mb:.1f} MB): {t_download:.1f}s", flush=True)
+    t0 = time.time()
 
     # ── Pipeline ─────────────────────────────────────────────────────────────
     output_dir = Path(f"/tmp/cc_output/{run_id}")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     original = apply_cuda_config()
+    pipeline_stdout = ""
     try:
-        db_path = run_pipeline(run_id, str(video_path), config_preset, output_dir)
+        db_path, pipeline_stdout = run_pipeline(run_id, str(video_path), config_preset, output_dir)
     finally:
         restore_config(original)
-    t0 = _t("pipeline total", t0)
+    t_pipeline = time.time() - t0
+    t0 = time.time()
 
     # ── Diagnostics from DB ──────────────────────────────────────────────────
-    _print_db_diagnostics(run_id, db_path, output_dir)
+    db_diag = _collect_db_diagnostics(run_id, db_path, output_dir)
+
+    # ── Step timings from Metaflow stdout ────────────────────────────────────
+    step_timings = _parse_metaflow_timings(pipeline_stdout)
 
     # ── Package ──────────────────────────────────────────────────────────────
     tarball_bytes = package_results(run_id, output_dir, db_path)
@@ -78,20 +85,32 @@ def handler(job: dict) -> dict:
 
     # ── Upload ───────────────────────────────────────────────────────────────
     s3.put_object(Bucket=bucket, Key=results_key, Body=tarball_bytes)
-    t0 = _t(f"R2 upload", t0)
+    t_upload_out = time.time() - t0
 
     total = time.time() - job_start
     print(f"[diag] TOTAL handler time: {total:.1f}s", flush=True)
 
-    return {"status": "complete", "results_key": results_key}
+    return {
+        "status": "complete",
+        "results_key": results_key,
+        "timings": {
+            "r2_download_s": round(t_download, 1),
+            "pipeline_s": round(t_pipeline, 1),
+            "r2_upload_out_s": round(t_upload_out, 1),
+            "total_s": round(total, 1),
+            "steps": step_timings,
+        },
+        "diagnostics": db_diag,
+    }
 
 
-def _print_db_diagnostics(run_id: str, db_path: Path, output_dir: Path) -> None:
-    """Print card/frame counts from the pipeline DB."""
+def _collect_db_diagnostics(run_id: str, db_path: Path, output_dir: Path) -> dict:
+    """Collect card/frame counts from the pipeline DB and return as dict."""
     import sqlite3 as _sqlite3
+    result: dict = {}
     if not db_path.exists():
-        print("[diag] DB not found — pipeline produced no output", flush=True)
-        return
+        result["error"] = "DB not found"
+        return result
     try:
         with _sqlite3.connect(db_path) as conn:
             tables = {r[0] for r in conn.execute(
@@ -105,31 +124,49 @@ def _print_db_diagnostics(run_id: str, db_path: Path, output_dir: Path) -> None:
                     q += f" WHERE {where}"
                 return conn.execute(q).fetchone()[0]
 
-            print(f"[diag] pipeline_events rows: {count('pipeline_events')}", flush=True)
-            print(f"[diag] card_instances total: {count('card_instances')}", flush=True)
-            run_filter = 'run_id="' + run_id + '"'
-            print(f"[diag] card_instances this run: {count('card_instances', run_filter)}", flush=True)
-            print(f"[diag] card_views total: {count('card_views')}", flush=True)
+            result["card_instances_total"] = count("card_instances")
+            result["card_instances_this_run"] = count("card_instances", 'run_id="' + run_id + '"')
+            result["card_views_total"] = count("card_views")
+            result["pipeline_events_total"] = count("pipeline_events")
 
-            # Show event counts by type for this run
             if "pipeline_events" in tables:
                 rows = conn.execute(
                     "SELECT event_type, COUNT(*) as n FROM pipeline_events "
                     "WHERE run_id=? GROUP BY event_type ORDER BY n DESC",
                     (run_id,),
                 ).fetchall()
-                for event_type, n in rows:
-                    print(f"[diag]   event {event_type}: {n}", flush=True)
+                result["events"] = {et: n for et, n in rows}
     except Exception as e:
-        print(f"[diag] DB diagnostics error: {e}", flush=True)
+        result["error"] = str(e)
 
-    # Crops on disk
     crops_dir = output_dir / "crops"
-    if crops_dir.exists():
-        n_crops = len(list(crops_dir.glob("*.jpg")) + list(crops_dir.glob("*.png")))
-        print(f"[diag] crops on disk: {n_crops}", flush=True)
-    else:
-        print("[diag] crops dir not found", flush=True)
+    result["crops_on_disk"] = len(list(crops_dir.glob("*.jpg")) + list(crops_dir.glob("*.png"))) if crops_dir.exists() else 0
+    for k, v in result.items():
+        print(f"[diag] {k}: {v}", flush=True)
+    return result
+
+
+def _parse_metaflow_timings(stdout: str) -> dict:
+    """Parse Metaflow log timestamps to produce a per-step timing dict."""
+    import re
+    from datetime import datetime
+
+    pattern = re.compile(
+        r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+)"
+        r" \[\d+/(\w+)/\d+"
+        r".*?\] (Task is starting|Task finished successfully)"
+    )
+    starts: dict = {}
+    timings: dict = {}
+    fmt = "%Y-%m-%d %H:%M:%S.%f"
+    for ts_str, step, event in pattern.findall(stdout):
+        ts = datetime.strptime(ts_str, fmt)
+        if event == "Task is starting":
+            starts[step] = ts
+        elif event == "Task finished successfully" and step in starts:
+            timings[step] = round((ts - starts[step]).total_seconds(), 1)
+    print(f"[diag] step timings: {timings}", flush=True)
+    return timings
 
 
 runpod.serverless.start({"handler": handler})

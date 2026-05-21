@@ -47,8 +47,8 @@ def restore_config(original: dict) -> None:
         pass
 
 
-def run_pipeline(job_id: str, video_path: str, config_preset: str, output_dir: Path) -> Path:
-    """Run the Metaflow pipeline subprocess; return path to the output db."""
+def run_pipeline(job_id: str, video_path: str, config_preset: str, output_dir: Path) -> tuple:
+    """Run the Metaflow pipeline subprocess; return (db_path, stdout)."""
     output_dir.mkdir(parents=True, exist_ok=True)
     db_path = output_dir / "cards.sqlite"
     repo_root = Path(__file__).parent.parent
@@ -76,7 +76,7 @@ def run_pipeline(job_id: str, video_path: str, config_preset: str, output_dir: P
     if result.returncode != 0:
         detail = f"STDOUT:\n{result.stdout[-2000:]}\nSTDERR:\n{result.stderr[-2000:]}"
         raise RuntimeError(detail)
-    return db_path
+    return db_path, result.stdout
 
 
 def _print_metaflow_timings(stdout: str) -> None:
