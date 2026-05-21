@@ -19,13 +19,17 @@ RUN apt-get update -q && \
     apt-get install -y -q --no-install-recommends \
         cmake build-essential git \
         libavcodec-dev libavfilter-dev libavformat-dev libavutil-dev libswscale-dev \
-        cuda-nvcodec-12-1 \
     && rm -rf /var/lib/apt/lists/*
 
+# NVIDIA removed nvcuvid.h and libnvcuvid.so from the CUDA toolkit in 11.1+.
+# They ship as a separate Video Codec SDK download. The endorsed approach for
+# headless builds is a stub .so — cmake find_library() and the linker are satisfied;
+# at runtime on RunPod the real libnvcuvid.so.1 from the NVIDIA driver mount is used.
+RUN printf 'void nvcuvid_stub(void) {}' > /tmp/stub.c && \
+    gcc -shared -fPIC -o /usr/local/cuda/lib64/stubs/libnvcuvid.so /tmp/stub.c && \
+    rm /tmp/stub.c
+
 # Clone decord and build with CUDA/NVDEC support.
-# cuda-nvcodec-12-1 provides libnvcuvid.so and nvcuvid.h/cuviddec.h headers
-# which cmake requires. At runtime on GPU instances the driver's libnvcuvid.so.1
-# is used instead via the NVIDIA container toolkit mount.
 RUN git clone --recursive https://github.com/dmlc/decord /tmp/decord && \
     cd /tmp/decord && mkdir build && cd build && \
     cmake .. -DUSE_CUDA=ON -DCMAKE_BUILD_TYPE=Release && \
