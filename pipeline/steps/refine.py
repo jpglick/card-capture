@@ -56,8 +56,10 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
     from card_capture.fuser import find_glare_centroid
     from card_capture.scoring import QualityScorer
     from card_capture.presence.background_novelty import quad_novelty
-    from card_capture.pipeline_utils import _select_canonical_entries, _glare_mask, _laplacian_heatmap, _compress_array
-    from card_capture.ingestion import _open_capture
+    from card_capture.pipeline_utils import (
+        _select_canonical_entries, _glare_mask, _laplacian_heatmap, _compress_array,
+        decode_frames_gpu, _compute_laplacian_scan_indices,
+    )
     from card_capture.selector import ScoredCandidate
     from card_capture.models import QualityScore
     from card_capture.storage import Storage
@@ -101,6 +103,14 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
         if _dets:
             _lap_ranges.append({"instance_id": _td["instance_id"], "detections": _dets})
 
+    # Compute union of all frame indices needed by Laplacian scan and Kornia warp,
+    # then decode once via NVDEC instead of two separate CPU VideoCapture passes.
+    _lap_scan_indices = _compute_laplacian_scan_indices(_lap_ranges, ctx.laplacian_scan_stride)
+    _all_needed = canonical_indices | _lap_scan_indices
+    decoded_images: Dict[int, np.ndarray] = {}
+    if _all_needed:
+        decoded_images = decode_frames_gpu(video_path, sorted(_all_needed))
+
     _lap_results: Dict[str, list] = {}
     try:
         _lap_results = _laplacian_select_frames(
@@ -109,6 +119,7 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
             scan_stride=ctx.laplacian_scan_stride,
             top_k=_lap_top_k,
             max_corner_gap=ctx.max_corner_gap_frames,
+            decoded_frames=decoded_images if decoded_images else None,
         )
     except Exception as _e:
         print(f"[Refine] Laplacian scan failed, falling back to temporal-stride frames: {_e}")
@@ -118,23 +129,6 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
         for _fi, _ in _sel_list:
             canonical_indices.add(int(_fi))
     # ----------------------------------------
-
-    decoded_images: Dict[int, np.ndarray] = {}
-    if canonical_indices:
-        sampler_telemetry = track_out.sampler_telemetry
-        capture = _open_capture(video_path)
-        try:
-            curr_idx = 0
-            max_target = max(canonical_indices)
-            while curr_idx <= max_target:
-                ok, frame = capture.read()
-                if not ok:
-                    break
-                if curr_idx in canonical_indices:
-                    decoded_images[curr_idx] = frame
-                curr_idx += 1
-        finally:
-            capture.release()
 
     # Set up Kornia normalizer
     normalizer = PrecisionNormalizer()
