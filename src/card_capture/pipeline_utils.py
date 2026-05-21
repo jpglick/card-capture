@@ -551,20 +551,34 @@ def decode_frames_gpu(video_path, indices: list) -> dict:
     if not indices:
         return {}
 
+    allow_fallback = os.environ.get("CC_CUDA_ALLOW_CPU_FALLBACK", "0") == "1"
+
+    # decord.gpu(0) always succeeds even when decord was compiled without CUDA —
+    # the failure surfaces only when VideoReader actually tries to decode.
+    # So we attempt GPU first, then fall back on DECORDError "CUDA not enabled".
     try:
         ctx = decord.gpu(0)
     except Exception:
-        if os.environ.get("CC_CUDA_ALLOW_CPU_FALLBACK", "0") == "1":
+        if allow_fallback:
             ctx = decord.cpu(0)
         else:
             raise RuntimeError(
                 "decode_frames_gpu requires NVDEC (decord GPU context). "
-                "Set CC_CUDA_ALLOW_CPU_FALLBACK=1 to allow CPU fallback "
-                "in dev/test environments."
+                "Set CC_CUDA_ALLOW_CPU_FALLBACK=1 to allow CPU fallback."
             )
 
     sorted_indices = sorted(set(indices))
-    vr = decord.VideoReader(str(video_path), ctx=ctx)
+    try:
+        vr = decord.VideoReader(str(video_path), ctx=ctx)
+    except Exception as e:
+        if "CUDA not enabled" in str(e) or "cuda" in str(e).lower():
+            # pip-installed decord is compiled without NVDEC — fall back to CPU
+            # random-access automatically. CPU get_batch is still orders of magnitude
+            # faster than sequential VideoCapture decode.
+            print(f"[decode_frames_gpu] decord NVDEC unavailable ({e}); using CPU decode.", flush=True)
+            vr = decord.VideoReader(str(video_path), ctx=decord.cpu(0))
+        else:
+            raise
     frames = vr.get_batch(sorted_indices)
     result = {idx: frames[i].asnumpy() for i, idx in enumerate(sorted_indices)}
     del frames
