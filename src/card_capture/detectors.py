@@ -98,13 +98,19 @@ def probe_torch_device_status(requested: str = "auto") -> TorchDeviceStatus:
             "forced_mps" if mps_available else "mps_unavailable",
         )
     if normalized == "cuda":
+        if not cuda_available:
+            import os as _os
+            if _os.environ.get("CARD_CAPTURE_ALLOW_CPU_FALLBACK"):
+                return TorchDeviceStatus(
+                    normalized, "cpu", mps_built, mps_available, cuda_available, "cuda_unavailable_fallback"
+                )
+            raise RuntimeError(
+                "CUDA was explicitly requested (device='cuda') but torch.cuda.is_available() returned False. "
+                "Check that the GPU driver is accessible and torch was built with CUDA support. "
+                "Set CARD_CAPTURE_ALLOW_CPU_FALLBACK=1 to run on CPU instead."
+            )
         return TorchDeviceStatus(
-            normalized,
-            "cuda" if cuda_available else "cpu",
-            mps_built,
-            mps_available,
-            cuda_available,
-            "forced_cuda" if cuda_available else "cuda_unavailable",
+            normalized, "cuda", mps_built, mps_available, cuda_available, "forced_cuda"
         )
 
     if platform.system() == "Darwin" and platform.machine() == "arm64" and mps_available:
