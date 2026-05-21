@@ -1,12 +1,10 @@
 """NVDEC-accelerated stride sampler for the CUDA pipeline.
 
-Replaces the AdaptivePresenceSampler on vast.ai GPU instances.
-No presence classifier, no windowing — uniform stride across the full video
-with dense coverage for the opening window (catching cards on stands).
+Uses decord.VideoLoader for continuous batched GPU decode — only batch_size
+frames in RAM at once regardless of video length.
 
 GPU-or-die: raises RuntimeError if NVDEC is unavailable and
-CC_CUDA_ALLOW_CPU_FALLBACK is not set. The vastai_worker never sets that
-variable; it is only for local dev/test environments.
+CC_CUDA_ALLOW_CPU_FALLBACK is not set. Production containers never set that flag.
 """
 from __future__ import annotations
 
@@ -16,25 +14,26 @@ from typing import Iterator, Optional, Union
 
 import numpy as np
 
+try:
+    import decord
+except ImportError:
+    decord = None  # type: ignore[assignment]
+
 from card_capture.models import FrameSample
 
 
 def _probe_gpu() -> object:
     """Return a decord GPU context (index 0), or raise on failure."""
-    import decord
     return decord.gpu(0)
 
 
 class CudaSampler:
-    """Uniform-stride video sampler using decord NVDEC for GPU decode.
+    """Uniform-stride video sampler using decord VideoLoader for GPU decode.
 
     Args:
         video_path: Source video file.
-        stride: Decode every Nth source frame outside the opening window.
-            Default 2 = 30fps effective from a 60fps source.
-        opening_scan_s: Always include every frame from the first N seconds,
-            regardless of stride, so cards resting on a stand at the start
-            are never missed.
+        stride: Sample every Nth source frame. Default 2 = every other frame.
+        opening_scan_s: Retained for API compatibility; no longer used.
     """
 
     def __init__(
@@ -45,7 +44,6 @@ class CudaSampler:
     ) -> None:
         self.video_path = Path(video_path) if video_path else None
         self.stride = max(1, stride)
-        self.opening_scan_s = max(0.0, opening_scan_s)
         self.last_source_fps: float = 30.0
         self.last_selected_frame_count: int = 0
 
@@ -59,25 +57,14 @@ class CudaSampler:
                     "Set CC_CUDA_ALLOW_CPU_FALLBACK=1 to allow CPU fallback "
                     "in dev/test environments."
                 )
-            import decord
             self._gpu_ctx = decord.cpu(0)
-
-    def _build_indices(self, vr) -> list:
-        total = len(vr)
-        self.last_source_fps = vr.get_avg_fps() or 30.0
-        opening_count = int(self.last_source_fps * self.opening_scan_s)
-        opening_indices = list(range(0, min(opening_count, total)))
-        stride_indices = list(range(opening_count, total, self.stride))
-        all_indices = sorted(set(opening_indices + stride_indices))
-        self.last_selected_frame_count = len(all_indices)
-        return all_indices
 
     def sample(
         self,
         video_path: Optional[Union[Path, str]] = None,
         sample_fps: Optional[float] = None,
     ) -> Iterator[FrameSample]:
-        """Yield FrameSample for each selected source frame, streaming in chunks to avoid OOM."""
+        """Yield FrameSample for each selected source frame."""
         for batch in self.sample_batches(batch_size=32, video_path=video_path):
             yield from batch
 
@@ -86,38 +73,50 @@ class CudaSampler:
         batch_size: int = 32,
         video_path: Optional[Union[Path, str]] = None,
     ) -> Iterator[list]:
-        """Yield lists of FrameSample, batch_size at a time.
+        """Yield lists of FrameSample using VideoLoader for continuous GPU streaming.
 
-        Decodes chunk-by-chunk so only batch_size frames are in RAM at once.
-        A 4K video decoded all-at-once would be ~11 GB; streaming keeps peak
-        usage at ~800 MB regardless of video length.
+        VideoLoader handles batch management internally. Only batch_size frames
+        are in RAM at once regardless of video length.
         """
-        import decord
-
         resolved = Path(video_path) if video_path else self.video_path
         if resolved is None:
             raise ValueError("video_path must be provided")
 
-        vr = decord.VideoReader(str(resolved), ctx=self._gpu_ctx)
-        all_indices = self._build_indices(vr)
+        # Probe video dimensions with a lightweight CPU reader
+        probe = decord.VideoReader(str(resolved), ctx=decord.cpu(0))
+        total = len(probe)
+        fps = probe.get_avg_fps() or 30.0
+        first = probe[0].asnumpy()
+        h, w = first.shape[:2]
+        self.last_source_fps = fps
+        self.last_selected_frame_count = max(1, (total + self.stride - 1) // self.stride)
+        del probe
 
-        if not all_indices:
+        if total == 0:
             return
 
-        for chunk_start in range(0, len(all_indices), batch_size):
-            chunk_indices = all_indices[chunk_start:chunk_start + batch_size]
-            frames = vr.get_batch(chunk_indices)
-            batch = []
-            for i, idx in enumerate(chunk_indices):
-                frame_np = frames[i].asnumpy()
-                h, w = frame_np.shape[:2]
-                ts_ms = int(idx * 1000 / self.last_source_fps)
-                batch.append(FrameSample(
-                    frame_index=idx,
-                    timestamp_ms=ts_ms,
-                    image=frame_np,
+        # interval=stride-1: 0 → every frame, 1 → every 2nd frame, etc.
+        vl = decord.VideoLoader(
+            [str(resolved)],
+            ctx=[self._gpu_ctx],
+            shape=(batch_size, h, w, 3),
+            interval=max(0, self.stride - 1),
+            skip=0,
+            shuffle=0,
+        )
+
+        for batch_data, batch_indices in vl:
+            frames_np = batch_data.asnumpy()                     # (N, H, W, 3)
+            indices_flat = batch_indices.asnumpy().reshape(-1).astype(int)
+
+            batch = [
+                FrameSample(
+                    frame_index=int(idx),
+                    timestamp_ms=int(idx * 1000 / fps),
+                    image=frames_np[i],
                     width=w,
                     height=h,
-                ))
-            del frames  # free decode buffer before next chunk
+                )
+                for i, idx in enumerate(indices_flat)
+            ]
             yield batch
