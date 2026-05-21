@@ -49,6 +49,10 @@ def handler(job: dict) -> dict:
 
     print(f"[diag] handler started  run_id={run_id}  preset={config_preset}", flush=True)
 
+    # ── GPU check ────────────────────────────────────────────────────────────
+    gpu_info = _check_gpu()
+    print(f"[diag] GPU: {gpu_info}", flush=True)
+
     s3 = _r2_client()
 
     # ── Video download ───────────────────────────────────────────────────────
@@ -93,6 +97,7 @@ def handler(job: dict) -> dict:
     return {
         "status": "complete",
         "results_key": results_key,
+        "gpu": gpu_info,
         "timings": {
             "r2_download_s": round(t_download, 1),
             "pipeline_s": round(t_pipeline, 1),
@@ -167,6 +172,38 @@ def _parse_metaflow_timings(stdout: str) -> dict:
             timings[step] = round((ts - starts[step]).total_seconds(), 1)
     print(f"[diag] step timings: {timings}", flush=True)
     return timings
+
+
+def _check_gpu() -> dict:
+    try:
+        import torch
+        import subprocess as _sp
+        info: dict = {
+            "cuda_available": torch.cuda.is_available(),
+            "device_count": torch.cuda.device_count(),
+        }
+        if torch.cuda.is_available():
+            info["device_name"] = torch.cuda.get_device_name(0)
+            info["cuda_version"] = torch.version.cuda
+            mem = torch.cuda.get_device_properties(0).total_memory
+            info["vram_gb"] = round(mem / 1e9, 1)
+        # Also try nvidia-smi for utilization
+        try:
+            r = _sp.run(
+                ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,memory.total",
+                 "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=5
+            )
+            if r.returncode == 0:
+                parts = r.stdout.strip().split(", ")
+                info["gpu_util_pct"] = parts[0]
+                info["vram_used_mb"] = parts[1]
+                info["vram_total_mb"] = parts[2]
+        except Exception:
+            pass
+        return info
+    except Exception as e:
+        return {"error": str(e)}
 
 
 runpod.serverless.start({"handler": handler})
