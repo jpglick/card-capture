@@ -553,9 +553,8 @@ def decode_frames_gpu(video_path, indices: list) -> dict:
 
     allow_fallback = os.environ.get("CC_CUDA_ALLOW_CPU_FALLBACK", "0") == "1"
 
-    # decord.gpu(0) always succeeds even when decord was compiled without CUDA —
-    # the failure surfaces only when VideoReader actually tries to decode.
-    # So we attempt GPU first, then fall back on DECORDError "CUDA not enabled".
+    # decord.gpu(0) succeeds even when decord was compiled without NVDEC;
+    # the real failure surfaces when VideoReader tries to open the GPU context.
     try:
         ctx = decord.gpu(0)
     except Exception:
@@ -564,21 +563,24 @@ def decode_frames_gpu(video_path, indices: list) -> dict:
         else:
             raise RuntimeError(
                 "decode_frames_gpu requires NVDEC (decord GPU context). "
-                "Set CC_CUDA_ALLOW_CPU_FALLBACK=1 to allow CPU fallback."
+                "Set CC_CUDA_ALLOW_CPU_FALLBACK=1 to allow CPU fallback "
+                "in dev/test environments."
             )
 
     sorted_indices = sorted(set(indices))
     try:
         vr = decord.VideoReader(str(video_path), ctx=ctx)
     except Exception as e:
-        if "CUDA not enabled" in str(e) or "cuda" in str(e).lower():
-            # pip-installed decord is compiled without NVDEC — fall back to CPU
-            # random-access automatically. CPU get_batch is still orders of magnitude
-            # faster than sequential VideoCapture decode.
-            print(f"[decode_frames_gpu] decord NVDEC unavailable ({e}); using CPU decode.", flush=True)
+        # "CUDA not enabled" means decord was compiled without NVDEC (pip wheel).
+        # Hard-fail in production; only allow fallback with explicit flag.
+        if ("CUDA not enabled" in str(e) or "cuda" in str(e).lower()) and allow_fallback:
             vr = decord.VideoReader(str(video_path), ctx=decord.cpu(0))
         else:
-            raise
+            raise RuntimeError(
+                f"decord GPU VideoReader failed: {e}. "
+                "Ensure decord is built with USE_CUDA=ON (see Dockerfile.cuda). "
+                "Set CC_CUDA_ALLOW_CPU_FALLBACK=1 to allow CPU decode in dev environments."
+            ) from e
     frames = vr.get_batch(sorted_indices)
     result = {idx: frames[i].asnumpy() for i, idx in enumerate(sorted_indices)}
     del frames
