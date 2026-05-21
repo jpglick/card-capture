@@ -53,6 +53,9 @@ reports/*
 harness_config.json
 card_capture_config.json
 
+# NVIDIA Video Codec SDK — proprietary, download from developer.nvidia.com
+Video_Codec_SDK*.zip
+
 # Golden set generated artifacts
 golden_set/**/reference_frames/
 
@@ -62,3 +65,4 @@ data/
 models/*
 !models/.gitkeep
 !models/presence_classifier.pt
+.env
