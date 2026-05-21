@@ -212,17 +212,17 @@ def _run_cuda_inference(
     """
     from card_capture.models import FramePacket
 
-    frames = list(sampler.sample())   # list[FrameSample] — already decoded
     batch_size = ctx.cuda_batch_size
-
     detection_rows: list[dict] = []
     accepted_frame_presence: list[tuple[int, int, bool]] = []
     det_id = 0
+    total_frames = 0
 
-    for batch_start in range(0, len(frames), batch_size):
-        batch = frames[batch_start:batch_start + batch_size]
+    # Stream in batch_size chunks — avoids loading the entire video (~11 GB for 4K)
+    # into RAM at once before YOLO inference begins.
+    for batch in sampler.sample_batches(batch_size=batch_size):
+        total_frames += len(batch)
 
-        # Convert FrameSample → FramePacket for detect_batch
         packets_in = [
             FramePacket(
                 frame_index=f.frame_index,
@@ -260,8 +260,8 @@ def _run_cuda_inference(
             det_id += 1
 
     return DetectOutput(
-        frame_count=len(frames),
-        accepted_frame_count=len(frames),
+        frame_count=total_frames,
+        accepted_frame_count=total_frames,
         accepted_frame_presence=accepted_frame_presence,
         detection_rows=detection_rows,
         sampler_telemetry={

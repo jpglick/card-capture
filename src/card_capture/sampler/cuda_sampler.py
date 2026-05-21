@@ -62,12 +62,36 @@ class CudaSampler:
             import decord
             self._gpu_ctx = decord.cpu(0)
 
+    def _build_indices(self, vr) -> list:
+        total = len(vr)
+        self.last_source_fps = vr.get_avg_fps() or 30.0
+        opening_count = int(self.last_source_fps * self.opening_scan_s)
+        opening_indices = list(range(0, min(opening_count, total)))
+        stride_indices = list(range(opening_count, total, self.stride))
+        all_indices = sorted(set(opening_indices + stride_indices))
+        self.last_selected_frame_count = len(all_indices)
+        return all_indices
+
     def sample(
         self,
         video_path: Optional[Union[Path, str]] = None,
         sample_fps: Optional[float] = None,
     ) -> Iterator[FrameSample]:
-        """Yield FrameSample for each selected source frame."""
+        """Yield FrameSample for each selected source frame, streaming in chunks to avoid OOM."""
+        for batch in self.sample_batches(batch_size=32, video_path=video_path):
+            yield from batch
+
+    def sample_batches(
+        self,
+        batch_size: int = 32,
+        video_path: Optional[Union[Path, str]] = None,
+    ) -> Iterator[list]:
+        """Yield lists of FrameSample, batch_size at a time.
+
+        Decodes chunk-by-chunk so only batch_size frames are in RAM at once.
+        A 4K video decoded all-at-once would be ~11 GB; streaming keeps peak
+        usage at ~800 MB regardless of video length.
+        """
         import decord
 
         resolved = Path(video_path) if video_path else self.video_path
@@ -75,34 +99,25 @@ class CudaSampler:
             raise ValueError("video_path must be provided")
 
         vr = decord.VideoReader(str(resolved), ctx=self._gpu_ctx)
-        total = len(vr)
-        self.last_source_fps = vr.get_avg_fps() or 30.0
-
-        # Opening window: every frame (dense — catches cards on stands)
-        opening_count = int(self.last_source_fps * self.opening_scan_s)
-        opening_indices = list(range(0, min(opening_count, total)))
-
-        # Remaining: every stride-th frame
-        stride_indices = list(range(opening_count, total, self.stride))
-
-        # Merge and deduplicate (opening may overlap stride start)
-        all_indices = sorted(set(opening_indices + stride_indices))
-        self.last_selected_frame_count = len(all_indices)
+        all_indices = self._build_indices(vr)
 
         if not all_indices:
             return
 
-        # Batch-decode via NVDEC
-        frames = vr.get_batch(all_indices)   # shape: (N, H, W, C), GPU or CPU tensor
-
-        for i, idx in enumerate(all_indices):
-            frame_np = frames[i].asnumpy()   # transfer to CPU NumPy for downstream compat
-            h, w = frame_np.shape[:2]
-            ts_ms = int(idx * 1000 / self.last_source_fps)
-            yield FrameSample(
-                frame_index=idx,
-                timestamp_ms=ts_ms,
-                image=frame_np,
-                width=w,
-                height=h,
-            )
+        for chunk_start in range(0, len(all_indices), batch_size):
+            chunk_indices = all_indices[chunk_start:chunk_start + batch_size]
+            frames = vr.get_batch(chunk_indices)
+            batch = []
+            for i, idx in enumerate(chunk_indices):
+                frame_np = frames[i].asnumpy()
+                h, w = frame_np.shape[:2]
+                ts_ms = int(idx * 1000 / self.last_source_fps)
+                batch.append(FrameSample(
+                    frame_index=idx,
+                    timestamp_ms=ts_ms,
+                    image=frame_np,
+                    width=w,
+                    height=h,
+                ))
+            del frames  # free decode buffer before next chunk
+            yield batch
