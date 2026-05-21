@@ -485,3 +485,54 @@ def _laplacian_select_frames(
         result[iid] = selected
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# GPU frame decode
+# ---------------------------------------------------------------------------
+
+try:
+    import decord as decord  # noqa: F401
+except ImportError:
+    decord = None  # type: ignore[assignment]
+
+
+def decode_frames_gpu(video_path, indices: list) -> dict:
+    """Decode specific frames via NVDEC; return {frame_index: np.ndarray}.
+
+    Hard-fails if GPU context unavailable and CC_CUDA_ALLOW_CPU_FALLBACK is not set.
+    """
+    import os
+    if not indices:
+        return {}
+
+    try:
+        ctx = decord.gpu(0)
+    except Exception:
+        if os.environ.get("CC_CUDA_ALLOW_CPU_FALLBACK", "0") == "1":
+            ctx = decord.cpu(0)
+        else:
+            raise RuntimeError(
+                "decode_frames_gpu requires NVDEC (decord GPU context). "
+                "Set CC_CUDA_ALLOW_CPU_FALLBACK=1 to allow CPU fallback "
+                "in dev/test environments."
+            )
+
+    sorted_indices = sorted(set(indices))
+    vr = decord.VideoReader(str(video_path), ctx=ctx)
+    frames = vr.get_batch(sorted_indices)
+    result = {idx: frames[i].asnumpy() for i, idx in enumerate(sorted_indices)}
+    del frames
+    return result
+
+
+def _compute_laplacian_scan_indices(track_ranges: list, scan_stride: int) -> set:
+    """Return the set of frame indices that _laplacian_select_frames will scan."""
+    all_scan_frames: set = set()
+    for t in track_ranges:
+        dets = sorted(t.get("detections", []), key=lambda x: x[0])
+        if not dets:
+            continue
+        first_frame, last_frame = dets[0][0], dets[-1][0]
+        all_scan_frames |= set(range(first_frame, last_frame + 1, scan_stride))
+    return all_scan_frames
