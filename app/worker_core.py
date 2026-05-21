@@ -68,6 +68,9 @@ def run_pipeline(job_id: str, video_path: str, config_preset: str, output_dir: P
     if not env.get("USER"):
         env["USER"] = "root"
     env.setdefault("METAFLOW_USER", "runner")
+    # Metaflow spawns step subprocesses that don't inherit cwd — ensure pipeline/ is importable
+    existing_pypath = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = f"{repo_root}:{existing_pypath}" if existing_pypath else str(repo_root)
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(repo_root), env=env)
     if result.returncode != 0:
         detail = f"STDOUT:\n{result.stdout[-2000:]}\nSTDERR:\n{result.stderr[-2000:]}"
