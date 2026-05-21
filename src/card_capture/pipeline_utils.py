@@ -14,6 +14,13 @@ from typing import Any, List
 import cv2
 import numpy as np
 
+# _open_capture is imported at module level so it can be monkeypatched in tests.
+# The two _laplacian_select_frames implementations below reference this name.
+try:
+    from .ingestion import _open_capture
+except Exception:  # pragma: no cover — only fails in incomplete test environments
+    _open_capture = None  # type: ignore[assignment]
+
 # ---------------------------------------------------------------------------
 # Constants used by canonical selection
 # ---------------------------------------------------------------------------
@@ -191,6 +198,7 @@ def _laplacian_select_frames(
     scan_stride: int = 4,
     top_k: int = 1,
     max_corner_gap: int = 15,
+    decoded_frames=None,
 ) -> dict:
     """Single-pass Laplacian sharpness scan across all confirmed track time ranges.
 
@@ -216,6 +224,9 @@ def _laplacian_select_frames(
             and its nearest YOLO detection when borrowing corners. If the gap
             exceeds this, fall back to the nearest detection frame itself (safe
             — always has corners from YOLO). 15 ≈ 0.25s at 60fps.
+        decoded_frames: Optional dict mapping frame_index → np.ndarray. When
+            provided, frames are read directly from this dict and VideoCapture
+            is never opened (GPU fast path). Missing indices are silently skipped.
 
     Returns:
         Dict mapping instance_id → list of (frame_index, corners) tuples,
@@ -230,7 +241,6 @@ def _laplacian_select_frames(
     import cv2
     import numpy as np
     from pathlib import Path as _Path
-    from .ingestion import _open_capture
 
     # Build per-track metadata and collect all frame indices to scan
     track_info: dict = {}
@@ -258,32 +268,48 @@ def _laplacian_select_frames(
     if not all_scan_frames:
         return {}
 
-    # Single forward video pass — compute Laplacian for every scan frame
-    max_scan_frame = max(all_scan_frames)
-    try:
-        capture = _open_capture(_Path(video_path))
-    except Exception:
-        return {}
+    # Compute Laplacian for every scan frame
+    if decoded_frames is not None:
+        # Fast path: frames already decoded — no VideoCapture needed
+        for curr in all_scan_frames:
+            frame = decoded_frames.get(curr)
+            if frame is None:
+                continue
+            h, w = frame.shape[:2]
+            scale = 640 / w if w > 640 else 1.0
+            small = cv2.resize(frame, (int(w * scale), int(h * scale))) if scale < 1.0 else frame
+            gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY) if small.ndim == 3 else small
+            lap_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+            for ti in track_info.values():
+                if curr in ti["scan_frames"]:
+                    ti["scores"][curr] = lap_var
+    else:
+        # Slow path: sequential CPU decode via VideoCapture (non-CUDA fallback)
+        max_scan_frame = max(all_scan_frames)
+        try:
+            capture = _open_capture(_Path(video_path))
+        except Exception:
+            return {}
 
-    try:
-        curr = 0
-        while curr <= max_scan_frame:
-            ok, frame = capture.read()
-            if not ok:
-                break
-            if curr in all_scan_frames:
-                h, w = frame.shape[:2]
-                # Downscale to 640px wide for speed (~1-2ms per frame)
-                scale = 640 / w if w > 640 else 1.0
-                small = cv2.resize(frame, (int(w * scale), int(h * scale))) if scale < 1.0 else frame
-                gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY) if small.ndim == 3 else small
-                lap_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-                for ti in track_info.values():
-                    if curr in ti["scan_frames"]:
-                        ti["scores"][curr] = lap_var
-            curr += 1
-    finally:
-        capture.release()
+        try:
+            curr = 0
+            while curr <= max_scan_frame:
+                ok, frame = capture.read()
+                if not ok:
+                    break
+                if curr in all_scan_frames:
+                    h, w = frame.shape[:2]
+                    # Downscale to 640px wide for speed (~1-2ms per frame)
+                    scale = 640 / w if w > 640 else 1.0
+                    small = cv2.resize(frame, (int(w * scale), int(h * scale))) if scale < 1.0 else frame
+                    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY) if small.ndim == 3 else small
+                    lap_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+                    for ti in track_info.values():
+                        if curr in ti["scan_frames"]:
+                            ti["scores"][curr] = lap_var
+                curr += 1
+        finally:
+            capture.release()
 
     # Select top_k sharpest frames per track; map each to corners
     result: dict = {}
@@ -356,6 +382,7 @@ def _laplacian_select_frames(
     scan_stride: int = 4,
     top_k: int = 1,
     max_corner_gap: int = 15,
+    decoded_frames=None,
 ) -> dict:
     """Single-pass Laplacian sharpness scan across all confirmed track time ranges.
 
@@ -381,6 +408,9 @@ def _laplacian_select_frames(
             and its nearest YOLO detection when borrowing corners. If the gap
             exceeds this, fall back to the nearest detection frame itself (safe
             — always has corners from YOLO). 15 ≈ 0.25s at 60fps.
+        decoded_frames: Optional dict mapping frame_index → np.ndarray. When
+            provided, frames are read directly from this dict and VideoCapture
+            is never opened (GPU fast path). Missing indices are silently skipped.
 
     Returns:
         Dict mapping instance_id → list of (frame_index, corners) tuples,
@@ -395,7 +425,6 @@ def _laplacian_select_frames(
     import cv2
     import numpy as np
     from pathlib import Path as _Path
-    from .ingestion import _open_capture
 
     # Build per-track metadata and collect all frame indices to scan
     track_info: dict = {}
@@ -423,32 +452,48 @@ def _laplacian_select_frames(
     if not all_scan_frames:
         return {}
 
-    # Single forward video pass — compute Laplacian for every scan frame
-    max_scan_frame = max(all_scan_frames)
-    try:
-        capture = _open_capture(_Path(video_path))
-    except Exception:
-        return {}
+    # Compute Laplacian for every scan frame
+    if decoded_frames is not None:
+        # Fast path: frames already decoded — no VideoCapture needed
+        for curr in all_scan_frames:
+            frame = decoded_frames.get(curr)
+            if frame is None:
+                continue
+            h, w = frame.shape[:2]
+            scale = 640 / w if w > 640 else 1.0
+            small = cv2.resize(frame, (int(w * scale), int(h * scale))) if scale < 1.0 else frame
+            gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY) if small.ndim == 3 else small
+            lap_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+            for ti in track_info.values():
+                if curr in ti["scan_frames"]:
+                    ti["scores"][curr] = lap_var
+    else:
+        # Slow path: sequential CPU decode via VideoCapture (non-CUDA fallback)
+        max_scan_frame = max(all_scan_frames)
+        try:
+            capture = _open_capture(_Path(video_path))
+        except Exception:
+            return {}
 
-    try:
-        curr = 0
-        while curr <= max_scan_frame:
-            ok, frame = capture.read()
-            if not ok:
-                break
-            if curr in all_scan_frames:
-                h, w = frame.shape[:2]
-                # Downscale to 640px wide for speed (~1-2ms per frame)
-                scale = 640 / w if w > 640 else 1.0
-                small = cv2.resize(frame, (int(w * scale), int(h * scale))) if scale < 1.0 else frame
-                gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY) if small.ndim == 3 else small
-                lap_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-                for ti in track_info.values():
-                    if curr in ti["scan_frames"]:
-                        ti["scores"][curr] = lap_var
-            curr += 1
-    finally:
-        capture.release()
+        try:
+            curr = 0
+            while curr <= max_scan_frame:
+                ok, frame = capture.read()
+                if not ok:
+                    break
+                if curr in all_scan_frames:
+                    h, w = frame.shape[:2]
+                    # Downscale to 640px wide for speed (~1-2ms per frame)
+                    scale = 640 / w if w > 640 else 1.0
+                    small = cv2.resize(frame, (int(w * scale), int(h * scale))) if scale < 1.0 else frame
+                    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY) if small.ndim == 3 else small
+                    lap_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+                    for ti in track_info.values():
+                        if curr in ti["scan_frames"]:
+                            ti["scores"][curr] = lap_var
+                curr += 1
+        finally:
+            capture.release()
 
     # Select top_k sharpest frames per track; map each to corners
     result: dict = {}

@@ -90,3 +90,39 @@ def test_compute_laplacian_scan_indices_empty():
     from card_capture.pipeline_utils import _compute_laplacian_scan_indices
     assert _compute_laplacian_scan_indices([], scan_stride=4) == set()
     assert _compute_laplacian_scan_indices([{"instance_id": "a", "detections": []}], scan_stride=4) == set()
+
+
+def test_laplacian_select_frames_uses_decoded_dict(monkeypatch):
+    """When decoded_frames is provided, VideoCapture must NOT be opened."""
+    import numpy as np
+    from card_capture.pipeline_utils import _laplacian_select_frames
+
+    # Create a frame with some variance so Laplacian > 0
+    sharp = np.zeros((100, 100, 3), dtype=np.uint8)
+    sharp[40:60, 40:60] = 255
+
+    decoded = {5: sharp, 6: sharp, 7: sharp}
+
+    track_ranges = [
+        {"instance_id": "t1", "detections": [
+            (5, [[0, 0], [1, 0], [1, 1], [0, 1]]),
+            (7, [[0, 0], [1, 0], [1, 1], [0, 1]]),
+        ]},
+    ]
+
+    opened = []
+
+    def fake_open_capture(p):
+        opened.append(p)
+        raise AssertionError("VideoCapture opened unexpectedly")
+
+    monkeypatch.setattr("card_capture.pipeline_utils._open_capture", fake_open_capture)
+
+    result = _laplacian_select_frames(
+        "/fake/video.mov", track_ranges,
+        scan_stride=1, top_k=1, max_corner_gap=15,
+        decoded_frames=decoded,
+    )
+    assert not opened, "VideoCapture should not have been opened"
+    assert "t1" in result
+    assert len(result["t1"]) == 1
