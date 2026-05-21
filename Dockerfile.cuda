@@ -21,9 +21,19 @@ RUN apt-get update -q && \
         libavcodec-dev libavfilter-dev libavformat-dev libavutil-dev libswscale-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Clone decord and build with CUDA support. CUDA_TOOLKIT_ROOT_DIR auto-detected
-# from /usr/local/cuda in the DEVEL image. libnvcuvid is loaded at runtime from
-# the NVIDIA driver mount — it does not need to be present at build time.
+# libnvcuvid.so is part of the NVIDIA Video Codec SDK, not the CUDA toolkit,
+# so it isn't present in the build environment. Create a stub so cmake can link
+# against it at build time. At runtime on GPU instances, the real library is
+# provided by the NVIDIA driver mount and loaded automatically.
+RUN if [ -f /usr/local/cuda/lib64/stubs/libnvcuvid.so ]; then \
+        cp /usr/local/cuda/lib64/stubs/libnvcuvid.so /usr/local/cuda/lib64/libnvcuvid.so; \
+    else \
+        echo "void nvcuvid_stub(void) {}" > /tmp/stub.c && \
+        gcc -shared -fPIC -o /usr/local/cuda/lib64/libnvcuvid.so /tmp/stub.c && \
+        rm /tmp/stub.c; \
+    fi
+
+# Clone decord and build with CUDA/NVDEC support.
 RUN git clone --recursive https://github.com/dmlc/decord /tmp/decord && \
     cd /tmp/decord && mkdir build && cd build && \
     cmake .. -DUSE_CUDA=ON -DCMAKE_BUILD_TYPE=Release && \
