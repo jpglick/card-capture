@@ -75,23 +75,31 @@ class RunPodRunner:
         config_preset: str = "balanced",
         **kw,
     ) -> None:
+        import time as _time
         video_id: Optional[int] = kw.get("video_id")
         _event_bus_registry.set(run_id, self.bus)
 
         video_key = f"runs/{run_id}/input.mov"
         results_key = f"runs/{run_id}/results.tar.gz"
+        video_mb = Path(video).stat().st_size / 1_048_576
+
+        t_start = _time.time()
 
         try:
             self._record_run_start(run_id, video_id, db)
             self.bus.emit(run_id, Event(name="run_started"))
 
-            self.bus.emit(run_id, Event(name="log", payload={"line": "Uploading video to R2…"}))
-            print(f"[{run_id}] runpod: uploading video to R2…", flush=True)
+            self.bus.emit(run_id, Event(name="log", payload={"line": f"Uploading {video_mb:.0f} MB video to R2…"}))
+            print(f"[{run_id}] runpod: uploading {video_mb:.0f} MB video to R2…", flush=True)
+            t_upload_start = _time.time()
             await asyncio.get_event_loop().run_in_executor(
                 None, self._upload_video, video_key, Path(video)
             )
+            t_upload = _time.time() - t_upload_start
+            print(f"[{run_id}] runpod: R2 upload done in {t_upload:.1f}s ({video_mb/t_upload:.1f} MB/s)", flush=True)
 
             self.bus.emit(run_id, Event(name="log", payload={"line": "Submitting RunPod job…"}))
+            t_submit = _time.time()
             job_id = await self._submit_job(run_id, video_key, results_key, config_preset)
             print(f"[{run_id}] runpod: job {job_id} submitted", flush=True)
 
@@ -102,24 +110,38 @@ class RunPodRunner:
                     break
                 if status in ("FAILED", "CANCELLED", "TIMED_OUT"):
                     raise RuntimeError(f"RunPod job {job_id} ended with status: {status}")
+                elapsed = _time.time() - t_submit
                 if poll_count % 10 == 0:
-                    msg = "Processing on RunPod GPU…"
+                    msg = f"Processing on RunPod GPU… ({elapsed:.0f}s)"
                     self.bus.emit(run_id, Event(name="log", payload={"line": msg}))
                     print(f"[{run_id}] runpod: {msg}", flush=True)
                 poll_count += 1
                 await asyncio.sleep(3)
 
+            t_gpu = _time.time() - t_submit
+            print(f"[{run_id}] runpod: GPU job completed in {t_gpu:.1f}s", flush=True)
+
             self.bus.emit(run_id, Event(name="log", payload={"line": "Downloading results from R2…"}))
             tarball = Path(output_dir) / f"{run_id}_results.tar.gz"
             Path(output_dir).mkdir(parents=True, exist_ok=True)
+            t_dl_start = _time.time()
             await asyncio.get_event_loop().run_in_executor(
                 None, self._download_results, results_key, tarball
             )
+            t_dl = _time.time() - t_dl_start
+            result_mb = tarball.stat().st_size / 1_048_576
+            print(f"[{run_id}] runpod: R2 download done in {t_dl:.1f}s ({result_mb:.1f} MB)", flush=True)
+
             n_cards = self._importer.import_tarball(tarball, run_id)
             tarball.unlink(missing_ok=True)
 
+            t_total = _time.time() - t_start
             self._record_run_finish(run_id, n_cards, db)
-            print(f"[{run_id}] runpod: done — {n_cards} cards imported", flush=True)
+            print(
+                f"[{run_id}] runpod: done — {n_cards} cards | "
+                f"upload={t_upload:.1f}s gpu={t_gpu:.1f}s download={t_dl:.1f}s total={t_total:.1f}s",
+                flush=True,
+            )
             self.bus.emit(run_id, Event(name="run_completed"))
         except Exception as exc:
             print(f"[{run_id}] runpod: FAILED — {exc}", flush=True)

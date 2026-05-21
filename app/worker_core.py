@@ -72,10 +72,36 @@ def run_pipeline(job_id: str, video_path: str, config_preset: str, output_dir: P
     existing_pypath = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = f"{repo_root}:{existing_pypath}" if existing_pypath else str(repo_root)
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(repo_root), env=env)
+    _print_metaflow_timings(result.stdout)
     if result.returncode != 0:
         detail = f"STDOUT:\n{result.stdout[-2000:]}\nSTDERR:\n{result.stderr[-2000:]}"
         raise RuntimeError(detail)
     return db_path
+
+
+def _print_metaflow_timings(stdout: str) -> None:
+    """Parse Metaflow log timestamps to produce a per-step timing table."""
+    import re
+    from datetime import datetime
+
+    pattern = re.compile(
+        r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+)"
+        r" \[\d+/(\w+)/\d+"
+        r".*?\] (Task is starting|Task finished successfully)"
+    )
+
+    starts: dict[str, datetime] = {}
+    fmt = "%Y-%m-%d %H:%M:%S.%f"
+
+    print("[diag] === Metaflow step timings ===", flush=True)
+    for ts_str, step, event in pattern.findall(stdout):
+        ts = datetime.strptime(ts_str, fmt)
+        if event == "Task is starting":
+            starts[step] = ts
+        elif event == "Task finished successfully" and step in starts:
+            elapsed = (ts - starts[step]).total_seconds()
+            print(f"[diag]   {step:<20} {elapsed:6.1f}s", flush=True)
+    print("[diag] =================================", flush=True)
 
 
 def package_results(job_id: str, output_dir: Path, db_path: Path) -> bytes:
