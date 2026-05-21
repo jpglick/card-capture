@@ -50,6 +50,10 @@ COPY --from=decord-builder /tmp/decord-wheels/decord*.whl /tmp/
 # All system + Python deps in one layer to minimise image size.
 # runtime (not devel) includes CUDA runtime libs sufficient for PyTorch/Kornia inference.
 # decord's NVDEC requires libnvcuvid.so — provided at runtime by the NVIDIA driver mount.
+# decord is compiled against GCC 12 (GLIBCXX_3.4.30) but conda ships an older
+# libstdc++. Upgrade it so the decord wheel loads correctly at runtime.
+RUN conda install -y -q -c conda-forge libstdcxx-ng && conda clean -afy
+
 RUN apt-get update -q && \
     apt-get install -y -q --no-install-recommends \
         git ffmpeg libsm6 libxext6 libgl1 \

@@ -538,7 +538,7 @@ def _laplacian_select_frames(
 
 try:
     import decord as decord  # noqa: F401
-except ImportError:
+except (ImportError, OSError):
     decord = None  # type: ignore[assignment]
 
 
