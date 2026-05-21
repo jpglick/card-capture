@@ -28,7 +28,10 @@ RUN apt-get update -q && \
         "uvicorn[standard]>=0.29.0" \
         "python-multipart>=0.0.9" \
         "python-dotenv>=1.0.0" \
-        "metaflow>=2.10.0"
+        "metaflow>=2.10.0" && \
+    pip install torch==2.3.0 torchvision==0.18.0 \
+        --index-url https://download.pytorch.org/whl/cu121 \
+        --force-reinstall
 
 # Clone repo and install the app layer (heavy ML deps already above).
 # torch/torchvision are NOT in pyproject.toml — the base image provides them.
