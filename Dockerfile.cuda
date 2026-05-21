@@ -30,10 +30,13 @@ RUN apt-get update -q && \
         "python-dotenv>=1.0.0" \
         "metaflow>=2.10.0"
 
-# Clone repo and install the app layer (heavy ML deps already above)
+# Clone repo and install the app layer (heavy ML deps already above).
+# Pin torch/torchvision to the base image versions so pip doesn't upgrade them
+# and break the CUDA-compiled torchvision binary extensions.
 RUN git clone https://github.com/jpglick/card-capture.git /workspace/card-capture
 WORKDIR /workspace/card-capture
-RUN pip install -e ".[model,app]"
+RUN echo "torch==2.3.0\ntorchvision==0.18.0" > /tmp/constraints.txt && \
+    pip install -e ".[model,app]" --constraint /tmp/constraints.txt
 
 # Models (YOLO ~160MB, DINOv2 ~330MB) are NOT pre-cached — they download on
 # first inference and are then cached in ~/.cache on the instance disk.
