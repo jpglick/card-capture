@@ -169,7 +169,12 @@ class RunPodRunner:
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.get(url, headers=self._headers)
             r.raise_for_status()
-            return r.json().get("status", "UNKNOWN")
+            body = r.json()
+            status = body.get("status", "UNKNOWN")
+            if status in ("FAILED", "CANCELLED", "TIMED_OUT"):
+                error = body.get("error") or body.get("output", {})
+                print(f"[runpod] job {job_id} {status}: {error}", flush=True)
+            return status
 
     async def _cleanup_r2(self, run_id: str) -> None:
         loop = asyncio.get_event_loop()

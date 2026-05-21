@@ -18,8 +18,6 @@ dependencies = [
   "httpx>=0.27.0",
   "python-dotenv>=1.0.0",
   "boto3>=1.34.0",
-  "runpod>=1.7.0",
-  "beam-sdk>=0.8.0",
 ]
 
 [project.optional-dependencies]
@@ -45,6 +43,12 @@ app = [
   "sse-starlette",
   "pydantic>=2",
   "httpx",
+]
+runpod = [
+  "runpod>=1.7.0",
+]
+beam = [
+  "beam-sdk>=0.8.0",
 ]
 test = [
   "pytest",

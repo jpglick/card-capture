@@ -13,7 +13,9 @@ pip install -e '.[app]' -q 2>&1 | tail -3
 
 if [ -n "$RUNPOD_POD_ID" ]; then
     # ── RunPod serverless ──────────────────────────────────────────────────
-    echo "[start.sh] RunPod detected (pod $RUNPOD_POD_ID) — starting runpod_handler…"
+    echo "[start.sh] RunPod detected (pod $RUNPOD_POD_ID) — installing runpod extra…"
+    pip install -e '.[app,runpod]' -q 2>&1 | tail -3
+    echo "[start.sh] Starting runpod_handler…"
     exec python3 -m app.runpod_handler
 else
     # ── vast.ai ────────────────────────────────────────────────────────────
