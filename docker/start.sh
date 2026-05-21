@@ -13,8 +13,10 @@ pip install -e '.[app]' -q 2>&1 | tail -3
 
 if [ -n "$RUNPOD_POD_ID" ]; then
     # ── RunPod serverless ──────────────────────────────────────────────────
-    echo "[start.sh] RunPod detected (pod $RUNPOD_POD_ID) — installing runpod extra…"
-    pip install -e '.[app,runpod]' -q 2>&1 | tail -3
+    # Don't re-run pip install — torch/torchvision are pinned to the base image
+    # and reinstalling would pull incompatible CPU versions. Only ensure runpod SDK is present.
+    echo "[start.sh] RunPod detected (pod $RUNPOD_POD_ID) — ensuring runpod SDK…"
+    pip install "runpod>=1.7.0" -q 2>&1 | tail -2
     echo "[start.sh] Starting runpod_handler…"
     exec python3 -m app.runpod_handler
 else
