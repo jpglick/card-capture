@@ -15,6 +15,7 @@ VIDEO="${1:-}"
 echo "=== Import check ==="
 docker run --platform linux/amd64 --rm \
   -e CC_CUDA_ALLOW_CPU_FALLBACK=1 \
+  -e LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda-12.1/lib64 \
   --entrypoint python3 \
   "$IMAGE" \
   -c "
@@ -53,6 +54,7 @@ rm -rf "$OUTPUT_DIR"
 
 docker run --platform linux/amd64 --rm \
   -e CC_CUDA_ALLOW_CPU_FALLBACK=1 \
+  -e LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda-12.1/lib64 \
   -e METAFLOW_USER=localtest \
   --entrypoint bash \
   -v "$VIDEO:/tmp/test_video.mov:ro" \
