@@ -62,8 +62,12 @@ def run_pipeline(job_id: str, video_path: str, config_preset: str, output_dir: P
         "--ui-run-id", job_id,
     ]
     env = os.environ.copy()
-    env.setdefault("USERNAME", "root")
-    env.setdefault("USER", "root")
+    # Force-set (not setdefault) so empty strings are also overridden
+    if not env.get("USERNAME"):
+        env["USERNAME"] = "root"
+    if not env.get("USER"):
+        env["USER"] = "root"
+    env.setdefault("METAFLOW_USER", "runner")
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(repo_root), env=env)
     if result.returncode != 0:
         raise RuntimeError(result.stderr[-1000:] or result.stdout[-500:])
