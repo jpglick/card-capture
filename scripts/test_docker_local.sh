@@ -95,6 +95,8 @@ WRITE_PIPELINE
 docker run --platform linux/amd64 --rm \
   -e CC_CUDA_ALLOW_CPU_FALLBACK=1 \
   -e METAFLOW_USER=localtest \
+  -e PYTHONPATH=/workspace/card-capture \
+  -w /workspace/card-capture \
   --entrypoint python3 \
   -v "$PIPELINE_PY:/tmp/pipeline.py:ro" \
   -v "$VIDEO:/tmp/test_video.mov:ro" \
