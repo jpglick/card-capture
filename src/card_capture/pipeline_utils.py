@@ -559,6 +559,7 @@ def decode_frames_gpu(video_path, indices: list) -> dict:
 
     # decord is None when the library couldn't be imported (e.g. missing NVIDIA driver
     # on a dev machine). Fall back to OpenCV sequential decode if allowed.
+    print(f"[decode_frames_gpu] decord={decord!r} type={type(decord)}", flush=True)
     if decord is None:
         if allow_fallback:
             return _decode_frames_opencv(video_path, indices)
