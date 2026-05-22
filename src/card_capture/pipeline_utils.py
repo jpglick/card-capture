@@ -553,6 +553,16 @@ def decode_frames_gpu(video_path, indices: list) -> dict:
 
     allow_fallback = os.environ.get("CC_CUDA_ALLOW_CPU_FALLBACK", "0") == "1"
 
+    # decord is None when the library couldn't be imported (e.g. missing NVIDIA driver
+    # on a dev machine). Fall back to OpenCV sequential decode if allowed.
+    if decord is None:
+        if allow_fallback:
+            return _decode_frames_opencv(video_path, indices)
+        raise RuntimeError(
+            "decode_frames_gpu: decord is not importable (missing NVIDIA driver libs). "
+            "Set CC_CUDA_ALLOW_CPU_FALLBACK=1 to fall back to OpenCV sequential decode."
+        )
+
     # decord.gpu(0) succeeds even when decord was compiled without NVDEC;
     # the real failure surfaces when VideoReader tries to open the GPU context.
     try:
@@ -571,8 +581,6 @@ def decode_frames_gpu(video_path, indices: list) -> dict:
     try:
         vr = decord.VideoReader(str(video_path), ctx=ctx)
     except Exception as e:
-        # "CUDA not enabled" means decord was compiled without NVDEC (pip wheel).
-        # Hard-fail in production; only allow fallback with explicit flag.
         if ("CUDA not enabled" in str(e) or "cuda" in str(e).lower()) and allow_fallback:
             vr = decord.VideoReader(str(video_path), ctx=decord.cpu(0))
         else:
@@ -584,6 +592,28 @@ def decode_frames_gpu(video_path, indices: list) -> dict:
     frames = vr.get_batch(sorted_indices)
     result = {idx: frames[i].asnumpy() for i, idx in enumerate(sorted_indices)}
     del frames
+    return result
+
+
+def _decode_frames_opencv(video_path, indices: list) -> dict:
+    """Sequential CPU fallback for decode_frames_gpu when decord is unavailable."""
+    import cv2
+    sorted_indices = sorted(set(indices))
+    if not sorted_indices:
+        return {}
+    cap = cv2.VideoCapture(str(video_path))
+    result: dict = {}
+    curr = 0
+    max_idx = sorted_indices[-1]
+    idx_set = set(sorted_indices)
+    while curr <= max_idx:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        if curr in idx_set:
+            result[curr] = frame
+        curr += 1
+    cap.release()
     return result
 
 
