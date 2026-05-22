@@ -81,12 +81,37 @@ rm -rf "$OUTPUT_DIR"; mkdir -p "$OUTPUT_DIR"
 
 python3 - > "$PIPELINE_PY" << 'WRITE_PIPELINE'
 script = r'''
-import subprocess, sys, os
+import subprocess, sys, os, json
 os.chdir("/workspace/card-capture")
 subprocess.run(["git","pull","-q"], capture_output=True)
-ret = subprocess.run([sys.executable,"-m","pipeline.card_capture_flow","--no-pylint","run",
-    "--video","/tmp/test_video.mov","--output-dir","/tmp/cc-out",
-    "--db","/tmp/cc-out/cards.sqlite","--config-preset","balanced"])
+
+# Use fake detector so the pipeline runs quickly without YOLO inference.
+# This exercises all Metaflow steps and code paths without needing a GPU
+# or waiting minutes for YOLO under x86_64 emulation on Apple Silicon.
+cfg_path = "/workspace/card-capture/card_capture_config.json"
+cfg = {}
+if os.path.exists(cfg_path):
+    with open(cfg_path) as f:
+        cfg = json.load(f)
+original_detector = cfg.get("detector")
+cfg["detector"] = "fake"
+cfg["device"] = "cpu"
+with open(cfg_path, "w") as f:
+    json.dump(cfg, f, indent=2)
+
+try:
+    ret = subprocess.run([sys.executable,"-m","pipeline.card_capture_flow","--no-pylint","run",
+        "--video","/tmp/test_video.mov","--output-dir","/tmp/cc-out",
+        "--db","/tmp/cc-out/cards.sqlite","--config-preset","balanced"])
+finally:
+    if original_detector is not None:
+        cfg["detector"] = original_detector
+    else:
+        cfg.pop("detector", None)
+    cfg.pop("device", None)
+    with open(cfg_path, "w") as f:
+        json.dump(cfg, f, indent=2)
+
 sys.exit(ret.returncode)
 '''
 print(script)
