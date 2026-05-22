@@ -16,7 +16,7 @@ import numpy as np
 
 try:
     import decord
-except ImportError:
+except (ImportError, OSError):
     decord = None  # type: ignore[assignment]
 
 from card_capture.models import FrameSample

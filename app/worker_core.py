@@ -74,7 +74,7 @@ def run_pipeline(job_id: str, video_path: str, config_preset: str, output_dir: P
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(repo_root), env=env)
     _print_metaflow_timings(result.stdout)
     if result.returncode != 0:
-        detail = f"STDOUT:\n{result.stdout[-2000:]}\nSTDERR:\n{result.stderr[-2000:]}"
+        detail = f"STDOUT:\n{result.stdout[-4000:]}\nSTDERR:\n{result.stderr[-2000:]}"
         raise RuntimeError(detail)
     return db_path, result.stdout
 
