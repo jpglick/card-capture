@@ -25,8 +25,11 @@ RUN apt-get update -q && \
 # They ship as a separate Video Codec SDK download. The endorsed approach for
 # headless builds is a stub .so — cmake find_library() and the linker are satisfied;
 # at runtime on RunPod the real libnvcuvid.so.1 from the NVIDIA driver mount is used.
+# SONAME must be libnvcuvid.so.1 so that libdecord.so records the versioned name
+# and the dynamic linker can find the real libnvcuvid.so.1 from the NVIDIA driver mount.
 RUN printf 'void nvcuvid_stub(void) {}' > /tmp/stub.c && \
-    gcc -shared -fPIC -o /usr/local/cuda/lib64/stubs/libnvcuvid.so /tmp/stub.c && \
+    gcc -shared -fPIC -Wl,-soname,libnvcuvid.so.1 \
+        -o /usr/local/cuda/lib64/stubs/libnvcuvid.so /tmp/stub.c && \
     rm /tmp/stub.c
 
 # Clone decord and build with CUDA/NVDEC support.
