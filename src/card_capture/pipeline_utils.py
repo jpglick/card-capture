@@ -539,8 +539,10 @@ def _laplacian_select_frames(
 try:
     import decord as decord  # noqa: F401
 except (ImportError, OSError) as _decord_import_error:
-    import sys as _sys
-    print(f"[pipeline_utils] decord import failed: {type(_decord_import_error).__name__}: {_decord_import_error}", file=_sys.stderr, flush=True)
+    print(f"[pipeline_utils] decord import failed: {type(_decord_import_error).__name__}: {_decord_import_error}", flush=True)
+    decord = None  # type: ignore[assignment]
+except Exception as _decord_import_error:
+    print(f"[pipeline_utils] decord import failed (unexpected): {type(_decord_import_error).__name__}: {_decord_import_error}", flush=True)
     decord = None  # type: ignore[assignment]
 
 
