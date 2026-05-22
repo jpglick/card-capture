@@ -120,6 +120,29 @@ def list_endpoints(api_key: str) -> None:
     print(f"\n  Set runpod_endpoint_id in {CONFIG_PATH.name} to use one of these.")
 
 
+def _get_pinned_image() -> str:
+    """Return ghcr.io/...@sha256:... for the current local :latest image.
+
+    Falls back to the bare :latest tag if docker is unavailable or image
+    hasn't been pulled/built locally.
+    """
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "--format={{index .RepoDigests 0}}",
+             DOCKER_IMAGE],
+            capture_output=True, text=True, timeout=10,
+        )
+        digest = result.stdout.strip()
+        if digest and "@sha256:" in digest:
+            print(f"  Pinning to digest: {digest}")
+            return digest
+    except Exception:
+        pass
+    print(f"  Warning: could not resolve digest, using {DOCKER_IMAGE} (may be stale)")
+    return DOCKER_IMAGE
+
+
 def create_endpoint(api_key: str, cfg: dict) -> None:
     import runpod
     runpod.api_key = api_key
@@ -128,12 +151,14 @@ def create_endpoint(api_key: str, cfg: dict) -> None:
     r2_access_key_id = cfg.get("r2_access_key_id", "")
     r2_secret_access_key = cfg.get("r2_secret_access_key", "")
 
+    image = _get_pinned_image()
+
     import time
     template_name = f"{ENDPOINT_NAME}-{int(time.time())}"
-    print(f"Creating serverless template '{template_name}' from {DOCKER_IMAGE}…")
+    print(f"Creating serverless template '{template_name}' from {image}…")
     template = runpod.create_template(
         name=template_name,
-        image_name=DOCKER_IMAGE,
+        image_name=image,
         docker_start_cmd="python3 -m app.runpod_handler",
         container_disk_in_gb=20,
         is_serverless=True,
