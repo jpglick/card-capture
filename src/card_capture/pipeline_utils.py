@@ -560,20 +560,19 @@ def decode_frames_gpu(video_path, indices: list) -> dict:
     # decord is None when the library couldn't be imported (e.g. missing NVIDIA driver
     # on a dev machine). Fall back to OpenCV sequential decode if allowed.
     if decord is None:
-        import subprocess as _sp
-        # Capture ldd output to show which deps are missing from libdecord.so
+        import sys as _sys
+        # Diagnose: try a fresh import and check sys.modules
+        _in_modules = _sys.modules.get('decord')
         try:
-            _ldd = _sp.run(['ldd', '/opt/conda/lib/python3.10/site-packages/decord/libdecord.so'],
-                           capture_output=True, text=True, timeout=5)
-            _ldd_out = _ldd.stdout + _ldd.stderr
-        except Exception as _e:
-            _ldd_out = f"ldd failed: {_e}"
+            import importlib as _il
+            _fresh = _il.import_module('decord')
+            _diag = f"fresh import OK: {_fresh!r}; sys.modules had: {_in_modules!r}"
+        except Exception as _fe:
+            _diag = f"fresh import failed: {type(_fe).__name__}: {_fe}; sys.modules had: {_in_modules!r}"
         if allow_fallback:
             return _decode_frames_opencv(video_path, indices)
         raise RuntimeError(
-            f"decode_frames_gpu: decord is not importable.\n"
-            f"ldd libdecord.so:\n{_ldd_out}\n"
-            "Set CC_CUDA_ALLOW_CPU_FALLBACK=1 to fall back to OpenCV."
+            f"decode_frames_gpu: decord is None. Diag: {_diag}"
         )
 
     # decord.gpu(0) succeeds even when decord was compiled without NVDEC;
