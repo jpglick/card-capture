@@ -538,11 +538,7 @@ def _laplacian_select_frames(
 
 try:
     import decord as decord  # noqa: F401
-except (ImportError, OSError) as _decord_import_error:
-    print(f"[pipeline_utils] decord import failed: {type(_decord_import_error).__name__}: {_decord_import_error}", flush=True)
-    decord = None  # type: ignore[assignment]
-except Exception as _decord_import_error:
-    print(f"[pipeline_utils] decord import failed (unexpected): {type(_decord_import_error).__name__}: {_decord_import_error}", flush=True)
+except (ImportError, OSError, Exception):
     decord = None  # type: ignore[assignment]
 
 
@@ -560,23 +556,13 @@ def decode_frames_gpu(video_path, indices: list) -> dict:
     # decord is None when the library couldn't be imported (e.g. missing NVIDIA driver
     # on a dev machine). Fall back to OpenCV sequential decode if allowed.
     if decord is None:
-        import sys as _sys, importlib as _il
-        _in_modules = _sys.modules.get('decord')
-        try:
-            _fresh = _il.import_module('decord')
-            _fresh_repr = repr(_fresh)
-        except Exception as _fe:
-            _fresh_repr = f"FAILED: {type(_fe).__name__}: {_fe}"
-        # __file__ tells us which copy of pipeline_utils Python actually loaded
-        import card_capture.pipeline_utils as _self
-        _diag = (
-            f"pipeline_utils.__file__={_self.__file__}; "
-            f"sys.modules['decord']={_in_modules!r}; "
-            f"fresh import={_fresh_repr}"
-        )
         if allow_fallback:
             return _decode_frames_opencv(video_path, indices)
-        raise RuntimeError(f"decode_frames_gpu: decord is None. {_diag}")
+        raise RuntimeError(
+            "decode_frames_gpu requires decord with NVDEC support. "
+            "The installed decord could not import (missing GPU driver libs or GLIBCXX). "
+            "Set CC_CUDA_ALLOW_CPU_FALLBACK=1 to fall back to OpenCV sequential decode."
+        )
 
     # decord.gpu(0) succeeds even when decord was compiled without NVDEC;
     # the real failure surfaces when VideoReader tries to open the GPU context.
