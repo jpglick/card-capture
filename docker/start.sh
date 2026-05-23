@@ -4,6 +4,16 @@
 
 set -e
 
+# Interactive/dev override: if the container is started with an explicit CMD
+# (e.g. a RunPod Pod created with "Container Start Command: sleep infinity",
+# or `docker run … <image> bash`), exec it directly and skip the worker
+# logic below. Without this, /start.sh always runs the worker and serverless
+# containers thrash when used as dev pods. Standard Docker entrypoint idiom.
+if [ "$#" -gt 0 ]; then
+    echo "[start.sh] CMD args present — exec'ing them and skipping worker logic: $*"
+    exec "$@"
+fi
+
 echo "[start.sh] Pulling latest code…"
 cd /workspace/card-capture
 git pull origin main -q || echo "[start.sh] WARNING: git pull failed, using baked code"
