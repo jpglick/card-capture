@@ -66,11 +66,19 @@ def handler(job: dict) -> dict:
     # ── Pipeline ─────────────────────────────────────────────────────────────
     output_dir = Path(f"/tmp/cc_output/{run_id}")
     output_dir.mkdir(parents=True, exist_ok=True)
+    db_path = output_dir / "cards.sqlite"  # deterministic; valid to read on failure
 
     original = apply_cuda_config()
     pipeline_stdout = ""
     try:
-        db_path, pipeline_stdout = run_pipeline(run_id, str(video_path), config_preset, output_dir)
+        _, pipeline_stdout = run_pipeline(run_id, str(video_path), config_preset, output_dir)
+    except Exception:
+        print("[diag] pipeline failed — collecting partial DB diagnostics", flush=True)
+        try:
+            _collect_db_diagnostics(run_id, db_path, output_dir)
+        except Exception as diag_e:
+            print(f"[diag] diagnostics collection failed: {diag_e}", flush=True)
+        raise
     finally:
         restore_config(original)
     t_pipeline = time.time() - t0
@@ -141,6 +149,20 @@ def _collect_db_diagnostics(run_id: str, db_path: Path, output_dir: Path) -> dic
                     (run_id,),
                 ).fetchall()
                 result["events"] = {et: n for et, n in rows}
+
+            # detect_telemetry_json answers: was YOLO on cuda? how many batches?
+            # how many frames hit YOLO? triage pass rate? — all the slow-step questions.
+            if "pipeline_runs" in tables:
+                row = conn.execute(
+                    "SELECT detect_telemetry_json FROM pipeline_runs WHERE run_id=?",
+                    (run_id,),
+                ).fetchone()
+                if row and row[0]:
+                    import json as _json
+                    try:
+                        result["detect_telemetry"] = _json.loads(row[0])
+                    except Exception:
+                        result["detect_telemetry"] = {"raw": row[0]}
     except Exception as e:
         result["error"] = str(e)
 
