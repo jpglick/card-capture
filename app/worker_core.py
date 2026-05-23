@@ -71,10 +71,13 @@ def run_pipeline(job_id: str, video_path: str, config_preset: str, output_dir: P
     # Metaflow spawns step subprocesses that don't inherit cwd — ensure pipeline/ is importable
     existing_pypath = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = f"{repo_root}:{existing_pypath}" if existing_pypath else str(repo_root)
-    # GPU-compiled decord (libdecord.so) needs GLIBCXX_3.4.30 which conda's libstdc++ lacks.
-    # LD_PRELOAD forces the system libstdc++ (Ubuntu 22.04, GCC 12) to load first,
-    # overriding conda's RPATH which would otherwise pick up the older /opt/conda/lib version.
-    env["LD_PRELOAD"] = "/usr/lib/x86_64-linux-gnu/libstdc++.so.6"
+    # GPU-compiled decord needs GLIBCXX_3.4.30 which conda's /opt/conda/lib/libstdc++.so.6 lacks.
+    # LD_PRELOAD had side-effects (broke cuvidDestroyDecoder symbol resolution).
+    # LD_LIBRARY_PATH works if conda uses DT_RUNPATH (it does — conda builds use RUNPATH).
+    # Put system libs first so the dynamic linker finds the right libstdc++ before conda's.
+    existing_ld = env.get("LD_LIBRARY_PATH", "")
+    env["LD_LIBRARY_PATH"] = f"/usr/lib/x86_64-linux-gnu:{existing_ld}".rstrip(":")
+    env.pop("LD_PRELOAD", None)  # remove if set from outer environment
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(repo_root), env=env)
     _print_metaflow_timings(result.stdout)
     if result.returncode != 0:
