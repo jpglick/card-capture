@@ -50,9 +50,11 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # Copy the CUDA-enabled decord wheel built in Stage 1
 COPY --from=decord-builder /tmp/decord-wheels/decord*.whl /tmp/
 
-# The devel image's system libstdc++ has GLIBCXX_3.4.30 (needed by GPU-compiled decord)
-# but the runtime image ships an older version. Copy it directly from Stage 1.
-# This avoids the conda libstdcxx-ng approach which was unreliable.
+# libdecord.so has RPATH=/opt/conda/lib, so conda's libstdc++ is loaded at runtime.
+# The runtime image's conda libstdc++ lacks GLIBCXX_3.4.30; the devel image's system
+# one has it (libstdc++6 12.3.0). Copy it to both paths so decord finds the right version
+# regardless of which path the dynamic linker hits first.
+COPY --from=decord-builder /usr/lib/x86_64-linux-gnu/libstdc++.so.6 /opt/conda/lib/libstdc++.so.6
 COPY --from=decord-builder /usr/lib/x86_64-linux-gnu/libstdc++.so.6 /usr/lib/x86_64-linux-gnu/libstdc++.so.6
 
 RUN apt-get update -q && \
