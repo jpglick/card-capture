@@ -20,14 +20,11 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        # Install regular requirements and test requirements. Assuming pip install -e .[test] works or requirements.txt
-        # If pyproject.toml is used:
-        pip install .
-        pip install pytest pytest-asyncio httpx pydantic anyio
+        pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+        pip install -e ".[test,app,model,pipeline_v21,review,harness]"
     - name: Test with pytest
       run: |
         pytest tests/
     - name: Validate schema docs drift
       run: |
         python scripts/validate_schema_docs.py
-
