@@ -48,7 +48,12 @@ def restore_config(original: dict) -> None:
 
 
 def run_pipeline(job_id: str, video_path: str, config_preset: str, output_dir: Path) -> tuple:
-    """Run the Metaflow pipeline subprocess; return (db_path, stdout)."""
+    """Run the Metaflow pipeline subprocess; return (db_path, stdout).
+
+    Streams the subprocess stdout/stderr live to our own stdout (prefixed with
+    [mf]) so the RunPod worker log shows pipeline progress in real time. The
+    same output is collected and returned for downstream parsing.
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
     db_path = output_dir / "cards.sqlite"
     repo_root = Path(__file__).parent.parent
@@ -72,12 +77,37 @@ def run_pipeline(job_id: str, video_path: str, config_preset: str, output_dir: P
     existing_pypath = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = f"{repo_root}:{existing_pypath}" if existing_pypath else str(repo_root)
     env.pop("LD_PRELOAD", None)  # ensure no stale LD_PRELOAD from outer environment
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(repo_root), env=env)
-    _print_metaflow_timings(result.stdout)
-    if result.returncode != 0:
-        detail = f"STDOUT:\n{result.stdout[-4000:]}\nSTDERR:\n{result.stderr[-2000:]}"
+    # Force unbuffered output in every Python child so lines reach us as they're
+    # produced (without this, metaflow's nested subprocesses block-buffer when
+    # stdout is a pipe and we see nothing until process exit).
+    env["PYTHONUNBUFFERED"] = "1"
+
+    print(f"[diag] starting metaflow subprocess (output streamed below)", flush=True)
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,  # merge — we want one chronological stream
+        text=True,
+        bufsize=1,                  # line-buffered on our side
+        cwd=str(repo_root),
+        env=env,
+    )
+    collected: list[str] = []
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        # Echo live to RunPod worker log so we can watch pipeline progress;
+        # also collect for post-mortem timing parse and error detail.
+        sys.stdout.write(f"[mf] {line}")
+        sys.stdout.flush()
+        collected.append(line)
+    returncode = proc.wait()
+    full_stdout = "".join(collected)
+
+    _print_metaflow_timings(full_stdout)
+    if returncode != 0:
+        detail = f"STDOUT (last 4000 chars):\n{full_stdout[-4000:]}"
         raise RuntimeError(detail)
-    return db_path, result.stdout
+    return db_path, full_stdout
 
 
 def _print_metaflow_timings(stdout: str) -> None:
