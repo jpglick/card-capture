@@ -17,11 +17,12 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
 
-# System deps: decord build toolchain + ffmpeg libs (build-time + runtime) +
-# OpenCV runtime helpers. Single layer so the apt cache is dropped at the end.
+# System deps: decord build toolchain (cmake, gcc, libav*-dev), ffmpeg runtime
+# libs, OpenCV runtime helpers, and patchelf (used below to fix libdecord.so's
+# DT_NEEDED). Single layer so the apt cache is dropped at the end.
 RUN apt-get update -q && \
     apt-get install -y -q --no-install-recommends \
-        cmake build-essential git \
+        cmake build-essential git patchelf \
         libavcodec-dev libavdevice-dev libavfilter-dev libavformat-dev libavutil-dev libswscale-dev \
         ffmpeg libsm6 libxext6 libgl1 \
     && rm -rf /var/lib/apt/lists/*
@@ -50,6 +51,15 @@ RUN printf 'void nvcuvid_stub(void) {}' > /tmp/stub.c && \
     cd /tmp/decord/python && \
     pip install . && \
     cd / && rm -rf /tmp/decord && \
+    # patchelf libnvcuvid.so.1 INTO libdecord.so's DT_NEEDED. Our minimal stub
+    # has only one symbol (nvcuvid_stub) so the linker (modern gcc defaults to
+    # --as-needed) dropped the libnvcuvid dependency entirely. Without DT_NEEDED,
+    # ld.so never loads the real driver-mounted libnvcuvid.so.1 at runtime and
+    # `import decord` fails with "undefined symbol: cuvidDestroyDecoder" even
+    # though /usr/lib/x86_64-linux-gnu/libnvcuvid.so.1 is mounted and HAS the
+    # symbol. Diagnosed by readelf + LD_PRELOAD on a dev pod from this image.
+    patchelf --add-needed libnvcuvid.so.1 \
+        /usr/local/lib/python3.11/dist-packages/decord/libdecord.so && \
     rm -f /usr/local/cuda/lib64/stubs/libnvcuvid.so && \
     ldconfig
 
