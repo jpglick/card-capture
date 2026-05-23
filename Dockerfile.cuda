@@ -8,9 +8,14 @@
 
 FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
 
+# Request the 'video' driver capability so nvidia-container-toolkit mounts
+# the /dev/nvidia-* nodes that NVDEC needs. Without this, decord's nvcodec
+# layer hits "CUDA error 100: no CUDA-capable device" even though
+# torch.cuda.is_available() returns True (PyTorch only needs 'compute').
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
 
 # System deps: decord build toolchain + ffmpeg libs (build-time + runtime) +
 # OpenCV runtime helpers. Single layer so the apt cache is dropped at the end.
