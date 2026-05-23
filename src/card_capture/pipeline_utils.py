@@ -560,20 +560,23 @@ def decode_frames_gpu(video_path, indices: list) -> dict:
     # decord is None when the library couldn't be imported (e.g. missing NVIDIA driver
     # on a dev machine). Fall back to OpenCV sequential decode if allowed.
     if decord is None:
-        import sys as _sys
-        # Diagnose: try a fresh import and check sys.modules
+        import sys as _sys, importlib as _il
         _in_modules = _sys.modules.get('decord')
         try:
-            import importlib as _il
             _fresh = _il.import_module('decord')
-            _diag = f"fresh import OK: {_fresh!r}; sys.modules had: {_in_modules!r}"
+            _fresh_repr = repr(_fresh)
         except Exception as _fe:
-            _diag = f"fresh import failed: {type(_fe).__name__}: {_fe}; sys.modules had: {_in_modules!r}"
+            _fresh_repr = f"FAILED: {type(_fe).__name__}: {_fe}"
+        # __file__ tells us which copy of pipeline_utils Python actually loaded
+        import card_capture.pipeline_utils as _self
+        _diag = (
+            f"pipeline_utils.__file__={_self.__file__}; "
+            f"sys.modules['decord']={_in_modules!r}; "
+            f"fresh import={_fresh_repr}"
+        )
         if allow_fallback:
             return _decode_frames_opencv(video_path, indices)
-        raise RuntimeError(
-            f"decode_frames_gpu: decord is None. Diag: {_diag}"
-        )
+        raise RuntimeError(f"decode_frames_gpu: decord is None. {_diag}")
 
     # decord.gpu(0) succeeds even when decord was compiled without NVDEC;
     # the real failure surfaces when VideoReader tries to open the GPU context.

@@ -8,13 +8,13 @@ echo "[start.sh] Pulling latest code…"
 cd /workspace/card-capture
 git pull origin main -q || echo "[start.sh] WARNING: git pull failed, using baked code"
 
-echo "[start.sh] Installing app layer…"
-pip install -e '.[app]' -q 2>&1 | tail -3
+# Re-link the editable install so Python picks up git-pulled source changes.
+# --no-deps avoids reinstalling torch/torchvision. Errors are shown, not hidden.
+echo "[start.sh] Re-linking editable install…"
+pip install -e '.[app]' --no-deps -q || echo "[start.sh] WARNING: editable install failed"
 
 if [ -n "$RUNPOD_POD_ID" ]; then
     # ── RunPod serverless ──────────────────────────────────────────────────
-    # Don't re-run pip install — torch/torchvision are pinned to the base image
-    # and reinstalling would pull incompatible CPU versions. Only ensure runpod SDK is present.
     echo "[start.sh] RunPod detected (pod $RUNPOD_POD_ID) — ensuring runpod SDK…"
     pip install "runpod>=1.7.0" -q 2>&1 | tail -2
     echo "[start.sh] Starting runpod_handler…"
