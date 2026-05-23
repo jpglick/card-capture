@@ -40,8 +40,12 @@ RUN git clone --recursive https://github.com/dmlc/decord /tmp/decord && \
     cd /tmp/decord/python && \
     pip wheel . --wheel-dir /tmp/decord-wheels
 
-# ── Stage 2: final runtime image ─────────────────────────────────────────────
-FROM pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime
+# ── Stage 2: final image (devel base — same toolchain as Stage 1) ────────────
+# Using the devel base instead of runtime so libstdc++ and CUDA headers are
+# identical to where decord was compiled. Closes the long tail of GLIBCXX /
+# LD_PRELOAD / cross-stage COPY fixes (commits eac6ae5b … d449e031). Image is
+# ~3-5 GB larger; irrelevant on RunPod.
+FROM pytorch/pytorch:2.3.0-cuda12.1-cudnn8-devel
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -50,11 +54,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # Copy the CUDA-enabled decord wheel built in Stage 1
 COPY --from=decord-builder /tmp/decord-wheels/decord*.whl /tmp/
 
-# decord-builder /tmp/decord-wheels copied above. No other cross-stage copies needed.
-# libdecord.so RPATH points to /opt/conda/lib, so we must update conda's libstdc++.
-# The runtime image ships libstdc++6 12.3.0 (6.0.30, has GLIBCXX_3.4.30) at the system path.
-# COPY --from doesn't reliably replace symlinks; use RUN cp after apt-get installs the lib.
-
+# libdecord.so RPATH=/opt/conda/lib. With devel base, the system libstdc++ at
+# /usr/lib/x86_64-linux-gnu/libstdc++.so.6 is GCC 12 / GLIBCXX_3.4.30 (same as
+# what decord was built against). The cp ensures conda's libstdc++ matches that
+# — defensive and a no-op if conda's is already adequate.
 RUN apt-get update -q && \
     apt-get install -y -q --no-install-recommends \
         git ffmpeg libsm6 libxext6 libgl1 \

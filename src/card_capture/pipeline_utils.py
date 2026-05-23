@@ -538,8 +538,10 @@ def _laplacian_select_frames(
 
 try:
     import decord as decord  # noqa: F401
-except (ImportError, OSError, Exception):
+    _decord_import_error: str | None = None
+except Exception as _e:
     decord = None  # type: ignore[assignment]
+    _decord_import_error = f"{type(_e).__name__}: {_e}"
 
 
 def decode_frames_gpu(video_path, indices: list) -> dict:
@@ -560,7 +562,7 @@ def decode_frames_gpu(video_path, indices: list) -> dict:
             return _decode_frames_opencv(video_path, indices)
         raise RuntimeError(
             "decode_frames_gpu requires decord with NVDEC support. "
-            "The installed decord could not import (missing GPU driver libs or GLIBCXX). "
+            f"import decord failed: {_decord_import_error}. "
             "Set CC_CUDA_ALLOW_CPU_FALLBACK=1 to fall back to OpenCV sequential decode."
         )
 

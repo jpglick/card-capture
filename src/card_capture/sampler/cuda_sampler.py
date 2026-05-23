@@ -16,8 +16,10 @@ import numpy as np
 
 try:
     import decord
-except (ImportError, OSError):
+    _decord_import_error: str | None = None
+except Exception as _e:
     decord = None  # type: ignore[assignment]
+    _decord_import_error = f"{type(_e).__name__}: {_e}"
 
 from card_capture.models import FrameSample
 
@@ -48,12 +50,23 @@ class CudaSampler:
         self.last_selected_frame_count: int = 0
 
         allow_fallback = os.environ.get("CC_CUDA_ALLOW_CPU_FALLBACK", "0") == "1"
+        if decord is None:
+            if not allow_fallback:
+                raise RuntimeError(
+                    "CudaSampler requires decord with NVDEC. "
+                    f"import decord failed: {_decord_import_error}. "
+                    "Set CC_CUDA_ALLOW_CPU_FALLBACK=1 to allow CPU fallback."
+                )
+            raise RuntimeError(
+                "CudaSampler requires decord; CPU fallback path needs decord too."
+            )
         try:
             self._gpu_ctx = _probe_gpu()
-        except Exception:
+        except Exception as e:
             if not allow_fallback:
                 raise RuntimeError(
                     "CudaSampler requires NVDEC (decord GPU context). "
+                    f"decord.gpu(0) raised: {type(e).__name__}: {e}. "
                     "Set CC_CUDA_ALLOW_CPU_FALLBACK=1 to allow CPU fallback "
                     "in dev/test environments."
                 )
