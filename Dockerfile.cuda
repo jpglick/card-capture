@@ -1,70 +1,42 @@
-# card-capture CUDA base image — linux/amd64 target (vast.ai / RunPod instances are x86_64)
+# card-capture CUDA image — linux/amd64, RunPod target.
 #
-# Multi-stage build:
-#   Stage 1 (decord-builder): compiles decord with CUDA/NVDEC from source using the
-#     DEVEL image (which has nvcc + CUDA headers). Produces a Python wheel.
-#   Stage 2 (final): RUNTIME image (smaller). Copies the CUDA-enabled decord wheel
-#     from Stage 1 so we get NVDEC support without shipping a full DEVEL environment.
-#
-# The pip-installed decord from PyPI is compiled without NVDEC. Building from source
-# with USE_CUDA=ON enables hardware-accelerated video decode which is critical for
-# large 4K video files.
+# Uses RunPod's own pytorch base, which is built and validated against their
+# container runtime's NVIDIA driver mount. Sidesteps the conda RPATH games
+# and libnvcuvid stub gymnastics that plagued the pytorch/pytorch base
+# (commits eac6ae5b … d71b0243). Confirmed working on a dev pod: import decord,
+# decord.gpu(0), and NVDEC frame open all succeed without surgery.
 
-# ── Stage 1: build NVDEC-enabled decord ──────────────────────────────────────
-FROM pytorch/pytorch:2.3.0-cuda12.1-cudnn8-devel AS decord-builder
-
-ENV DEBIAN_FRONTEND=noninteractive PIP_NO_CACHE_DIR=1
-
-RUN apt-get update -q && \
-    apt-get install -y -q --no-install-recommends \
-        cmake build-essential git \
-        libavcodec-dev libavdevice-dev libavfilter-dev libavformat-dev libavutil-dev libswscale-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# NVIDIA removed nvcuvid.h and libnvcuvid.so from the CUDA toolkit in 11.1+.
-# They ship as a separate Video Codec SDK download. The endorsed approach for
-# headless builds is a stub .so — cmake find_library() and the linker are satisfied;
-# at runtime on RunPod the real libnvcuvid.so.1 from the NVIDIA driver mount is used.
-# SONAME must be libnvcuvid.so.1 so that libdecord.so records the versioned name
-# and the dynamic linker can find the real libnvcuvid.so.1 from the NVIDIA driver mount.
-RUN printf 'void nvcuvid_stub(void) {}' > /tmp/stub.c && \
-    gcc -shared -fPIC -Wl,-soname,libnvcuvid.so.1 \
-        -o /usr/local/cuda/lib64/stubs/libnvcuvid.so /tmp/stub.c && \
-    rm /tmp/stub.c
-
-# Clone decord and build with CUDA/NVDEC support.
-RUN git clone --recursive https://github.com/dmlc/decord /tmp/decord && \
-    cd /tmp/decord && mkdir build && cd build && \
-    cmake .. -DUSE_CUDA=ON -DCMAKE_BUILD_TYPE=Release && \
-    make -j$(nproc) && \
-    cd /tmp/decord/python && \
-    pip wheel . --wheel-dir /tmp/decord-wheels
-
-# ── Stage 2: final image (devel base — same toolchain as Stage 1) ────────────
-# Using the devel base instead of runtime so libstdc++ and CUDA headers are
-# identical to where decord was compiled. Closes the long tail of GLIBCXX /
-# LD_PRELOAD / cross-stage COPY fixes (commits eac6ae5b … d449e031). Image is
-# ~3-5 GB larger; irrelevant on RunPod.
-FROM pytorch/pytorch:2.3.0-cuda12.1-cudnn8-devel
+FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
-# Copy the CUDA-enabled decord wheel built in Stage 1
-COPY --from=decord-builder /tmp/decord-wheels/decord*.whl /tmp/
-
-# libdecord.so RPATH=/opt/conda/lib. With devel base, the system libstdc++ at
-# /usr/lib/x86_64-linux-gnu/libstdc++.so.6 is GCC 12 / GLIBCXX_3.4.30 (same as
-# what decord was built against). The cp ensures conda's libstdc++ matches that
-# — defensive and a no-op if conda's is already adequate.
+# System deps: decord build toolchain + ffmpeg libs (build-time + runtime) +
+# OpenCV runtime helpers. Single layer so the apt cache is dropped at the end.
 RUN apt-get update -q && \
     apt-get install -y -q --no-install-recommends \
-        git ffmpeg libsm6 libxext6 libgl1 \
-    && rm -rf /var/lib/apt/lists/* && \
-    cp /usr/lib/x86_64-linux-gnu/libstdc++.so.6 /opt/conda/lib/libstdc++.so.6 && \
-    pip install /tmp/decord*.whl && rm /tmp/decord*.whl && \
-    pip install \
+        cmake build-essential git \
+        libavcodec-dev libavdevice-dev libavfilter-dev libavformat-dev libavutil-dev libswscale-dev \
+        ffmpeg libsm6 libxext6 libgl1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Build decord from source with NVDEC. The pip wheel from PyPI is compiled
+# without CUDA — we need USE_CUDA=ON for hardware video decode on 4K input.
+# The runpod base provides libnvcuvid for build-time linking; the real lib is
+# mounted at runtime by NVIDIA's container runtime (proven on dev pod).
+RUN git clone --recursive https://github.com/dmlc/decord /tmp/decord && \
+    cd /tmp/decord && mkdir build && cd build && \
+    cmake .. -DUSE_CUDA=ON -DCMAKE_BUILD_TYPE=Release && \
+    make -j$(nproc) && \
+    cd /tmp/decord/python && \
+    pip install . && \
+    cd / && rm -rf /tmp/decord
+
+# Python deps. torch + torchvision come from the base image (cu124). Everything
+# else listed in one layer; pyproject's [model,app] extras pull the same set
+# but pinning here makes the layer cacheable independent of repo state.
+RUN pip install \
         "av>=12.0.0" \
         "ultralytics>=8.1.0" \
         "kornia>=0.7.2" \
@@ -74,20 +46,16 @@ RUN apt-get update -q && \
         "python-multipart>=0.0.9" \
         "python-dotenv>=1.0.0" \
         "metaflow>=2.10.0" \
-        "faiss-cpu>=1.7.4" && \
-    pip install torch==2.3.0 torchvision==0.18.0 \
-        --index-url https://download.pytorch.org/whl/cu121 \
-        --force-reinstall
+        "faiss-cpu>=1.7.4" \
+        "runpod>=1.7.0"
 
-# Clone repo and install the app layer (heavy ML deps already above).
-# torch/torchvision are NOT in pyproject.toml — the base image provides them.
+# App layer.
 RUN git clone https://github.com/jpglick/card-capture.git /workspace/card-capture
 WORKDIR /workspace/card-capture
 RUN pip install -e ".[model,app]"
 
 # Pre-download models so cold starts don't pay the download cost.
 # YOLO weights (~160 MB) from HuggingFace; DINOv2 ViT-S/14 (~330 MB) from torch.hub.
-# Both are cached to ~/.cache/{huggingface,torch/hub} in the image layer.
 RUN python3 -c "\
 from huggingface_hub import hf_hub_download; \
 hf_hub_download(repo_id='AlecKarfonta/cardcaptor-v3', filename='weights/cardcaptor_v3_best.pt'); \
