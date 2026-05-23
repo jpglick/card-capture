@@ -593,8 +593,12 @@ def decode_frames_gpu(video_path, indices: list) -> dict:
                 "Set CC_CUDA_ALLOW_CPU_FALLBACK=1 to allow CPU decode in dev environments."
             ) from e
     frames = vr.get_batch(sorted_indices)
-    result = {idx: frames[i].asnumpy() for i, idx in enumerate(sorted_indices)}
-    del frames
+    # decord 0.6.x NDArray is not subscriptable directly — convert the batch to
+    # numpy once, then index. Calling .asnumpy() on each element fails with
+    # "'NDArray' object is not subscriptable".
+    frames_np = frames.asnumpy()  # (N, H, W, 3) uint8
+    result = {idx: frames_np[i] for i, idx in enumerate(sorted_indices)}
+    del frames, frames_np
     return result
 
 

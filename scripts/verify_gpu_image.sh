@@ -123,10 +123,13 @@ else:
     torch.cuda.synchronize(); t0 = time.time()
     res = model.predict(dummy, device="cuda", imgsz=640, verbose=False)
     torch.cuda.synchronize(); t_ms = (time.time() - t0) * 1000
-    dev = str(res[0].boxes.data.device) if (res and res[0].boxes is not None) else "<no boxes>"
-    print(f"  YOLO result device: {dev}   inference: {t_ms:.1f} ms")
-    if "cuda" not in dev:
-        fails.append(f"YOLO not on cuda (got {dev})")
+    # Blank dummy image may produce zero detections (boxes=None), so check
+    # the model's weight device directly — that's what determined where
+    # inference ran.
+    weights_dev = str(next(model.model.parameters()).device)
+    print(f"  YOLO weights device: {weights_dev}   inference: {t_ms:.1f} ms")
+    if "cuda" not in weights_dev:
+        fails.append(f"YOLO model not on cuda (got {weights_dev})")
 
 # 7) Our actual code path — pipeline_utils.decode_frames_gpu round-trip.
 #    This is what the refine step calls. If this fails the whole pipeline fails.
