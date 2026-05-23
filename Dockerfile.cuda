@@ -28,15 +28,30 @@ RUN apt-get update -q && \
 
 # Build decord from source with NVDEC. The pip wheel from PyPI is compiled
 # without CUDA — we need USE_CUDA=ON for hardware video decode on 4K input.
-# The runpod base provides libnvcuvid for build-time linking; the real lib is
-# mounted at runtime by NVIDIA's container runtime (proven on dev pod).
-RUN git clone --recursive https://github.com/dmlc/decord /tmp/decord && \
+#
+# libnvcuvid: ships with the NVIDIA driver, not the CUDA toolkit. On a GPU
+# host, nvidia-container-toolkit mounts libnvcuvid.so.1 into the container at
+# runtime. But `docker build` runs without a GPU mount, so cmake can't find
+# it — we provide a minimal stub for build-time linking only. SONAME is set
+# to libnvcuvid.so.1 so libdecord.so records DT_NEEDED=libnvcuvid.so.1, which
+# the dynamic linker then resolves to the real driver-mounted lib at runtime.
+# The stub is DELETED at the end of this RUN so it cannot shadow the real
+# lib at runtime (the failure mode that ate ~10 commits on the pytorch/pytorch
+# base; commit history: eac6ae5b … d71b0243).
+RUN printf 'void nvcuvid_stub(void) {}' > /tmp/stub.c && \
+    mkdir -p /usr/local/cuda/lib64/stubs && \
+    gcc -shared -fPIC -Wl,-soname,libnvcuvid.so.1 \
+        -o /usr/local/cuda/lib64/stubs/libnvcuvid.so /tmp/stub.c && \
+    rm /tmp/stub.c && \
+    git clone --recursive https://github.com/dmlc/decord /tmp/decord && \
     cd /tmp/decord && mkdir build && cd build && \
     cmake .. -DUSE_CUDA=ON -DCMAKE_BUILD_TYPE=Release && \
     make -j$(nproc) && \
     cd /tmp/decord/python && \
     pip install . && \
-    cd / && rm -rf /tmp/decord
+    cd / && rm -rf /tmp/decord && \
+    rm -f /usr/local/cuda/lib64/stubs/libnvcuvid.so && \
+    ldconfig
 
 # Python deps. torch + torchvision come from the base image (cu124). Everything
 # else listed in one layer; pyproject's [model,app] extras pull the same set
