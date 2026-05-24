@@ -47,7 +47,8 @@ async def test_run_async_emits_started_and_completed(tmp_path):
         side_effect=lambda key, dest: dest.write_bytes(b"fake_tarball")
     )
     runner._submit_job = AsyncMock(return_value="rp-job-001")
-    runner._poll_job = AsyncMock(return_value="COMPLETED")
+    # _poll_job now returns (status, body) so callers can capture body["output"]
+    runner._poll_job = AsyncMock(return_value=("COMPLETED", {"output": {"diagnostics": {}}}))
     runner._cleanup_s3 = AsyncMock()
 
     await runner.run_async(
@@ -93,7 +94,8 @@ async def test_run_async_raises_on_runpod_job_failure(tmp_path):
 
     runner._upload_video = MagicMock()
     runner._submit_job = AsyncMock(return_value="rp-job-002")
-    runner._poll_job = AsyncMock(return_value="FAILED")
+    # _poll_job now returns (status, body)
+    runner._poll_job = AsyncMock(return_value=("FAILED", {"error": "test failure"}))
     runner._cleanup_s3 = AsyncMock()
 
     with pytest.raises(RuntimeError, match="rp-job-002"):

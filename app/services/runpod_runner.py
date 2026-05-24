@@ -104,9 +104,15 @@ class RunPodRunner:
             print(f"[{run_id}] runpod: job {job_id} submitted", flush=True)
 
             poll_count = 0
+            handler_output: dict = {}
             while True:
-                status = await self._poll_job(job_id)
+                status, body = await self._poll_job(job_id)
                 if status == "COMPLETED":
+                    # Capture the handler's full return value (timings,
+                    # stage_payloads, detect_telemetry, GPU info, db_diag) so
+                    # we can persist it locally — RunPod auto-deletes job data
+                    # after a short window so this is our only chance.
+                    handler_output = body.get("output") or {}
                     break
                 if status in ("FAILED", "CANCELLED", "TIMED_OUT"):
                     raise RuntimeError(f"RunPod job {job_id} ended with status: {status}")
@@ -120,6 +126,21 @@ class RunPodRunner:
 
             t_gpu = _time.time() - t_submit
             print(f"[{run_id}] runpod: GPU job completed in {t_gpu:.1f}s", flush=True)
+
+            # Persist the handler output dict locally + emit it as an event so
+            # the UI can show timings/telemetry. File path mirrors the tarball
+            # location so debugging tools can find it next to crops.
+            try:
+                import json as _json
+                Path(output_dir).mkdir(parents=True, exist_ok=True)
+                ho_path = Path(output_dir) / f"{run_id}_handler_output.json"
+                ho_path.write_text(_json.dumps(handler_output, indent=2))
+                print(f"[{run_id}] runpod: saved handler output to {ho_path}", flush=True)
+            except Exception as exc:
+                print(f"[{run_id}] runpod: could not save handler output: {exc}", flush=True)
+            self.bus.emit(run_id, Event(
+                name="handler_output", payload={"output": handler_output}
+            ))
 
             self.bus.emit(run_id, Event(name="log", payload={"line": "Downloading results from R2…"}))
             tarball = Path(output_dir) / f"{run_id}_results.tar.gz"
@@ -186,7 +207,14 @@ class RunPodRunner:
             r.raise_for_status()
             return r.json()["id"]
 
-    async def _poll_job(self, job_id: str) -> str:
+    async def _poll_job(self, job_id: str) -> tuple[str, dict]:
+        """Return (status, full body) so callers can capture output on COMPLETED.
+
+        Previously returned only the status string and threw away body["output"]
+        — which contains the handler's full diagnostics (stage_payloads,
+        detect_telemetry, timings, GPU info). That data never reached the local
+        app; cards landed via the tarball but metrics were silently dropped.
+        """
         url = f"{_RUNPOD_API}/{self._endpoint_id}/status/{job_id}"
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.get(url, headers=self._headers)
@@ -196,7 +224,7 @@ class RunPodRunner:
             if status in ("FAILED", "CANCELLED", "TIMED_OUT"):
                 error = body.get("error") or body.get("output", {})
                 print(f"[runpod] job {job_id} {status}: {error}", flush=True)
-            return status
+            return status, body
 
     async def _cleanup_r2(self, run_id: str) -> None:
         loop = asyncio.get_event_loop()
