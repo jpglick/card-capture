@@ -13,9 +13,18 @@ def _torch_like(arr):
 
 
 def _make_batch(n, h=100, w=100):
-    """Return a fake VideoLoader (batch_data, batch_indices) pair."""
+    """Return a fake VideoLoader (batch_data, batch_indices) pair.
+
+    Real decord VideoLoader yields indices as (N, 2): [[video_idx, frame_idx], ...].
+    The previous mock returned 1D, which hid an IndexError in production code
+    that did `.reshape(-1)` on the (N, 2) array — turning N rows into 2N entries
+    and stepping off the end of the (N, H, W, 3) frame batch.
+    """
     data = _torch_like(np.zeros((n, h, w, 3), dtype=np.uint8))
-    indices = _torch_like(np.arange(n * 2, step=2).reshape(-1))
+    # frame indices 0, 2, 4, ... (stride 2 of n frames) paired with video_idx=0
+    frame_indices = np.arange(0, n * 2, step=2, dtype=int)
+    pairs = np.stack([np.zeros(n, dtype=int), frame_indices], axis=1)  # (N, 2)
+    indices = _torch_like(pairs)
     return data, indices
 
 

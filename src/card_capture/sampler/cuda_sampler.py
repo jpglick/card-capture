@@ -131,7 +131,16 @@ class CudaSampler:
             # numpy contract. A future optimization is to push torch tensors
             # all the way through to kornia and skip this copy entirely.
             frames_np = batch_data.cpu().numpy()                 # (N, H, W, 3)
-            indices_flat = batch_indices.cpu().numpy().reshape(-1).astype(int)
+            # decord VideoLoader returns batch_indices as (N, 2) — pairs of
+            # [video_idx, frame_idx]. We only have one video (vl was given a
+            # single path), so take the frame_idx column. The previous
+            # reshape(-1) doubled the length to 2N and caused an IndexError
+            # when we tried to align with frames_np (length N).
+            idx_arr = batch_indices.cpu().numpy()
+            if idx_arr.ndim == 2:
+                indices_flat = idx_arr[:, 1].astype(int)
+            else:
+                indices_flat = idx_arr.reshape(-1).astype(int)
 
             batch = [
                 FrameSample(
