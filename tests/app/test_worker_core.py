@@ -13,6 +13,7 @@ from app.worker_core import (
     apply_cuda_config,
     restore_config,
     package_results,
+    parse_metaflow_start_stage,
 )
 
 
@@ -105,3 +106,15 @@ def test_package_results_includes_worker_database(tmp_path):
     buf = io.BytesIO(result)
     with tarfile.open(fileobj=buf, mode="r:gz") as tar:
         assert "cards.sqlite" in tar.getnames()
+
+
+def test_parse_metaflow_start_stage_accepts_pid_format():
+    line = "2026-05-24 22:13:27.434 [1779660806748398/detect/2 (pid 1254)] Task is starting."
+
+    assert parse_metaflow_start_stage(line) == "detect"
+
+
+def test_parse_metaflow_start_stage_accepts_legacy_format():
+    line = "2026-05-24 22:13:27.434 [1779660806748398/refine/5] Task is starting."
+
+    assert parse_metaflow_start_stage(line) == "refine"

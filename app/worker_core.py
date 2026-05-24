@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -20,6 +21,16 @@ CUDA_CONFIG_OVERRIDES: dict = {
 }
 
 _CONFIG_PATH = Path(__file__).parent.parent / "card_capture_config.json"
+
+_METAFLOW_STAGE_START_RE = re.compile(
+    r"\[[^/\]]+/([a-zA-Z0-9_]+)/\d+(?:\s+\([^)]+\))?\]\s+Task is starting\.?"
+)
+
+
+def parse_metaflow_start_stage(line: str) -> str | None:
+    """Return the Metaflow step name from a task-start log line."""
+    match = _METAFLOW_STAGE_START_RE.search(line)
+    return match.group(1) if match else None
 
 
 def apply_cuda_config() -> dict:
@@ -101,8 +112,6 @@ def run_pipeline(job_id: str, video_path: str, config_preset: str, output_dir: P
         cwd=str(repo_root),
         env=env,
     )
-    import re
-    stage_pattern = re.compile(r'\[.*?/([a-zA-Z0-9_]+)/\d+\] Task is starting')
     collected: list[str] = []
     assert proc.stdout is not None
     for line in proc.stdout:
@@ -112,9 +121,9 @@ def run_pipeline(job_id: str, video_path: str, config_preset: str, output_dir: P
         sys.stdout.flush()
         collected.append(line)
         if stage_cb:
-            m = stage_pattern.search(line)
-            if m:
-                stage_cb(m.group(1))
+            stage = parse_metaflow_start_stage(line)
+            if stage:
+                stage_cb(stage)
     returncode = proc.wait()
     full_stdout = "".join(collected)
 

@@ -9,6 +9,8 @@ import time
 from pathlib import Path
 from typing import Optional, Type
 
+from app.worker_core import parse_metaflow_start_stage
+
 _REPO_ROOT = str(Path(__file__).parent.parent.parent)
 logger = logging.getLogger(__name__)
 
@@ -122,8 +124,6 @@ class PipelineRunner:
                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                         text=True, bufsize=1,
                     )
-                    import re
-                    stage_pattern = re.compile(r'\[.*?/([a-zA-Z0-9_]+)/\d+\] Task is starting')
                     for line in proc.stdout:
                         line = line.rstrip()
                         if line and not _is_noise(line):
@@ -132,9 +132,9 @@ class PipelineRunner:
                             self._persist_log(run_id, line)
                             
                             if sampler is not None:
-                                m = stage_pattern.search(line)
-                                if m:
-                                    sampler.current_stage = m.group(1)
+                                stage = parse_metaflow_start_stage(line)
+                                if stage:
+                                    sampler.current_stage = stage
                     proc.wait()
                 finally:
                     if sampler is not None:
