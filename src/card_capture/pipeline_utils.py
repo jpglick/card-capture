@@ -84,6 +84,44 @@ def _ensure_gpu_imports() -> bool:
     return False
 
 
+def _laplacian_heatmap_batch(images: List[np.ndarray]) -> List[np.ndarray]:
+    """Batched Laplacian filter response — float32 single-channel.
+
+    Avoids the per-candidate GPU stream sync and PCIe transfer overhead
+    by uploading and computing all candidate images for a track in one pass.
+    Falls back to single-image CPU path if CUDA is unavailable.
+    """
+    if not images:
+        return []
+
+    if not _ensure_gpu_imports():
+        return [_laplacian_heatmap(img) for img in images]
+
+    # Convert to grayscale on CPU (relatively cheap, avoids sending 3x channels)
+    grays = []
+    for img in images:
+        if img.ndim == 3:
+            grays.append(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY))
+        else:
+            grays.append(img)
+
+    # Bulk upload (N, H, W) uint8
+    stacked = np.stack(grays, axis=0)
+    batch_u8 = _torch_mod.from_numpy(stacked).cuda(non_blocking=True)
+    
+    # (N, H, W) -> (N, 1, H, W) float32
+    batch_t = batch_u8.unsqueeze(1).float()
+    del batch_u8
+
+    # Compute
+    lap_batch = _kornia_filters_mod.laplacian(batch_t, kernel_size=3)
+    del batch_t
+
+    # Download (N, H, W) float32
+    lap_np = lap_batch.squeeze(1).cpu().numpy().astype(np.float32)
+    
+    return [lap_np[i] for i in range(len(images))]
+
 def _laplacian_heatmap(image: np.ndarray) -> np.ndarray:
     """Laplacian filter response — float32 single-channel, same HxW as input.
 

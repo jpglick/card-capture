@@ -57,7 +57,7 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
     from card_capture.scoring import QualityScorer
     from card_capture.presence.background_novelty import quad_novelty
     from card_capture.pipeline_utils import (
-        _select_canonical_entries, _glare_mask, _laplacian_heatmap, _compress_array,
+        _select_canonical_entries, _glare_mask, _laplacian_heatmap, _laplacian_heatmap_batch, _compress_array,
         decode_frames_gpu, _compute_laplacian_scan_indices,
     )
     from card_capture.selector import ScoredCandidate
@@ -318,10 +318,6 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
             _gmask = _compress_array(_glare_mask(normalized))
             _tick("glare_mask", _t)
 
-            _t = time.time()
-            _lhmap = _compress_array(_laplacian_heatmap(normalized))
-            _tick("laplacian_heatmap", _t)
-
             frame_entries.append({
                 "candidate": c,
                 "normalized": normalized,
@@ -331,11 +327,18 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
                 "glare_y": glare_y,
                 "sharpness": quality_score.components.get("sharpness", 0.0),
                 "glare_mask": _gmask,
-                "laplacian_heatmap": _lhmap,
             })
 
         if not frame_entries:
             continue
+            
+        # Batch process laplacian heatmap for all candidates in this track
+        _t = time.time()
+        _lap_images = [e["normalized"] for e in frame_entries]
+        _lap_heatmaps = _laplacian_heatmap_batch(_lap_images)
+        for i, entry in enumerate(frame_entries):
+            entry["laplacian_heatmap"] = _compress_array(_lap_heatmaps[i])
+        _tick("laplacian_heatmap", _t)
 
         # Build ScoredCandidate-like objects for _select_canonical_entries
         from card_capture.selector import ScoredCandidate as _SC

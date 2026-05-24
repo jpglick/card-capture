@@ -8,6 +8,7 @@ import sqlite3
 import subprocess
 import sys
 import tarfile
+import typing
 from pathlib import Path
 
 CUDA_CONFIG_OVERRIDES: dict = {
@@ -47,7 +48,7 @@ def restore_config(original: dict) -> None:
         pass
 
 
-def run_pipeline(job_id: str, video_path: str, config_preset: str, output_dir: Path) -> tuple:
+def run_pipeline(job_id: str, video_path: str, config_preset: str, output_dir: Path, stage_cb: typing.Optional[typing.Callable[[str], None]] = None) -> tuple:
     """Run the Metaflow pipeline subprocess; return (db_path, stdout).
 
     Streams the subprocess stdout/stderr live to our own stdout (prefixed with
@@ -100,6 +101,8 @@ def run_pipeline(job_id: str, video_path: str, config_preset: str, output_dir: P
         cwd=str(repo_root),
         env=env,
     )
+    import re
+    stage_pattern = re.compile(r'\[.*?/([a-zA-Z0-9_]+)/\d+\] Task is starting')
     collected: list[str] = []
     assert proc.stdout is not None
     for line in proc.stdout:
@@ -108,6 +111,10 @@ def run_pipeline(job_id: str, video_path: str, config_preset: str, output_dir: P
         sys.stdout.write(f"[mf] {line}")
         sys.stdout.flush()
         collected.append(line)
+        if stage_cb:
+            m = stage_pattern.search(line)
+            if m:
+                stage_cb(m.group(1))
     returncode = proc.wait()
     full_stdout = "".join(collected)
 

@@ -78,7 +78,7 @@ def handler(job: dict) -> dict:
     original = apply_cuda_config()
     pipeline_stdout = ""
     try:
-        _, pipeline_stdout = run_pipeline(run_id, str(video_path), config_preset, output_dir)
+        _, pipeline_stdout = run_pipeline(run_id, str(video_path), config_preset, output_dir, stage_cb=sampler.set_stage)
     except Exception:
         print("[diag] pipeline failed — collecting partial DB diagnostics", flush=True)
         try:
@@ -141,6 +141,10 @@ class _ResourceSampler:
         self._stop = False
         self._thread = None
         self._samples: list[dict] = []
+        self.current_stage = "init"
+
+    def set_stage(self, stage: str) -> None:
+        self.current_stage = stage
 
     def start(self) -> None:
         import threading
@@ -200,6 +204,13 @@ class _ResourceSampler:
             if not vals: return None
             return {"peak": max(vals), "mean": round(sum(vals) / len(vals), 1), "n": len(vals)}
 
+        stage_peaks = {}
+        for s in self._samples:
+            stage = s.get("stage", "unknown")
+            vram = s.get("vram_used_mb", 0)
+            if vram > stage_peaks.get(stage, 0):
+                stage_peaks[stage] = vram
+
         return {
             "samples": len(self._samples),
             "interval_s": self.interval_s,
@@ -211,6 +222,7 @@ class _ResourceSampler:
             "cpu_pct":      _stats("cpu_pct"),
             "ram_used_mb":  _stats("ram_used_mb"),
             "ram_pct":      _stats("ram_pct"),
+            "vram_peak_by_stage": stage_peaks,
         }
 
 

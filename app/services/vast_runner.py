@@ -50,7 +50,7 @@ class VastAIRunner:
         gpu_type: str = "RTX 4090",
         template_id: str = "",
         branch: str = "main",
-        idle_timeout_s: int = 300,
+        idle_timeout_s: int = 600,
     ) -> None:
         self.bus = bus
         self._client = VastAIClient(api_key)
@@ -241,7 +241,7 @@ class VastAIRunner:
             # the instance IP assignment by 30-90 seconds on vast.ai's infrastructure.
             # Use asyncio.open_connection (non-blocking) to avoid stalling the event loop.
             print(f"[vast.ai] Waiting for SSH proxy {ssh_host}:{ssh_port}…", flush=True)
-            for i in range(60):  # up to 5 minutes
+            for i in range(120):  # up to 10 minutes
                 try:
                     _, w = await asyncio.wait_for(
                         asyncio.open_connection(ssh_host, ssh_port), timeout=4
@@ -256,7 +256,7 @@ class VastAIRunner:
                 await asyncio.sleep(5)
             else:
                 raise RuntimeError(
-                    f"SSH proxy {ssh_host}:{ssh_port} not accepting connections after 5 minutes"
+                    f"SSH proxy {ssh_host}:{ssh_port} not accepting connections after 10 minutes"
                 )
 
             print(f"[vast.ai] Opening SSH tunnel via {ssh_host}:{ssh_port}…", flush=True)
