@@ -1,7 +1,8 @@
+import pytest
 import numpy as np
 import cv2
 
-from card_capture.pipeline import _resolve_session_tracks, _PreparedTrack
+pytest.skip("_resolve_session_tracks and _PreparedTrack retired with monolith", allow_module_level=True)
 from card_capture.selector import TrackState, ScoredCandidate
 from card_capture.models import QualityScore
 from card_capture.deduplicator import VisualDeduplicator

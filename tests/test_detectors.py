@@ -9,7 +9,7 @@ from card_capture.detectors import (
     FakeCornerDetector,
     probe_torch_device_status,
 )
-from card_capture.pipeline import NullStateDetector
+from card_capture.workers import NullStateDetector
 from card_capture.models import DetectionPacket, FramePacket, FrameSample
 
 

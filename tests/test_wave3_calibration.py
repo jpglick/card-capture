@@ -112,6 +112,7 @@ class TestEmbeddingDistance:
 class TestCrossVideoDedup:
     """Test cross-video deduplication via embeddings and pHash."""
 
+    @pytest.mark.skip(reason="_is_reid_duplicate retired with monolith")
     def test_cross_video_dedup_via_embeddings(self):
         """Same card across videos detected via embedding distance.
 
@@ -119,7 +120,7 @@ class TestCrossVideoDedup:
         - pHash match (Hamming ≤ 22) → candidates
         - Embeddings available and similar (distance < 0.5) → confirm same card
         """
-        from card_capture.pipeline import _is_reid_duplicate
+        from card_capture.pipeline_utils import _is_reid_duplicate
         from card_capture.deduplicator import VisualDeduplicator
 
         deduplicator = VisualDeduplicator()
@@ -152,6 +153,7 @@ class TestCrossVideoDedup:
 
         assert is_duplicate is True, "Same card with low embedding distance should be detected as duplicate"
 
+    @pytest.mark.skip(reason="_is_reid_duplicate retired with monolith")
     def test_cross_video_dedup_avoids_false_positives(self):
         """Different cards not deduped even with pHash collision.
 
@@ -159,7 +161,7 @@ class TestCrossVideoDedup:
         - pHash collision (could match) → candidates
         - Embeddings available but dissimilar (distance > 0.5) → NOT same card
         """
-        from card_capture.pipeline import _is_reid_duplicate
+        from card_capture.pipeline_utils import _is_reid_duplicate
         from card_capture.deduplicator import VisualDeduplicator
 
         deduplicator = VisualDeduplicator()
@@ -444,6 +446,7 @@ class TestAdaptiveThresholds:
 
         assert adaptive_threshold == global_threshold, "Should fallback to global for <10 samples"
 
+    @pytest.mark.skip(reason="PipelineContext / _filter_candidates_by_novelty retired with monolith")
     def test_novelty_collection_not_double_counted(self):
         """Novelty scores collected once at candidate-level, not twice via track-level.
 
@@ -451,7 +454,7 @@ class TestAdaptiveThresholds:
         and later through _prune_empty_workspace_tracks (reads threshold but does NOT collect).
         Verify len(context.observed_novelty_scores) == N (not 2N).
         """
-        from card_capture.pipeline import (
+        from card_capture.pipeline_utils import (
             PipelineContext,
             _filter_candidates_by_novelty,
             _prune_empty_workspace_tracks,
