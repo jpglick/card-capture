@@ -150,6 +150,26 @@ def _collect_db_diagnostics(run_id: str, db_path: Path, output_dir: Path) -> dic
                 ).fetchall()
                 result["events"] = {et: n for et, n in rows}
 
+                # Surface stage timings + any payload fields (event_data is JSON
+                # blob per stage with frame counts, device, durations, etc.)
+                cols = [c[1] for c in conn.execute("PRAGMA table_info(pipeline_events)").fetchall()]
+                if "data_json" in cols:
+                    stage_rows = conn.execute(
+                        "SELECT event_type, data_json FROM pipeline_events "
+                        "WHERE run_id=? AND event_type LIKE 'stage_%'",
+                        (run_id,),
+                    ).fetchall()
+                    import json as _json
+                    stage_payloads = {}
+                    for et, blob in stage_rows:
+                        if blob:
+                            try:
+                                stage_payloads[et] = _json.loads(blob)
+                            except Exception:
+                                stage_payloads[et] = {"raw": str(blob)[:500]}
+                    if stage_payloads:
+                        result["stage_payloads"] = stage_payloads
+
             # detect_telemetry_json answers: was YOLO on cuda? how many batches?
             # how many frames hit YOLO? triage pass rate? — all the slow-step questions.
             if "pipeline_runs" in tables:
@@ -163,6 +183,10 @@ def _collect_db_diagnostics(run_id: str, db_path: Path, output_dir: Path) -> dic
                         result["detect_telemetry"] = _json.loads(row[0])
                     except Exception:
                         result["detect_telemetry"] = {"raw": row[0]}
+                else:
+                    result["detect_telemetry"] = "pipeline_runs row missing or empty for this run_id"
+            else:
+                result["detect_telemetry"] = "pipeline_runs table does not exist"
     except Exception as e:
         result["error"] = str(e)
 
