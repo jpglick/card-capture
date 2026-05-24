@@ -116,12 +116,11 @@ take milliseconds; kornia warp itself is microseconds.
 - VRAM: 158 × 4 MB float32 = ~600 MB additional peak — within our 2.3 GB
   headroom, just barely.
 
-**Status:** not started. Blocked on landing the laplacian port to free
-context window for the deeper refactor.
+**Status:** Completed. Modified `KorniaNormalizer.warp_canonical_batch` to upload uint8 BGR images to the GPU and perform permutation/scaling/color-swapping natively on the device. Reduced CPU work significantly and cut PCIe bandwidth per candidate by ~4x.
 
 ---
 
-## 3. Investigate the 22.2 GB VRAM peak
+## 3. Investigate the 22.2 GB VRAM peak **[diagnostic complete]**
 
 **Symptom:** `vram_used_mb peak = 22,224` on a 24,564 MB card. **Only 2.3 GB
 headroom.** Blocks the "bump `cuda_batch_size` from 32 to 64" optimization
