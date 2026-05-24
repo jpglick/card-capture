@@ -174,9 +174,10 @@ class ResourceSampler:
             with sqlite3.connect(str(self.db_path)) as conn:
                 conn.execute(
                     "INSERT INTO run_resource_samples "
-                    "(run_id, elapsed_s, cpu_pct, mem_used_mb, mem_pct, gpu_pct, vram_used_mb) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (self.run_id, elapsed_s, cpu_pct, mem_used_mb, mem_pct, gpu_pct, vram_used_mb),
+                    "(run_id, elapsed_s, cpu_pct, mem_used_mb, mem_pct, gpu_pct, vram_used_mb, stage) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (self.run_id, elapsed_s, cpu_pct, mem_used_mb, mem_pct, gpu_pct, vram_used_mb, self.current_stage),
                 )
         except Exception:
             pass
+ pass

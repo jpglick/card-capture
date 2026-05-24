@@ -122,12 +122,19 @@ class PipelineRunner:
                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                         text=True, bufsize=1,
                     )
+                    import re
+                    stage_pattern = re.compile(r'\[.*?/([a-zA-Z0-9_]+)/\d+\] Task is starting')
                     for line in proc.stdout:
                         line = line.rstrip()
                         if line and not _is_noise(line):
                             print(f"[{run_id}] {line}", flush=True)
                             self.bus.emit(run_id, Event(name="log", payload={"line": line}))
                             self._persist_log(run_id, line)
+                            
+                            if sampler is not None:
+                                m = stage_pattern.search(line)
+                                if m:
+                                    sampler.current_stage = m.group(1)
                     proc.wait()
                 finally:
                     if sampler is not None:
