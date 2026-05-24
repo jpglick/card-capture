@@ -4,22 +4,13 @@
 
 set -e
 
-# Interactive/dev override: if the container is started with an explicit CMD
-# (e.g. a RunPod Pod created with "Container Start Command: sleep infinity",
-# or `docker run … <image> bash`), exec it directly and skip the worker
-# logic below. Without this, /start.sh always runs the worker and serverless
-# containers thrash when used as dev pods. Standard Docker entrypoint idiom.
-if [ "$#" -gt 0 ]; then
-    echo "[start.sh] CMD args present — exec'ing them and skipping worker logic: $*"
-    exec "$@"
-fi
-
+# ALWAYS sync first, regardless of CMD args. The serverless template sets
+# docker_start_cmd="python3 -m app.runpod_handler" which arrives as args to
+# this script; if we exec them before syncing, the worker silently runs the
+# baked image's code forever (every Python fix invisible to serverless until
+# the next image rebuild). Sync must precede any args branching.
 echo "[start.sh] Syncing /workspace/card-capture to origin/main…"
 cd /workspace/card-capture
-# Hard-sync to origin/main so local untracked/dirty state from the baked image
-# (e.g. .egg-info from pip install -e) cannot make `git pull` abort silently.
-# Earlier symptom: serverless workers ran weeks-old code because git pull -q
-# failed and the WARNING was the only signal — and we never checked it.
 if git fetch origin main --depth=1 -q; then
     git reset --hard origin/main -q
     echo "[start.sh] On commit: $(git rev-parse --short HEAD) ($(git log -1 --format=%s))"
@@ -31,6 +22,16 @@ fi
 # --no-deps avoids reinstalling torch/torchvision. Errors are shown, not hidden.
 echo "[start.sh] Re-linking editable install…"
 pip install -e '.[app]' --no-deps -q || echo "[start.sh] WARNING: editable install failed"
+
+# CMD passthrough goes AFTER the sync. Dev Pods created with
+# "Container Start Command: sleep infinity" (or `docker run … <image> bash`)
+# still work — they just get a synced workspace first. Serverless workers
+# (CMD = "python3 -m app.runpod_handler" from runpod_setup.py) also hit this
+# branch, since the serverless logic below would do the same exec anyway.
+if [ "$#" -gt 0 ]; then
+    echo "[start.sh] CMD args present — exec'ing: $*"
+    exec "$@"
+fi
 
 if [ -n "$RUNPOD_POD_ID" ]; then
     # ── RunPod serverless ──────────────────────────────────────────────────
