@@ -9,6 +9,7 @@ R2 credentials are injected as RunPod endpoint environment variables:
 from __future__ import annotations
 
 import os
+import subprocess as _sp
 import time
 from pathlib import Path
 
@@ -52,6 +53,7 @@ def handler(job: dict) -> dict:
     # ── GPU check ────────────────────────────────────────────────────────────
     gpu_info = _check_gpu()
     print(f"[diag] GPU: {gpu_info}", flush=True)
+    _assert_gpu_preflight(gpu_info)
 
     s3 = _r2_client()
 
@@ -329,19 +331,125 @@ def _parse_metaflow_timings(stdout: str) -> dict:
     return timings
 
 
+def _find_libnvcuvid() -> str | None:
+    """Return a real NVDEC driver library path if one is mounted."""
+    import ctypes.util
+
+    for candidate in (
+        "/usr/lib/x86_64-linux-gnu/libnvcuvid.so.1",
+        "/usr/lib/x86_64-linux-gnu/libnvcuvid.so",
+        "/usr/local/nvidia/lib64/libnvcuvid.so.1",
+        "/usr/local/nvidia/lib64/libnvcuvid.so",
+    ):
+        if Path(candidate).exists():
+            return candidate
+
+    found = ctypes.util.find_library("nvcuvid")
+    return found if found else None
+
+
+def _video_device_nodes() -> list[str]:
+    nodes = []
+    for candidate in ("/dev/nvidia-modeset", "/dev/nvidia-caps", "/dev/dri"):
+        if Path(candidate).exists():
+            nodes.append(candidate)
+    return nodes
+
+
+def _ensure_nvdec_probe_video() -> Path:
+    path = Path("/tmp/cc_nvdec_preflight.mp4")
+    if path.exists() and path.stat().st_size > 0:
+        return path
+
+    result = _sp.run(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=64x64:rate=1",
+            "-frames:v",
+            "2",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:v",
+            "libx264",
+            "-y",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or "ffmpeg probe video generation failed")
+    return path
+
+
+def _check_nvdec_video_capability() -> dict:
+    info: dict = {
+        "libnvcuvid_present": False,
+        "libnvcuvid_path": None,
+        "video_device_nodes": _video_device_nodes(),
+        "decord_gpu_context": False,
+        "decord_nvdec_probe": False,
+    }
+
+    lib_path = _find_libnvcuvid()
+    info["libnvcuvid_path"] = lib_path
+    info["libnvcuvid_present"] = bool(lib_path)
+    if not lib_path:
+        info["error"] = "libnvcuvid.so.1 not found in container runtime"
+        return info
+
+    try:
+        import decord
+
+        ctx = decord.gpu(0)
+        info["decord_gpu_context"] = True
+        probe_video = _ensure_nvdec_probe_video()
+        vr = decord.VideoReader(str(probe_video), ctx=ctx)
+        batch = vr.get_batch([0])
+        # Force materialization so decoder startup failures surface here.
+        if hasattr(batch, "asnumpy"):
+            batch.asnumpy()
+        elif hasattr(batch, "cpu"):
+            batch.cpu().numpy()
+        info["decord_nvdec_probe"] = True
+    except Exception as exc:
+        info["error"] = f"{type(exc).__name__}: {exc}"
+    return info
+
+
+def _assert_gpu_preflight(info: dict) -> None:
+    capabilities = info.get("capabilities", {})
+    missing = [name for name in ("compute", "utility", "video") if not capabilities.get(name)]
+    if not missing:
+        return
+    detail = info.get("video", {}).get("error") or info.get("error") or info
+    raise RuntimeError(
+        "RunPod GPU preflight failed; missing capabilities: "
+        f"{', '.join(missing)}. Details: {detail}"
+    )
+
+
 def _check_gpu() -> dict:
     try:
         import torch
-        import subprocess as _sp
         info: dict = {
             "cuda_available": torch.cuda.is_available(),
             "device_count": torch.cuda.device_count(),
+            "nvidia_driver_capabilities_env": os.environ.get("NVIDIA_DRIVER_CAPABILITIES", ""),
         }
         if torch.cuda.is_available():
             info["device_name"] = torch.cuda.get_device_name(0)
             info["cuda_version"] = torch.version.cuda
             mem = torch.cuda.get_device_properties(0).total_memory
             info["vram_gb"] = round(mem / 1e9, 1)
+        utility_ok = False
         # Also try nvidia-smi for utilization
         try:
             r = _sp.run(
@@ -354,8 +462,23 @@ def _check_gpu() -> dict:
                 info["gpu_util_pct"] = parts[0]
                 info["vram_used_mb"] = parts[1]
                 info["vram_total_mb"] = parts[2]
+                utility_ok = True
+            else:
+                info["nvidia_smi_error"] = r.stderr.strip()
         except Exception:
-            pass
+            info["nvidia_smi_error"] = "nvidia-smi failed"
+
+        video_info = _check_nvdec_video_capability()
+        info["video"] = video_info
+        info["capabilities"] = {
+            "compute": bool(info["cuda_available"] and info["device_count"] > 0),
+            "utility": utility_ok,
+            "video": bool(
+                video_info.get("libnvcuvid_present")
+                and video_info.get("decord_gpu_context")
+                and video_info.get("decord_nvdec_probe")
+            ),
+        }
         return info
     except Exception as e:
         return {"error": str(e)}

@@ -164,6 +164,7 @@ def create_endpoint(api_key: str, cfg: dict) -> None:
         is_serverless=True,
         env={
             "PYTHONUNBUFFERED": "1",
+            "NVIDIA_DRIVER_CAPABILITIES": "compute,utility,video",
             "R2_ACCOUNT_ID": r2_account_id,
             "R2_ACCESS_KEY_ID": r2_access_key_id,
             "R2_SECRET_ACCESS_KEY": r2_secret_access_key,
