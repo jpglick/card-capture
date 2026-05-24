@@ -68,6 +68,13 @@ def handler(job: dict) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
     db_path = output_dir / "cards.sqlite"  # deterministic; valid to read on failure
 
+    # Start background resource sampler so we know peak GPU/VRAM/decoder/CPU/RAM
+    # during the pipeline — needed to make informed batch_size / stride tuning
+    # decisions instead of guessing. The single _check_gpu() snapshot above
+    # only sees torch's idle state (e.g. 506 MB VRAM) and tells us nothing.
+    sampler = _ResourceSampler(interval_s=0.5)
+    sampler.start()
+
     original = apply_cuda_config()
     pipeline_stdout = ""
     try:
@@ -81,8 +88,12 @@ def handler(job: dict) -> dict:
         raise
     finally:
         restore_config(original)
+        sampler.stop()
     t_pipeline = time.time() - t0
     t0 = time.time()
+
+    resource_stats = sampler.summary()
+    print(f"[diag] resource_stats: {resource_stats}", flush=True)
 
     # ── Diagnostics from DB ──────────────────────────────────────────────────
     db_diag = _collect_db_diagnostics(run_id, db_path, output_dir)
@@ -106,6 +117,7 @@ def handler(job: dict) -> dict:
         "status": "complete",
         "results_key": results_key,
         "gpu": gpu_info,
+        "resource_stats": resource_stats,
         "timings": {
             "r2_download_s": round(t_download, 1),
             "pipeline_s": round(t_pipeline, 1),
@@ -115,6 +127,91 @@ def handler(job: dict) -> dict:
         },
         "diagnostics": db_diag,
     }
+
+
+class _ResourceSampler:
+    """Background sampler — nvidia-smi + /proc/stat + /proc/meminfo every interval_s.
+
+    Tracks peak + mean for GPU util, NVDEC decoder util, NVENC encoder util,
+    VRAM used (MB), CPU% (system), RAM used (MB). Surfaces enough to answer:
+    "are we VRAM-bound? compute-bound? could we batch larger?"
+    """
+    def __init__(self, interval_s: float = 0.5) -> None:
+        self.interval_s = interval_s
+        self._stop = False
+        self._thread = None
+        self._samples: list[dict] = []
+
+    def start(self) -> None:
+        import threading
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop = True
+        if self._thread:
+            self._thread.join(timeout=2.0)
+
+    def _run(self) -> None:
+        import subprocess as _sp
+        # Try to import psutil; fall back to /proc parsing if missing
+        try:
+            import psutil as _psutil
+            have_psutil = True
+        except Exception:
+            have_psutil = False
+        while not self._stop:
+            sample: dict = {"ts": time.time()}
+            # nvidia-smi: gpu util, decoder util, encoder util, vram used MB
+            try:
+                r = _sp.run([
+                    "nvidia-smi",
+                    "--query-gpu=utilization.gpu,utilization.memory,utilization.decoder,utilization.encoder,memory.used",
+                    "--format=csv,noheader,nounits"
+                ], capture_output=True, text=True, timeout=3)
+                if r.returncode == 0:
+                    parts = [p.strip() for p in r.stdout.strip().split(",")]
+                    if len(parts) >= 5:
+                        sample["gpu_pct"] = int(parts[0])
+                        sample["mem_io_pct"] = int(parts[1])
+                        sample["decoder_pct"] = int(parts[2])
+                        sample["encoder_pct"] = int(parts[3])
+                        sample["vram_used_mb"] = int(parts[4])
+            except Exception:
+                pass
+            # System CPU + RAM
+            if have_psutil:
+                try:
+                    sample["cpu_pct"] = _psutil.cpu_percent(interval=None)
+                    vm = _psutil.virtual_memory()
+                    sample["ram_used_mb"] = int(vm.used / 1_048_576)
+                    sample["ram_pct"] = vm.percent
+                except Exception:
+                    pass
+            self._samples.append(sample)
+            time.sleep(self.interval_s)
+
+    def summary(self) -> dict:
+        if not self._samples:
+            return {"error": "no samples collected"}
+
+        def _stats(key: str) -> dict | None:
+            vals = [s[key] for s in self._samples if key in s]
+            if not vals: return None
+            return {"peak": max(vals), "mean": round(sum(vals) / len(vals), 1), "n": len(vals)}
+
+        return {
+            "samples": len(self._samples),
+            "interval_s": self.interval_s,
+            "gpu_pct":      _stats("gpu_pct"),
+            "decoder_pct":  _stats("decoder_pct"),
+            "encoder_pct":  _stats("encoder_pct"),
+            "mem_io_pct":   _stats("mem_io_pct"),
+            "vram_used_mb": _stats("vram_used_mb"),
+            "cpu_pct":      _stats("cpu_pct"),
+            "ram_used_mb":  _stats("ram_used_mb"),
+            "ram_pct":      _stats("ram_pct"),
+        }
 
 
 def _collect_db_diagnostics(run_id: str, db_path: Path, output_dir: Path) -> dict:
