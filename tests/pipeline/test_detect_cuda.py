@@ -41,8 +41,11 @@ def test_detect_output_frame_count(tmp_path):
     frames = [_make_frame_sample(i) for i in range(10)]
 
     sampler = MagicMock(spec=CudaSampler)
-    sampler.sample.return_value = iter(frames)
-    sampler.last_selected_frame_count = 10
+    def _batches(batch_size=32, video_path=None):
+        for i in range(0, len(frames), batch_size):
+            yield frames[i:i+batch_size]
+    sampler.sample_batches.side_effect = _batches
+    sampler.last_selected_frame_count = len(frames)
     sampler.last_source_fps = 60.0
 
     detector = MagicMock()
@@ -64,8 +67,11 @@ def test_detect_output_batching(tmp_path):
     frames = [_make_frame_sample(i) for i in range(10)]
 
     sampler = MagicMock(spec=CudaSampler)
-    sampler.sample.return_value = iter(frames)
-    sampler.last_selected_frame_count = 10
+    def _batches(batch_size=32, video_path=None):
+        for i in range(0, len(frames), batch_size):
+            yield frames[i:i+batch_size]
+    sampler.sample_batches.side_effect = _batches
+    sampler.last_selected_frame_count = len(frames)
     sampler.last_source_fps = 60.0
 
     detector = MagicMock()
@@ -87,7 +93,10 @@ def test_detect_output_has_detection_rows(tmp_path):
     frames = [_make_frame_sample(0)]
 
     sampler = MagicMock(spec=CudaSampler)
-    sampler.sample.return_value = iter(frames)
+    def _batches(batch_size=32, video_path=None):
+        for i in range(0, len(frames), batch_size):
+            yield frames[i:i+batch_size]
+    sampler.sample_batches.side_effect = _batches
     sampler.last_selected_frame_count = 1
     sampler.last_source_fps = 60.0
 
