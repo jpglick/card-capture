@@ -14,9 +14,18 @@ if [ "$#" -gt 0 ]; then
     exec "$@"
 fi
 
-echo "[start.sh] Pulling latest code…"
+echo "[start.sh] Syncing /workspace/card-capture to origin/main…"
 cd /workspace/card-capture
-git pull origin main -q || echo "[start.sh] WARNING: git pull failed, using baked code"
+# Hard-sync to origin/main so local untracked/dirty state from the baked image
+# (e.g. .egg-info from pip install -e) cannot make `git pull` abort silently.
+# Earlier symptom: serverless workers ran weeks-old code because git pull -q
+# failed and the WARNING was the only signal — and we never checked it.
+if git fetch origin main --depth=1 -q; then
+    git reset --hard origin/main -q
+    echo "[start.sh] On commit: $(git rev-parse --short HEAD) ($(git log -1 --format=%s))"
+else
+    echo "[start.sh] ERROR: git fetch failed — running baked code at $(git rev-parse --short HEAD)" >&2
+fi
 
 # Re-link the editable install so Python picks up git-pulled source changes.
 # --no-deps avoids reinstalling torch/torchvision. Errors are shown, not hidden.
