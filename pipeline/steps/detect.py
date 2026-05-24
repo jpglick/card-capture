@@ -212,11 +212,14 @@ def _run_cuda_inference(
     """
     from card_capture.models import FramePacket
 
+    import time as _time
     batch_size = ctx.cuda_batch_size
     detection_rows: list[dict] = []
     accepted_frame_presence: list[tuple[int, int, bool]] = []
     det_id = 0
     total_frames = 0
+    yolo_batches = 0
+    yolo_elapsed_s = 0.0
 
     # Stream in batch_size chunks — avoids loading the entire video (~11 GB for 4K)
     # into RAM at once before YOLO inference begins.
@@ -235,9 +238,12 @@ def _run_cuda_inference(
             for f in batch
         ]
 
+        _t = _time.time()
         packets_out = detector.detect_batch(
             packets_in, detector.confidence_threshold
         )
+        yolo_elapsed_s += _time.time() - _t
+        yolo_batches += 1
 
         for f in batch:
             accepted_frame_presence.append((f.frame_index, f.timestamp_ms, True))
@@ -273,14 +279,15 @@ def _run_cuda_inference(
         },
         video_id=ctx.video_id,
         detect_telemetry={
-            "frame_count": len(frames),
-            "accepted_frame_count": len(frames),
-            "triage_pass_rate": 1.0,
-            "yolo_frames": len(frames),
-            "yolo_batches": (len(frames) + batch_size - 1) // batch_size,
+            "frame_count": total_frames,
+            "accepted_frame_count": total_frames,
+            "triage_pass_rate": 1.0,    # CudaSampler does no triage; all sampled frames pass
+            "yolo_frames": total_frames,
+            "yolo_batches": yolo_batches,
+            "yolo_elapsed_s": round(yolo_elapsed_s, 2),
             "yolo_device": "cuda",
             "sampler_type": "CudaSampler",
-        }
+        },
     )
 
 
