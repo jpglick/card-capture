@@ -58,8 +58,51 @@ def _glare_mask(image: np.ndarray) -> np.ndarray:
     return mask.astype(np.uint8)
 
 
+# Lazy GPU imports for the laplacian heatmap port — one-time check on first
+# call. Stays None on CPU-only hosts (Mac dev, no-CUDA CI) so import order
+# stays safe. Caches the modules to avoid re-importing per call.
+_GPU_AVAILABLE: Optional[bool] = None
+_torch_mod = None
+_kornia_filters_mod = None
+
+
+def _ensure_gpu_imports() -> bool:
+    global _GPU_AVAILABLE, _torch_mod, _kornia_filters_mod
+    if _GPU_AVAILABLE is not None:
+        return _GPU_AVAILABLE
+    try:
+        import torch as _t
+        import kornia.filters as _kf
+        if _t.cuda.is_available():
+            _torch_mod = _t
+            _kornia_filters_mod = _kf
+            _GPU_AVAILABLE = True
+            return True
+    except Exception:
+        pass
+    _GPU_AVAILABLE = False
+    return False
+
+
 def _laplacian_heatmap(image: np.ndarray) -> np.ndarray:
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+    """Laplacian filter response — float32 single-channel, same HxW as input.
+
+    GPU path via kornia.filters.laplacian when CUDA is available (the prod
+    serverless path). Previously cv2.Laplacian on CPU, observed at 243ms
+    per 1050x750 call in refine — 140 calls = 34s, biggest single bottleneck
+    in the refine step.
+    """
+    if image.ndim == 3:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = image
+
+    if _ensure_gpu_imports():
+        # (H, W) uint8 -> (1, 1, H, W) float32 cuda -> laplacian -> numpy
+        t = _torch_mod.from_numpy(gray).to(_torch_mod.float32).unsqueeze(0).unsqueeze(0).cuda()
+        lap = _kornia_filters_mod.laplacian(t, kernel_size=3)
+        return lap.squeeze(0).squeeze(0).cpu().numpy().astype(np.float32)
+
     lap = cv2.Laplacian(gray, cv2.CV_32F)
     return lap.astype(np.float32)
 
