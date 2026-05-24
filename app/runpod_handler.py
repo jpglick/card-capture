@@ -19,6 +19,9 @@ from botocore.config import Config as BotocoreConfig
 
 from app.worker_core import apply_cuda_config, restore_config, run_pipeline, package_results
 
+_NVDEC_PROBE_VIDEO = Path("/tmp/cc_nvdec_preflight.mp4")
+_NVDEC_PROBE_MIN_BYTES = 4096
+
 
 def _r2_client():
     account_id = os.environ["R2_ACCOUNT_ID"]
@@ -357,9 +360,10 @@ def _video_device_nodes() -> list[str]:
 
 
 def _ensure_nvdec_probe_video() -> Path:
-    path = Path("/tmp/cc_nvdec_preflight.mp4")
-    if path.exists() and path.stat().st_size > 0:
+    path = _NVDEC_PROBE_VIDEO
+    if path.exists() and path.stat().st_size >= _NVDEC_PROBE_MIN_BYTES:
         return path
+    path.unlink(missing_ok=True)
 
     result = _sp.run(
         [
@@ -370,13 +374,25 @@ def _ensure_nvdec_probe_video() -> Path:
             "-f",
             "lavfi",
             "-i",
-            "testsrc=size=64x64:rate=1",
+            "testsrc=size=128x128:rate=30:duration=2",
             "-frames:v",
-            "2",
+            "60",
             "-pix_fmt",
             "yuv420p",
             "-c:v",
             "libx264",
+            "-preset",
+            "ultrafast",
+            "-tune",
+            "zerolatency",
+            "-g",
+            "30",
+            "-keyint_min",
+            "30",
+            "-sc_threshold",
+            "0",
+            "-movflags",
+            "+faststart",
             "-y",
             str(path),
         ],

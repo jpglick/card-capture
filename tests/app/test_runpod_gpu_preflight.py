@@ -93,3 +93,20 @@ def test_check_gpu_reports_video_from_real_probe_result(monkeypatch):
         "utility": True,
         "video": True,
     }
+
+
+def test_nvdec_probe_video_uses_non_pathological_h264(monkeypatch, tmp_path):
+    mod = _import_handler(monkeypatch)
+
+    probe_path = tmp_path / "probe.mp4"
+    monkeypatch.setattr(mod, "_NVDEC_PROBE_VIDEO", probe_path)
+    run = MagicMock(return_value=MagicMock(returncode=0, stderr=""))
+    monkeypatch.setattr(mod._sp, "run", run)
+
+    assert mod._ensure_nvdec_probe_video() == probe_path
+
+    cmd = run.call_args.args[0]
+    assert cmd[cmd.index("-i") + 1] == "testsrc=size=128x128:rate=30:duration=2"
+    assert cmd[cmd.index("-frames:v") + 1] == "60"
+    assert cmd[cmd.index("-g") + 1] == "30"
+    assert "+faststart" in cmd
