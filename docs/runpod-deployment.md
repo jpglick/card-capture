@@ -393,8 +393,11 @@ image commit, and observations.
 | 2026-05-23 | c7a73c8a | NVDEC 1080p throughput (warm) | 434 fps | Pod from current image; ratio 3.13× vs CPU; decoder util peaked 98% |
 | 2026-05-23 | c7a73c8a | NVDEC 4K landscape throughput (warm) | 114 fps | |
 | 2026-05-23 | c7a73c8a | NVDEC 4K portrait throughput (warm) | 110 fps | Matches production input |
-| | | End-to-end successful serverless run | TBD | Waiting on next run |
-| | | Cold-start image transfer | TBD | |
+| 2026-05-24 | 69166f68 | First successful end-to-end serverless run | pipeline 114.4s, 18 cards | detect 31.6s, novelty ~0.5s, track 2.2s, refine 67.3s |
+| 2026-05-24 | 69166f68 | Cold start (delay before execution) | 18.7s | Image already warm on worker |
+| 2026-05-24 | 69166f68 | Refine op breakdown | kornia_warp 2.0s (↓10×), laplacian 34.7s | laplacian timer included dead _compress_array work — see fix below |
+| 2026-05-24 | 69166f68 | GPU utilization | mean 15.6%, peak 100% | Up from 8.5%; still starved during refine |
+| 2026-05-24 | 69166f68 | VRAM peak | 22.2 GB | Stage tagging didn't fire (all "unknown"); still need per-stage breakdown |
 
 ---
 

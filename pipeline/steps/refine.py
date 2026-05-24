@@ -57,7 +57,7 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
     from card_capture.scoring import QualityScorer
     from card_capture.presence.background_novelty import quad_novelty
     from card_capture.pipeline_utils import (
-        _select_canonical_entries, _glare_mask, _laplacian_heatmap, _laplacian_heatmap_batch, _compress_array,
+        _select_canonical_entries, _glare_mask, _compress_array,
         decode_frames_gpu, _compute_laplacian_scan_indices,
     )
     from card_capture.selector import ScoredCandidate
@@ -177,9 +177,9 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
         "novelty_scoring": 0.0,
         "glare_centroid": 0.0,
         "glare_mask": 0.0,
-        "laplacian_heatmap": 0.0,
         "phash": 0.0,
         "imwrite": 0.0,
+        "reid_embed_batch": 0.0,
         "other": 0.0,
     }
     _op_counts: Dict[str, int] = {k: 0 for k in _t_ops}
@@ -332,14 +332,6 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
         if not frame_entries:
             continue
             
-        # Batch process laplacian heatmap for all candidates in this track
-        _t = time.time()
-        _lap_images = [e["normalized"] for e in frame_entries]
-        _lap_heatmaps = _laplacian_heatmap_batch(_lap_images)
-        for i, entry in enumerate(frame_entries):
-            entry["laplacian_heatmap"] = _compress_array(_lap_heatmaps[i])
-        _tick("laplacian_heatmap", _t)
-
         # Build ScoredCandidate-like objects for _select_canonical_entries
         from card_capture.selector import ScoredCandidate as _SC
 
@@ -423,15 +415,6 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
         if best_image_path is None and frame_entry_paths:
             best_image_path = frame_entry_paths[0]["image_path"]
 
-        # Compute ReID embedding for the best canonical image (v4 Wave 3)
-        reid_embedding = None
-        if embedder and best_image_path:
-            try:
-                emb_tensor = embedder.embed_image(best_image_path)
-                reid_embedding = emb_tensor.cpu().numpy().tolist()[0]
-            except Exception as e:
-                print(f"Embedding failed for {instance_id}: {e}")
-
         refined_tracks.append({
             "instance_id": instance_id,
             "track_id": track_dict.get("track_id", 0),
@@ -442,8 +425,28 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
             "canonical_detection_ids": list(canonical_detection_ids),
             "best_canonical_detection_id": best_canonical["candidate"].detection_id,
             "best_canonical_image_path": best_image_path or "",
-            "reid_embedding": reid_embedding,
+            "reid_embedding": None,  # filled in by batch embedding pass below
         })
+
+    # Batch ReID embeddings for all tracks in one GPU pass
+    if embedder:
+        _embed_jobs = [
+            (i, rt["best_canonical_image_path"])
+            for i, rt in enumerate(refined_tracks)
+            if rt["best_canonical_image_path"]
+        ]
+        if _embed_jobs:
+            try:
+                from PIL import Image as _PIL_Image
+                _pil_images = [_PIL_Image.open(p).convert("RGB") for _, p in _embed_jobs]
+                _t = time.time()
+                _emb_tensor = embedder.embed_batch(_pil_images)
+                _emb_np = _emb_tensor.cpu().numpy()
+                _tick("reid_embed_batch", _t)
+                for _batch_i, (_track_i, _) in enumerate(_embed_jobs):
+                    refined_tracks[_track_i]["reid_embedding"] = _emb_np[_batch_i].tolist()
+            except Exception as _e:
+                print(f"[Refine] Batch embedding failed: {_e}")
 
     t_refine = time.time() - t_refine_start
     # Print the per-op breakdown so logs surface it even before stage_payloads

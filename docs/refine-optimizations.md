@@ -160,19 +160,100 @@ larger videos or higher-resolution inputs.
 
 ---
 
+---
+
+## 4. Eliminate the 4K GPU→CPU→GPU roundtrip in refine **[next]**
+
+**Background:** Every frame that passes through refine crosses PCIe four times
+instead of the ideal two:
+
+```
+NVDEC decode → GPU tensor
+                    ↓  (1) decode_frames_gpu: .cpu().numpy()  ← download all frames
+             CPU numpy dict
+                    ├── _laplacian_select_frames (cv2 on 640px downscale)  ← needs CPU today
+                    └── Kornia warp: torch.from_numpy().to(device)          ← (2) re-upload
+                                          ↓  GPU warp
+                                     (3) .cpu().numpy()  ← download 750×1050 crops
+                                          ↓  all remaining ops (scoring, phash, imwrite) on CPU
+```
+
+**The waste:** ~140 Kornia-destined 4K frames do an unnecessary GPU→CPU→GPU
+roundtrip because `decode_frames_gpu` always downloads everything to numpy and
+`_laplacian_select_frames` currently expects numpy.
+
+Measured cost: ~3.5 GB re-upload at ~15 GB/s = **~230 ms** wasted per run, plus
+the initial download of all ~400 scan frames (~670 ms) could be partially avoided.
+
+**Why `_laplacian_select_frames` doesn't actually need CPU:**
+
+The function does three things per scan frame:
+1. `cv2.resize(frame, 640px_wide)` — resize to ~640×360
+2. `cv2.cvtColor(small, BGR2GRAY)` — grayscale
+3. `cv2.Laplacian(gray, CV_64F).var()` — scalar variance
+
+All three have direct GPU equivalents already in this codebase:
+1. `torch.nn.functional.interpolate(t, size=(h_small, w_small), mode='bilinear')`
+2. Weighted channel sum: `0.114*B + 0.587*G + 0.299*R` — or `kornia.color.bgr_to_grayscale`
+3. `kornia.filters.laplacian(t, kernel_size=3).var()` — already used in `_laplacian_heatmap_batch`
+
+The output is just `{frame_idx: float}` — scalar variance per frame. If the scan
+runs on GPU, the only data that ever touches CPU is `N × 4 bytes` of floats —
+effectively zero PCIe cost.
+
+**`gpu_utils.score_sharpness_batched(frames, device)` is 80% of the way there** —
+it already does batched GPU Laplacian variance. It currently takes numpy frames
+(and does the resize on CPU via cv2 before upload), but re-writing it to accept
+GPU tensors directly would complete the picture.
+
+**The change:**
+
+1. **`decode_frames_gpu`** — add a `return_tensors=True` mode that returns
+   `{frame_idx: torch.Tensor}` (CUDA, uint8) instead of numpy. Keep the numpy
+   path as the default so no callers break.
+
+2. **`_laplacian_select_frames`** — add a GPU fast path: when `decoded_frames`
+   contains tensors, batch all scan frames → resize on GPU → grayscale → Laplacian
+   variance via `kornia.filters.laplacian` → `.cpu().tolist()` for the scalar results.
+   Fall back to cv2 path for numpy input (preserves dev/test behaviour).
+
+3. **`refine.py`** — call `decode_frames_gpu(..., return_tensors=True)` and pass
+   tensors directly to `kornia_normalizer.warp_canonical_batch` (which already
+   calls `torch.from_numpy().to(device)` — just skip that step when input is
+   already a tensor).
+
+**Expected impact:**
+- Eliminate ~3.5 GB CPU→GPU re-upload per run (~230 ms)
+- Eliminate ~10 GB of unnecessary full-4K GPU→CPU download; only Kornia-candidate
+  frames need downloading at full 4K (zero, if Kornia accepts tensors), scan frames
+  need only scalar outputs
+- GPU mean utilization should climb further; refine wall time drops another ~1 s
+
+**Risks:**
+- `warp_canonical_batch` currently expects `(numpy_image, corners)` pairs — needs
+  an overloaded path for `(cuda_tensor, corners)`. Keep the numpy path or the
+  Mac dev path breaks.
+- Numeric equivalence: `F.interpolate` bilinear ≠ `cv2.resize` INTER_AREA for
+  downscaling. `_laplacian_select_frames` uses this for a ranking signal, not a
+  hard threshold — small numeric drift in sharpness ordering is acceptable.
+
+**Acceptance:** `decode_frames_gpu` returns tensors; no `.cpu()` call inside
+the refine critical path until after Kornia warp outputs 750×1050 crops.
+
+---
+
 ## Putting it together
 
-Cumulative expected wins if all three land:
+| Optimization | Refine time | Pipeline time | Status |
+|---|---:|---:|---|
+| Baseline (first successful run) | 67 s | 114 s | measured 2026-05-24 |
+| Remove dead laplacian compress | ~33 s | ~80 s | done |
+| DinoEmbedder on CUDA + batched | ~7 s | ~54 s | done |
+| Eliminate 4K GPU→CPU→GPU roundtrip | ~6 s | ~53 s | **next** |
+| VRAM fix → batch 64 | ~5 s | ~52 s | pending |
 
-| Optimization | Refine time | Pipeline time |
-|---|---:|---:|
-| Current | 79 s | 132 s |
-| + laplacian on GPU | ~47 s | ~100 s |
-| + kornia warp single-batch | ~32 s | ~85 s |
-| + VRAM fix → batch 64 | ~30 s | ~80 s |
-
-Target: **pipeline under 90 s for an 18-card video on a 4090**, with GPU
-utilization mean above 30%.
+Target: **pipeline under 60 s for an 18-card video on a 4090**, with GPU
+utilization mean above 40%.
 
 Add real numbers to `docs/runpod-deployment.md` §8 (Performance log) after
 each run.
