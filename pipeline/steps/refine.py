@@ -165,6 +165,30 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
     refined_tracks: List[Dict[str, Any]] = []
     t_refine_start = time.time()
 
+    # Per-op timing aggregation across all tracks/candidates so we can identify
+    # which CPU-bound steps dominate the refine step's wall time. Surfaces in
+    # stage_payloads.stage_refine in the next handler diagnostic dump.
+    _t_ops: Dict[str, float] = {
+        "decode_setup": 0.0,
+        "corner_refinement": 0.0,
+        "kornia_warp_batch": 0.0,
+        "precision_normalizer_fallback": 0.0,
+        "quality_scoring": 0.0,
+        "novelty_scoring": 0.0,
+        "glare_centroid": 0.0,
+        "glare_mask": 0.0,
+        "laplacian_heatmap": 0.0,
+        "phash": 0.0,
+        "imwrite": 0.0,
+        "other": 0.0,
+    }
+    _op_counts: Dict[str, int] = {k: 0 for k in _t_ops}
+
+    def _tick(label: str, started_at: float) -> float:
+        _t_ops[label] += time.time() - started_at
+        _op_counts[label] += 1
+        return time.time()
+
     for track_dict in tracks_data:
         instance_id = track_dict["instance_id"]
         candidates_data = track_dict["candidates"]
@@ -210,6 +234,7 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
 
         # Apply RANSAC corner refinement if enabled
         if ctx.corner_refinement:
+            _t = time.time()
             from card_capture.ml.inference.corner_refinement import refine_corners
             for c in scored_candidates:
                 raw = decoded_images.get(c["frame_index"])
@@ -218,6 +243,7 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
                         c["corners"] = refine_corners(raw, c["corners"])
                     except Exception as e:
                         print(f"Corner refinement failed for {instance_id}: {e}")
+            _tick("corner_refinement", _t)
 
         # Batch Kornia warp if available
         normalized_by_detection: Dict[int, np.ndarray] = {}
@@ -234,7 +260,9 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
                 batch_ids.append(c["detection_id"])
             if batch_items:
                 try:
+                    _t = time.time()
                     warped = kornia_normalizer.warp_canonical_batch(batch_items, rotate_180=ctx.rotate_180)
+                    _tick("kornia_warp_batch", _t)
                     for did, img in zip(batch_ids, warped):
                         normalized_by_detection[did] = img
                 except Exception as e:
@@ -252,37 +280,58 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
 
             normalized = normalized_by_detection.get(c["detection_id"])
             if normalized is None:
+                _t = time.time()
                 normalized = normalizer.normalize(raw, c["corners"], rotate_180=ctx.rotate_180)
+                _tick("precision_normalizer_fallback", _t)
 
             # Compute novelty score
             novelty_score = 1.0
             if bg_model is not None and c["corners"]:
                 try:
+                    _t = time.time()
                     novelty_score = float(quad_novelty(
                         raw, c["corners"], bg_model,
                         color_space="lab", lab_weights=(1.0, 0.5, 0.5),
                     ))
+                    _tick("novelty_scoring", _t)
                 except Exception:
                     pass
 
+            _t = time.time()
             quality_score = scorer.score(
                 normalized,
                 float(c["confidence"]),
                 novelty=novelty_score,
             )
+            _tick("quality_scoring", _t)
+
+            _t = time.time()
             glare_centroid = find_glare_centroid(normalized)
             glare_x, glare_y = glare_centroid if glare_centroid else (None, None)
+            _tick("glare_centroid", _t)
+
+            _t = time.time()
+            _phash = deduplicator.compute_phash(normalized)
+            _tick("phash", _t)
+
+            _t = time.time()
+            _gmask = _compress_array(_glare_mask(normalized))
+            _tick("glare_mask", _t)
+
+            _t = time.time()
+            _lhmap = _compress_array(_laplacian_heatmap(normalized))
+            _tick("laplacian_heatmap", _t)
 
             frame_entries.append({
-                "candidate": c,         # original dict
-                "normalized": normalized,  # np.ndarray (in-memory only)
+                "candidate": c,
+                "normalized": normalized,
                 "quality_score": quality_score,
-                "visual_hash": deduplicator.compute_phash(normalized),
+                "visual_hash": _phash,
                 "glare_x": glare_x,
                 "glare_y": glare_y,
                 "sharpness": quality_score.components.get("sharpness", 0.0),
-                "glare_mask": _compress_array(_glare_mask(normalized)),
-                "laplacian_heatmap": _compress_array(_laplacian_heatmap(normalized)),
+                "glare_mask": _gmask,
+                "laplacian_heatmap": _lhmap,
             })
 
         if not frame_entries:
@@ -322,7 +371,9 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
 
             # Persist candidate image
             img_path = crops_dir / f"track_{instance_id[:8]}_det_{det_id}_rectified.jpg"
+            _t = time.time()
             cv2.imwrite(str(img_path), entry["normalized"])
+            _tick("imwrite", _t)
 
             frame_entry_paths.append({
                 "detection_id": det_id,
@@ -392,9 +443,25 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
         })
 
     t_refine = time.time() - t_refine_start
+    # Print the per-op breakdown so logs surface it even before stage_payloads
+    # is queried. Sort by time descending so the biggest offenders are at top.
     print(f"[Stage: Refinement] | {t_refine:.2f}s | Refined {len(refined_tracks)} tracks")
+    _sorted = sorted(_t_ops.items(), key=lambda kv: kv[1], reverse=True)
+    for _label, _elapsed in _sorted:
+        if _elapsed > 0.01:
+            _calls = _op_counts[_label]
+            _per = (_elapsed / _calls * 1000) if _calls else 0.0
+            print(f"  refine_op: {_label:32s} {_elapsed:6.2f}s  ({_calls} calls, {_per:.1f}ms avg)")
 
-    return RefineOutput(
+    # Attach per-op timings to the RefineOutput so card_capture_flow's
+    # _record_stage_timing can merge them into stage_detect-style telemetry.
+    refine_telemetry = {
+        "tracks_refined": len(refined_tracks),
+        "op_seconds": {k: round(v, 3) for k, v in _t_ops.items() if v > 0},
+        "op_calls": {k: _op_counts[k] for k in _t_ops if _op_counts[k] > 0},
+    }
+
+    out = RefineOutput(
         refined_tracks=refined_tracks,
         tracks_data=tracks_data,
         detection_rows=detection_rows_list,
@@ -406,3 +473,8 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
         accepted_frame_count=track_out.accepted_frame_count,
         video_id=track_out.video_id,
     )
+    # Stash telemetry as an attribute so card_capture_flow can read it. Using
+    # setattr (rather than expanding the dataclass) keeps the change minimal
+    # and doesn't break any consumer that pickles RefineOutput.
+    out.refine_telemetry = refine_telemetry  # type: ignore[attr-defined]
+    return out

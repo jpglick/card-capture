@@ -114,7 +114,15 @@ class CardCaptureFlow(FlowSpec):
         self.refine_out = refine.run(self.run_context, self.track_out)
         _elapsed_ms = int((_time.time() - _t0) * 1000)
         ctx = self.run_context
-        _record_stage_timing(ctx.db_path, self.ui_run_id or current.run_id, ctx.video_id or 0, "refine", _elapsed_ms)
+        # Surface per-op timings (op_seconds + op_calls) into stage_refine
+        # data_json so the handler diagnostic shows which CPU-bound step
+        # dominates refine's wall time. Optional attribute — falls back to
+        # bare timing if refine.run didn't set it.
+        _refine_extra = getattr(self.refine_out, "refine_telemetry", None) or {}
+        _record_stage_timing(
+            ctx.db_path, self.ui_run_id or current.run_id, ctx.video_id or 0,
+            "refine", _elapsed_ms, extra=_refine_extra,
+        )
         self.next(self.score)
 
     @step
