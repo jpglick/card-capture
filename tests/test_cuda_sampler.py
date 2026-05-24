@@ -5,18 +5,22 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 
+def _torch_like(arr):
+    """Mock object exposing the .cpu().numpy() chain that the torch bridge returns."""
+    m = MagicMock()
+    m.cpu.return_value.numpy.return_value = arr
+    return m
+
+
 def _make_batch(n, h=100, w=100):
     """Return a fake VideoLoader (batch_data, batch_indices) pair."""
-    data = MagicMock()
-    data.asnumpy.return_value = np.zeros((n, h, w, 3), dtype=np.uint8)
-    indices = MagicMock()
-    indices.asnumpy.return_value = np.arange(n * 2, step=2).reshape(-1)
+    data = _torch_like(np.zeros((n, h, w, 3), dtype=np.uint8))
+    indices = _torch_like(np.arange(n * 2, step=2).reshape(-1))
     return data, indices
 
 
 def _make_probe_vr(total=60, fps=30.0, h=100, w=100):
-    first_frame = MagicMock()
-    first_frame.asnumpy.return_value = np.zeros((h, w, 3), dtype=np.uint8)
+    first_frame = _torch_like(np.zeros((h, w, 3), dtype=np.uint8))
     vr = MagicMock()
     vr.__len__ = lambda self: total
     vr.get_avg_fps.return_value = fps

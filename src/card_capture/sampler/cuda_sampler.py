@@ -16,6 +16,10 @@ import numpy as np
 
 try:
     import decord
+    # Use torch as the array bridge — see pipeline_utils.py for the full
+    # rationale. Short version: shares torch's CUDA context (avoids deadlocks)
+    # and returns torch.Tensor instead of decord.NDArray.
+    decord.bridge.set_bridge('torch')
     _decord_import_error: str | None = None
 except Exception as _e:
     decord = None  # type: ignore[assignment]
@@ -99,7 +103,9 @@ class CudaSampler:
         probe = decord.VideoReader(str(resolved), ctx=decord.cpu(0))
         total = len(probe)
         fps = probe.get_avg_fps() or 30.0
-        first = probe[0].asnumpy()
+        # With torch bridge: probe[0] returns torch.Tensor; convert to numpy
+        # via .cpu().numpy() (no-op move since ctx=cpu).
+        first = probe[0].cpu().numpy()
         h, w = first.shape[:2]
         self.last_source_fps = fps
         self.last_selected_frame_count = max(1, (total + self.stride - 1) // self.stride)
@@ -119,8 +125,13 @@ class CudaSampler:
         )
 
         for batch_data, batch_indices in vl:
-            frames_np = batch_data.asnumpy()                     # (N, H, W, 3)
-            indices_flat = batch_indices.asnumpy().reshape(-1).astype(int)
+            # Torch bridge: VideoLoader yields torch.Tensor on the loader's ctx
+            # (cuda when NVDEC-enabled). Convert to numpy at this boundary so
+            # downstream consumers (triage, OpenCV-based scoring) keep their
+            # numpy contract. A future optimization is to push torch tensors
+            # all the way through to kornia and skip this copy entirely.
+            frames_np = batch_data.cpu().numpy()                 # (N, H, W, 3)
+            indices_flat = batch_indices.cpu().numpy().reshape(-1).astype(int)
 
             batch = [
                 FrameSample(

@@ -538,6 +538,14 @@ def _laplacian_select_frames(
 
 try:
     import decord as decord  # noqa: F401
+    # Use torch as the array bridge so decord's video reader allocates frames
+    # in torch's CUDA context (shared with the rest of the pipeline) rather
+    # than creating its own. Two wins: (1) eliminates the second-CUDA-context
+    # conflict that deadlocked refine when run inside metaflow's subprocess;
+    # (2) get_batch returns torch.Tensor on cuda directly — current callers
+    # still get numpy via .cpu().numpy() below, future callers can consume
+    # the tensor without a host roundtrip.
+    decord.bridge.set_bridge('torch')
     _decord_import_error: str | None = None
 except Exception as _e:
     decord = None  # type: ignore[assignment]
@@ -593,10 +601,12 @@ def decode_frames_gpu(video_path, indices: list) -> dict:
                 "Set CC_CUDA_ALLOW_CPU_FALLBACK=1 to allow CPU decode in dev environments."
             ) from e
     frames = vr.get_batch(sorted_indices)
-    # decord 0.6.x NDArray is not subscriptable directly — convert the batch to
-    # numpy once, then index. Calling .asnumpy() on each element fails with
-    # "'NDArray' object is not subscriptable".
-    frames_np = frames.asnumpy()  # (N, H, W, 3) uint8
+    # With decord.bridge.set_bridge('torch'), get_batch returns a torch.Tensor
+    # on the same device as ctx (cuda if NVDEC, cpu if fallback). .cpu().numpy()
+    # is a no-op when ctx is cpu and a single GPU→host copy when ctx is cuda —
+    # same total work as the old NDArray.asnumpy(), but via a shared CUDA
+    # context that doesn't deadlock against torch.
+    frames_np = frames.cpu().numpy()  # (N, H, W, 3) uint8
     result = {idx: frames_np[i] for i, idx in enumerate(sorted_indices)}
     del frames, frames_np
     return result
