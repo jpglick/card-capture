@@ -28,17 +28,22 @@ pip install -e '.[app]' --no-deps -q || echo "[start.sh] WARNING: editable insta
 # hit. PTX kernels go to $CUDA_CACHE_PATH (persists across processes within
 # this container); cuDNN heuristics still re-autotune per process but with
 # the kernels already compiled the cost drops from ~80s to ~5-10s per step.
-# Only runs when CUDA is actually available — keeps the dev pod path quick.
+#
+# CRITICAL: this MUST be time-bounded and MUST NOT abort start.sh on failure.
+# Earlier symptom: workers stuck "running" with jobs in queue forever because
+# a hung op (ffmpeg/decord/YOLO model load) deadlocked the warmup and start.sh
+# never reached `exec runpod_handler`. timeout 120 + `|| true` guarantee that
+# a hang/failure costs at most 2 minutes of cold-start, never the whole worker.
 if [ -n "$RUNPOD_POD_ID" ] || nvidia-smi >/dev/null 2>&1; then
-  echo "[start.sh] CUDA warmup (one-time JIT + cuDNN autotune)…"
+  echo "[start.sh] CUDA warmup (one-time JIT + cuDNN autotune, time-bounded)…"
   mkdir -p "${CUDA_CACHE_PATH:-/root/.nv/ComputeCache}"
-  python3 - <<'PY' 2>&1 | sed 's/^/[warmup] /'
+  cat > /tmp/cc_warmup.py <<'PY'
 import time, os, subprocess
 t_all = time.time()
 
 t = time.time(); import torch
 _ = torch.zeros(1, device="cuda"); torch.cuda.synchronize()
-print(f"torch cuda init: {(time.time()-t)*1000:.0f}ms")
+print(f"torch cuda init: {(time.time()-t)*1000:.0f}ms", flush=True)
 
 t = time.time()
 from ultralytics import YOLO
@@ -48,7 +53,7 @@ weights = try_to_load_from_cache("AlecKarfonta/cardcaptor-v3", "weights/cardcapt
 m = YOLO(weights)
 m.predict(np.zeros((640,640,3), dtype=np.uint8), device="cuda", imgsz=640, verbose=False)
 torch.cuda.synchronize()
-print(f"yolo warmup: {(time.time()-t)*1000:.0f}ms")
+print(f"yolo warmup: {(time.time()-t)*1000:.0f}ms", flush=True)
 
 t = time.time()
 import decord
@@ -57,11 +62,12 @@ vid = "/tmp/cc_warmup.mp4"
 subprocess.check_call([
     "ffmpeg", "-y", "-f", "lavfi",
     "-i", "testsrc=duration=2:size=640x360:rate=30",
-    "-c:v", "h264", "-pix_fmt", "yuv420p", "-loglevel", "error", vid])
+    "-c:v", "h264", "-pix_fmt", "yuv420p", "-loglevel", "error", vid],
+    timeout=30)
 vr = decord.VideoReader(vid, ctx=decord.gpu(0))
 _ = vr.get_batch([0, 10, 20]).cpu().numpy()
 os.remove(vid)
-print(f"decord nvdec warmup: {(time.time()-t)*1000:.0f}ms")
+print(f"decord nvdec warmup: {(time.time()-t)*1000:.0f}ms", flush=True)
 
 t = time.time()
 import kornia.geometry.transform as KT
@@ -71,10 +77,16 @@ dst = torch.tensor([[[10,10],[739,10],[739,1039],[10,1039]]], dtype=torch.float3
 M = KT.get_perspective_transform(src, dst)
 _ = KT.warp_perspective(img, M, (1050, 750))
 torch.cuda.synchronize()
-print(f"kornia warmup: {(time.time()-t)*1000:.0f}ms")
+print(f"kornia warmup: {(time.time()-t)*1000:.0f}ms", flush=True)
 
-print(f"TOTAL: {(time.time()-t_all)*1000:.0f}ms")
+print(f"TOTAL: {(time.time()-t_all)*1000:.0f}ms", flush=True)
 PY
+  # Subshell + `|| true` keeps start.sh going even if warmup times out / errors.
+  # timeout returns 124 on hard timeout; any non-zero just means "no warmup benefit
+  # for this worker, but it can still serve jobs".
+  ( timeout 120 python3 /tmp/cc_warmup.py 2>&1 | sed 's/^/[warmup] /' ) \
+    || echo "[start.sh] WARNING: CUDA warmup did not complete in 120s — continuing without it"
+  rm -f /tmp/cc_warmup.py
 fi
 
 # CMD passthrough goes AFTER the sync. Dev Pods created with
