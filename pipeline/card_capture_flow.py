@@ -14,10 +14,26 @@ from pipeline.steps import (
 )
 
 
-def _record_stage_timing(db: str, run_id: str, video_id: int, stage: str, elapsed_ms: int) -> None:
-    """Write a stage timing event to pipeline_events. Never raises."""
+def _record_stage_timing(
+    db: str,
+    run_id: str,
+    video_id: int,
+    stage: str,
+    elapsed_ms: int,
+    extra: dict | None = None,
+) -> None:
+    """Write a stage timing event to pipeline_events. Never raises.
+
+    extra: optional dict merged into the data_json blob alongside elapsed_ms
+    so callers (e.g. detect) can record device/frame-count/triage telemetry
+    without needing a separate table. The runpod_handler diagnostic surfaces
+    the whole blob as stage_payloads.
+    """
     try:
-        import sqlite3
+        import sqlite3, json
+        payload = {"elapsed_ms": elapsed_ms}
+        if extra:
+            payload.update(extra)
         with sqlite3.connect(db) as conn:
             conn.execute(
                 """
@@ -25,23 +41,7 @@ def _record_stage_timing(db: str, run_id: str, video_id: int, stage: str, elapse
                     (video_id, run_id, stage_id, frame_index, timestamp_ms, event_type, data_json)
                 VALUES (?, ?, ?, 0, 0, ?, ?)
                 """,
-                (video_id, run_id, stage, f"stage_{stage}",
-                 f'{{"elapsed_ms": {elapsed_ms}}}'),
-            )
-    except Exception:
-        pass
-
-
-def _record_detect_telemetry(db: str, run_id: str, telemetry: dict) -> None:
-    """Persist detect stage diagnostics to pipeline_runs.detect_telemetry_json. Never raises."""
-    if not db or not run_id:
-        return
-    try:
-        import sqlite3, json
-        with sqlite3.connect(db) as conn:
-            conn.execute(
-                "UPDATE pipeline_runs SET detect_telemetry_json = ? WHERE run_id = ?",
-                (json.dumps(telemetry), run_id),
+                (video_id, run_id, stage, f"stage_{stage}", json.dumps(payload)),
             )
     except Exception:
         pass
@@ -81,8 +81,13 @@ class CardCaptureFlow(FlowSpec):
         _elapsed_ms = int((_time.time() - _t0) * 1000)
         ctx = self.run_context
         _run_id = self.ui_run_id or current.run_id
-        _record_stage_timing(ctx.db_path, _run_id, ctx.video_id or 0, "detect", _elapsed_ms)
-        _record_detect_telemetry(ctx.db_path, _run_id, self.detect_out.detect_telemetry)
+        # Merge the detect-stage telemetry (yolo_device, yolo_frames, yolo_batches,
+        # yolo_elapsed_s, triage_pass_rate, etc.) into the stage event's data_json.
+        # The runpod_handler diagnostic surfaces this as stage_payloads.stage_detect.
+        _record_stage_timing(
+            ctx.db_path, _run_id, ctx.video_id or 0, "detect", _elapsed_ms,
+            extra=self.detect_out.detect_telemetry or {},
+        )
         self.next(self.novelty)
 
     @step

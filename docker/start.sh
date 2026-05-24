@@ -23,6 +23,60 @@ fi
 echo "[start.sh] Re-linking editable install…"
 pip install -e '.[app]' --no-deps -q || echo "[start.sh] WARNING: editable install failed"
 
+# CUDA warmup — pay JIT compile + cuDNN autotune costs ONCE at container start
+# so the per-step metaflow subprocesses don't each take an 80s+ first-inference
+# hit. PTX kernels go to $CUDA_CACHE_PATH (persists across processes within
+# this container); cuDNN heuristics still re-autotune per process but with
+# the kernels already compiled the cost drops from ~80s to ~5-10s per step.
+# Only runs when CUDA is actually available — keeps the dev pod path quick.
+if [ -n "$RUNPOD_POD_ID" ] || nvidia-smi >/dev/null 2>&1; then
+  echo "[start.sh] CUDA warmup (one-time JIT + cuDNN autotune)…"
+  mkdir -p "${CUDA_CACHE_PATH:-/root/.nv/ComputeCache}"
+  python3 - <<'PY' 2>&1 | sed 's/^/[warmup] /'
+import time, os, subprocess
+t_all = time.time()
+
+t = time.time(); import torch
+_ = torch.zeros(1, device="cuda"); torch.cuda.synchronize()
+print(f"torch cuda init: {(time.time()-t)*1000:.0f}ms")
+
+t = time.time()
+from ultralytics import YOLO
+from huggingface_hub import try_to_load_from_cache
+import numpy as np
+weights = try_to_load_from_cache("AlecKarfonta/cardcaptor-v3", "weights/cardcaptor_v3_best.pt")
+m = YOLO(weights)
+m.predict(np.zeros((640,640,3), dtype=np.uint8), device="cuda", imgsz=640, verbose=False)
+torch.cuda.synchronize()
+print(f"yolo warmup: {(time.time()-t)*1000:.0f}ms")
+
+t = time.time()
+import decord
+decord.bridge.set_bridge("torch")
+vid = "/tmp/cc_warmup.mp4"
+subprocess.check_call([
+    "ffmpeg", "-y", "-f", "lavfi",
+    "-i", "testsrc=duration=2:size=640x360:rate=30",
+    "-c:v", "h264", "-pix_fmt", "yuv420p", "-loglevel", "error", vid])
+vr = decord.VideoReader(vid, ctx=decord.gpu(0))
+_ = vr.get_batch([0, 10, 20]).cpu().numpy()
+os.remove(vid)
+print(f"decord nvdec warmup: {(time.time()-t)*1000:.0f}ms")
+
+t = time.time()
+import kornia.geometry.transform as KT
+img = torch.rand(1, 3, 1050, 750, device="cuda")
+src = torch.tensor([[[0,0],[749,0],[749,1049],[0,1049]]], dtype=torch.float32, device="cuda")
+dst = torch.tensor([[[10,10],[739,10],[739,1039],[10,1039]]], dtype=torch.float32, device="cuda")
+M = KT.get_perspective_transform(src, dst)
+_ = KT.warp_perspective(img, M, (1050, 750))
+torch.cuda.synchronize()
+print(f"kornia warmup: {(time.time()-t)*1000:.0f}ms")
+
+print(f"TOTAL: {(time.time()-t_all)*1000:.0f}ms")
+PY
+fi
+
 # CMD passthrough goes AFTER the sync. Dev Pods created with
 # "Container Start Command: sleep infinity" (or `docker run … <image> bash`)
 # still work — they just get a synced workspace first. Serverless workers

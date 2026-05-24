@@ -15,7 +15,13 @@ FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
-    NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility,video \
+    # Pin CUDA's PTX→SASS JIT cache to a writable shared path. Each metaflow
+    # step subprocess is a fresh python process, but this cache survives
+    # across them — so once start.sh's warmup pays the JIT cost, every
+    # subsequent step on this worker hits the cache instead of recompiling.
+    CUDA_CACHE_PATH=/root/.nv/ComputeCache \
+    CUDA_CACHE_DISABLE=0
 
 # System deps: decord build toolchain (cmake, gcc, libav*-dev), ffmpeg runtime
 # libs, OpenCV runtime helpers, and patchelf (used below to fix libdecord.so's
