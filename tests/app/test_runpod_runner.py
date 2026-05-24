@@ -17,9 +17,10 @@ def _make_runner(tmp_path):
         output_base=tmp_path,
         api_key="rp-test-key",
         endpoint_id="ep-runpod-001",
-        s3_bucket="cc-runpod-bucket",
-        s3_access_key_id="AKIATEST",
-        s3_secret_access_key="secret",
+        r2_account_id="test-account",
+        r2_bucket="cc-runpod-bucket",
+        r2_access_key_id="AKIATEST",
+        r2_secret_access_key="secret",
     )
 
 
@@ -34,8 +35,7 @@ def _make_db(tmp_path):
     return db
 
 
-@pytest.mark.asyncio
-async def test_run_async_emits_started_and_completed(tmp_path):
+def test_run_async_emits_started_and_completed(tmp_path):
     runner = _make_runner(tmp_path)
     (tmp_path / "video.mov").write_bytes(b"fake_video")
     db = _make_db(tmp_path)
@@ -49,45 +49,44 @@ async def test_run_async_emits_started_and_completed(tmp_path):
     runner._submit_job = AsyncMock(return_value="rp-job-001")
     # _poll_job now returns (status, body) so callers can capture body["output"]
     runner._poll_job = AsyncMock(return_value=("COMPLETED", {"output": {"diagnostics": {}}}))
-    runner._cleanup_s3 = AsyncMock()
+    runner._cleanup_r2 = AsyncMock()
 
-    await runner.run_async(
+    asyncio.run(runner.run_async(
         "run-rp-1",
         video=str(tmp_path / "video.mov"),
         output_dir=str(tmp_path / "out"),
         db=db,
         config_preset="balanced",
-    )
+    ))
 
     emitted_names = [call.args[1].name for call in runner.bus.emit.call_args_list]
     assert "run_started" in emitted_names
     assert "run_completed" in emitted_names
     runner._submit_job.assert_called_once()
+    runner._importer.import_handler_output.assert_called_once()
 
 
-@pytest.mark.asyncio
-async def test_run_async_emits_run_failed_on_upload_error(tmp_path):
+def test_run_async_emits_run_failed_on_upload_error(tmp_path):
     runner = _make_runner(tmp_path)
     (tmp_path / "video.mov").write_bytes(b"fake_video")
     db = _make_db(tmp_path)
 
     runner._upload_video = MagicMock(side_effect=RuntimeError("S3 upload failed"))
-    runner._cleanup_s3 = AsyncMock()
+    runner._cleanup_r2 = AsyncMock()
 
     with pytest.raises(RuntimeError, match="S3 upload failed"):
-        await runner.run_async(
+        asyncio.run(runner.run_async(
             "run-rp-fail",
             video=str(tmp_path / "video.mov"),
             output_dir=str(tmp_path / "out"),
             db=db,
-        )
+        ))
 
     emitted_names = [call.args[1].name for call in runner.bus.emit.call_args_list]
     assert "run_failed" in emitted_names
 
 
-@pytest.mark.asyncio
-async def test_run_async_raises_on_runpod_job_failure(tmp_path):
+def test_run_async_raises_on_runpod_job_failure(tmp_path):
     runner = _make_runner(tmp_path)
     (tmp_path / "video.mov").write_bytes(b"fake_video")
     db = _make_db(tmp_path)
@@ -96,20 +95,20 @@ async def test_run_async_raises_on_runpod_job_failure(tmp_path):
     runner._submit_job = AsyncMock(return_value="rp-job-002")
     # _poll_job now returns (status, body)
     runner._poll_job = AsyncMock(return_value=("FAILED", {"error": "test failure"}))
-    runner._cleanup_s3 = AsyncMock()
+    runner._cleanup_r2 = AsyncMock()
 
     with pytest.raises(RuntimeError, match="rp-job-002"):
-        await runner.run_async(
+        asyncio.run(runner.run_async(
             "run-rp-fail2",
             video=str(tmp_path / "video.mov"),
             output_dir=str(tmp_path / "out"),
             db=db,
-        )
+        ))
 
 
 def test_destroy_instance_is_noop(tmp_path):
     runner = _make_runner(tmp_path)
-    asyncio.get_event_loop().run_until_complete(runner.destroy_instance())
+    asyncio.run(runner.destroy_instance())
 
 
 def test_satisfies_gpu_runner_protocol(tmp_path):

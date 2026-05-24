@@ -155,6 +155,10 @@ class RunPodRunner:
 
             n_cards = self._importer.import_tarball(tarball, run_id)
             tarball.unlink(missing_ok=True)
+            try:
+                self._importer.import_handler_output(handler_output, run_id)
+            except Exception as exc:
+                print(f"[{run_id}] runpod: could not import handler diagnostics: {exc}", flush=True)
 
             t_total = _time.time() - t_start
             self._record_run_finish(run_id, n_cards, db)

@@ -123,6 +123,8 @@ def handler(job: dict) -> dict:
         "results_key": results_key,
         "gpu": gpu_info,
         "resource_stats": resource_stats,
+        "resource_samples": sampler.samples(),
+        "metaflow_stdout_tail": pipeline_stdout[-200_000:],
         "timings": {
             "r2_download_s": round(t_download, 1),
             "pipeline_s": round(t_pipeline, 1),
@@ -170,7 +172,7 @@ class _ResourceSampler:
         except Exception:
             have_psutil = False
         while not self._stop:
-            sample: dict = {"ts": time.time()}
+            sample: dict = {"ts": time.time(), "stage": self.current_stage}
             # nvidia-smi: gpu util, decoder util, encoder util, vram used MB
             try:
                 r = _sp.run([
@@ -199,6 +201,17 @@ class _ResourceSampler:
                     pass
             self._samples.append(sample)
             time.sleep(self.interval_s)
+
+    def samples(self) -> list[dict]:
+        if not self._samples:
+            return []
+        t0 = self._samples[0]["ts"]
+        result = []
+        for sample in self._samples:
+            row = {k: v for k, v in sample.items() if k != "ts"}
+            row["elapsed_s"] = round(sample["ts"] - t0, 3)
+            result.append(row)
+        return result
 
     def summary(self) -> dict:
         if not self._samples:

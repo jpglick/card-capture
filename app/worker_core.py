@@ -151,7 +151,7 @@ def _print_metaflow_timings(stdout: str) -> None:
 
 
 def package_results(job_id: str, output_dir: Path, db_path: Path) -> bytes:
-    """Bundle crops + export.json into a gzipped tarball; return as bytes."""
+    """Bundle crops, export.json, and worker SQLite into a gzipped tarball."""
     cards: list[dict] = []
     if db_path.exists():
         try:
@@ -171,6 +171,8 @@ def package_results(job_id: str, output_dir: Path, db_path: Path) -> bytes:
         crops_dir = output_dir / "crops"
         if crops_dir.exists():
             tar.add(crops_dir, arcname="crops")
+        if db_path.exists():
+            tar.add(db_path, arcname="cards.sqlite")
         export_bytes = json.dumps(cards).encode()
         info = tarfile.TarInfo(name="export.json")
         info.size = len(export_bytes)

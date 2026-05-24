@@ -1,6 +1,7 @@
 """Tests for worker_core — shared GPU pipeline execution logic."""
 import io
 import json
+import sqlite3
 import tarfile
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -90,3 +91,17 @@ def test_package_results_export_json_is_empty_list_when_no_db(tmp_path):
         f = tar.extractfile(export_member)
         cards = json.loads(f.read())
     assert cards == []
+
+
+def test_package_results_includes_worker_database(tmp_path):
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    db_path = output_dir / "cards.sqlite"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE card_instances (run_id TEXT, track_id TEXT, session_id TEXT, fused_image_path TEXT, angle TEXT)")
+
+    result = package_results("job-db", output_dir, db_path)
+
+    buf = io.BytesIO(result)
+    with tarfile.open(fileobj=buf, mode="r:gz") as tar:
+        assert "cards.sqlite" in tar.getnames()
