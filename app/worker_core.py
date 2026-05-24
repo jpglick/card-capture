@@ -65,6 +65,14 @@ def run_pipeline(job_id: str, video_path: str, config_preset: str, output_dir: P
         "--db", str(db_path),
         "--config-preset", config_preset,
         "--ui-run-id", job_id,
+        # Force the CUDA detect path. apply_cuda_config writes detector:"cuda"
+        # to card_capture_config.json, but the metaflow flow reads --detector
+        # from CLI args (default="docaligner"), so without this flag the
+        # pipeline silently uses AdaptivePresenceSampler (CPU cv2 decode) and
+        # bypasses CudaSampler entirely. Confirmed by stage_detect telemetry
+        # showing sampler_type=AdaptivePresenceSampler and 117s detect with
+        # only 4.7s actual YOLO time — the other 113s is CPU decode.
+        "--detector", "cuda",
     ]
     env = os.environ.copy()
     # Force-set (not setdefault) so empty strings are also overridden
