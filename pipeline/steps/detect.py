@@ -159,6 +159,7 @@ def _save_corner_samples(ctx: RunContext, detection_rows: list, output_dir: Path
 
 def _build_sampler_detector(ctx: RunContext):
     """Construct the sampler and detector from RunContext.detector."""
+    from pathlib import Path as _Path
     from card_capture.detectors import FakeCardDetector, CardcaptorUltralyticsDetector
     from card_capture.sampler import SyntheticSampler, AdaptivePresenceSampler
 
@@ -178,7 +179,6 @@ def _build_sampler_detector(ctx: RunContext):
             device="cuda",   # explicit — hard-fail if CUDA unavailable on instance
         )
     else:
-        from pathlib import Path as _Path
         weights = _Path("models/presence_classifier.pt")
         sampler = AdaptivePresenceSampler(
             video_path=_Path(ctx.video_path),
