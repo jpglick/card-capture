@@ -13,19 +13,19 @@ import cv2
 def get_device() -> torch.device:
     """
     Detect and return the best available device for PyTorch computation.
-    
+
     Priority order:
-    1. MPS (Metal Performance Shaders) - for M-series Apple Silicon Macs
-    2. CUDA - for NVIDIA GPUs
+    1. CUDA - for NVIDIA GPUs (production / RunPod)
+    2. MPS (Metal Performance Shaders) - for M-series Apple Silicon Macs
     3. CPU - fallback
-    
+
     Returns:
         torch.device: The selected device for PyTorch operations.
     """
-    if torch.backends.mps.is_available():
-        return torch.device("mps")
-    elif torch.cuda.is_available():
+    if torch.cuda.is_available():
         return torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        return torch.device("mps")
     else:
         return torch.device("cpu")
 

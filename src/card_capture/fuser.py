@@ -1,3 +1,5 @@
+import os
+import warnings
 import cv2
 import numpy as np
 from typing import List, Tuple, Optional
@@ -5,6 +7,14 @@ from typing import List, Tuple, Optional
 from card_capture.ecc_registration import register_frames_via_ecc
 from card_capture.fusion.foil_detection import detect_foil_card
 from card_capture.fusion.median_fusion import glare_rejection_fusion
+from card_capture import gpu_utils as _gpu_utils
+
+# Resolve GPU device once at module load time.
+_device = _gpu_utils.get_device()
+
+# True when the operator explicitly permits silent CPU fallback.
+_CPU_FALLBACK_ALLOWED = os.environ.get("CC_CUDA_ALLOW_CPU_FALLBACK", "0") == "1"
+
 
 def find_glare_centroid(image: np.ndarray) -> Optional[Tuple[float, float]]:
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
@@ -14,6 +24,25 @@ def find_glare_centroid(image: np.ndarray) -> Optional[Tuple[float, float]]:
     return (float(moments["m10"] / moments["m00"]), float(moments["m01"] / moments["m00"]))
 
 def calculate_sharpness(image: np.ndarray) -> float:
+    """Compute Laplacian variance sharpness on CUDA GPU when available.
+
+    Only CUDA is used for the GPU path — MPS (Apple Silicon) uses float32
+    which produces numerically different results vs cv2.Laplacian and breaks
+    test expectations on dev machines.  MPS falls through to cv2 silently.
+    A warning is emitted only on pure-CPU systems without CC_CUDA_ALLOW_CPU_FALLBACK.
+    """
+    if _device.type == "cuda":
+        # CUDA path: gpu_utils expects a BGR image
+        bgr = image if image.ndim == 3 else cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+        return _gpu_utils.compute_variance_gpu(bgr, _device)
+    # Non-CUDA path (cpu or mps) — warn only on pure-CPU systems without opt-in.
+    if _device.type == "cpu" and not _CPU_FALLBACK_ALLOWED:
+        warnings.warn(
+            "fuser.calculate_sharpness: running on CPU (no CUDA device found). "
+            "Set CC_CUDA_ALLOW_CPU_FALLBACK=1 to suppress this warning.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
     return float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
