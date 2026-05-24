@@ -127,49 +127,26 @@ def test_laplacian_select_frames_uses_decoded_dict(monkeypatch):
     assert "t1" in result
     assert len(result["t1"]) == 1
 
-def test_laplacian_heatmap_batch_cpu_fallback(monkeypatch):
-    """When GPU is unavailable, _laplacian_heatmap_batch should fall back to single-image CPU calls."""
-    monkeypatch.setattr("card_capture.pipeline_utils._GPU_AVAILABLE", None)
-    
+def test_laplacian_variance_batch_cpu_fallback(monkeypatch):
+    """When CUDA is unavailable, _laplacian_variance_batch falls back to cv2 per-image."""
     import torch
-    import kornia.filters
-    
-    # Mock _ensure_gpu_imports to return False
-    monkeypatch.setattr("card_capture.pipeline_utils._ensure_gpu_imports", lambda: False)
-    
-    from card_capture.pipeline_utils import _laplacian_heatmap_batch
-    
-    images = [np.zeros((64, 64, 3), dtype=np.uint8) for _ in range(3)]
-    results = _laplacian_heatmap_batch(images)
-    
-    assert len(results) == 3
-    assert all(isinstance(r, np.ndarray) for r in results)
-    assert all(r.shape == (64, 64) for r in results)
+    monkeypatch.setattr("torch.cuda.is_available", lambda: False)
 
-def test_laplacian_heatmap_batch_gpu(monkeypatch):
-    """When GPU is available, _laplacian_heatmap_batch should use kornia.filters.laplacian."""
-    import torch
-    
-    # Create fake torch/kornia modules
-    mock_torch = MagicMock()
-    mock_torch.cuda.is_available.return_value = True
-    mock_torch.from_numpy.side_effect = lambda x: MagicMock(cuda=lambda non_blocking=False: MagicMock(unsqueeze=lambda d: MagicMock(float=lambda: MagicMock(device='cuda'))))
-    mock_torch.float32 = torch.float32
-    
-    mock_kornia_filters = MagicMock()
-    # mock_kornia_filters.laplacian returns a MagicMock that can be squeezed and converted back to numpy
-    fake_gpu_res = MagicMock()
-    fake_gpu_res.squeeze.return_value = MagicMock(cpu=lambda: MagicMock(numpy=lambda: np.zeros((3, 64, 64), dtype=np.float32)))
-    mock_kornia_filters.laplacian.return_value = fake_gpu_res
-    
-    monkeypatch.setattr("card_capture.pipeline_utils._torch_mod", mock_torch)
-    monkeypatch.setattr("card_capture.pipeline_utils._kornia_filters_mod", mock_kornia_filters)
-    monkeypatch.setattr("card_capture.pipeline_utils._GPU_AVAILABLE", True)
-    
-    from card_capture.pipeline_utils import _laplacian_heatmap_batch
-    
+    from card_capture.pipeline_utils import _laplacian_variance_batch
+
     images = [np.zeros((64, 64, 3), dtype=np.uint8) for _ in range(3)]
-    results = _laplacian_heatmap_batch(images)
-    
+    results = _laplacian_variance_batch(images)
+
     assert len(results) == 3
-    assert mock_kornia_filters.laplacian.called
+    assert all(isinstance(r, float) for r in results)
+
+def test_laplacian_variance_batch_returns_floats():
+    """_laplacian_variance_batch always returns a list of floats, one per image."""
+    from card_capture.pipeline_utils import _laplacian_variance_batch
+
+    images = [np.random.randint(0, 256, (64, 64, 3), dtype=np.uint8) for _ in range(4)]
+    results = _laplacian_variance_batch(images)
+
+    assert len(results) == 4
+    assert all(isinstance(r, float) for r in results)
+    assert all(r >= 0.0 for r in results)

@@ -108,10 +108,13 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
     _lap_scan_indices = _compute_laplacian_scan_indices(_lap_ranges, ctx.laplacian_scan_stride)
     _all_needed = canonical_indices | _lap_scan_indices
     decoded_images: Dict[int, np.ndarray] = {}
+    _t_decode_start = time.time()
     if _all_needed:
         decoded_images = decode_frames_gpu(video_path, sorted(_all_needed))
+    _decode_frames_elapsed = time.time() - _t_decode_start
 
     _lap_results: Dict[str, list] = {}
+    _t_lap_start = time.time()
     try:
         _lap_results = _laplacian_select_frames(
             video_path,
@@ -123,6 +126,7 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
         )
     except Exception as _e:
         print(f"[Refine] Laplacian scan failed, falling back to temporal-stride frames: {_e}")
+    _laplacian_scan_elapsed = time.time() - _t_lap_start
 
     # Add any non-YOLO Laplacian-selected frames to the canonical decode set
     for _sel_list in _lap_results.values():
@@ -169,7 +173,8 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
     # which CPU-bound steps dominate the refine step's wall time. Surfaces in
     # stage_payloads.stage_refine in the next handler diagnostic dump.
     _t_ops: Dict[str, float] = {
-        "decode_setup": 0.0,
+        "decode_frames_gpu": _decode_frames_elapsed,
+        "laplacian_scan": _laplacian_scan_elapsed,
         "corner_refinement": 0.0,
         "kornia_warp_batch": 0.0,
         "precision_normalizer_fallback": 0.0,
