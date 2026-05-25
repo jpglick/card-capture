@@ -38,6 +38,24 @@ def test_pipeline_events_has_v4_columns(tmp_path: Path):
     assert "artifact_ref" in cols
 
 
+def test_run_resource_samples_has_gpu_detail_columns(tmp_path: Path):
+    db_path = tmp_path / "cards.sqlite"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "CREATE TABLE run_resource_samples ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "run_id TEXT NOT NULL, elapsed_s REAL NOT NULL, "
+            "cpu_pct REAL, mem_used_mb REAL, mem_pct REAL, "
+            "gpu_pct REAL, vram_used_mb REAL, stage TEXT DEFAULT 'init')"
+        )
+
+    apply_migrations(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(run_resource_samples)").fetchall()}
+    assert {"decoder_pct", "encoder_pct", "mem_io_pct"}.issubset(cols)
+
+
 def test_migrations_are_idempotent(tmp_path: Path):
     db_path = tmp_path / "cards.sqlite"
     sqlite3.connect(db_path).close()
@@ -46,8 +64,9 @@ def test_migrations_are_idempotent(tmp_path: Path):
     # Verify _migrations tracking table has exactly one row per SQL file.
     with sqlite3.connect(db_path) as conn:
         rows = conn.execute("SELECT filename FROM _migrations ORDER BY filename").fetchall()
-    assert len(rows) == 1
-    assert rows[0][0] == "0001_v4_schema.sql"
+    filenames = [r[0] for r in rows]
+    assert filenames
+    assert len(filenames) == len(set(filenames))
     # Verify the new tables are still present after double application.
     with sqlite3.connect(db_path) as conn:
         table_rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()

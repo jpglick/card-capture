@@ -93,6 +93,9 @@ def _make_db(tmp_path: Path) -> Path:
             mem_pct REAL,
             gpu_pct REAL,
             vram_used_mb REAL,
+            decoder_pct REAL,
+            encoder_pct REAL,
+            mem_io_pct REAL,
             stage TEXT DEFAULT 'init'
         )""")
         conn.execute("CREATE TABLE pipeline_run_logs (id INTEGER PRIMARY KEY, run_id TEXT NOT NULL, line TEXT NOT NULL, logged_at TEXT)")
@@ -210,6 +213,9 @@ def test_import_embedded_worker_database_merges_views_events_and_samples(tmp_pat
             mem_pct REAL,
             gpu_pct REAL,
             vram_used_mb REAL,
+            decoder_pct REAL,
+            encoder_pct REAL,
+            mem_io_pct REAL,
             stage TEXT DEFAULT 'init'
         )""")
         conn.execute("CREATE TABLE pipeline_run_logs (id INTEGER PRIMARY KEY, run_id TEXT NOT NULL, line TEXT NOT NULL, logged_at TEXT)")
@@ -228,8 +234,9 @@ def test_import_embedded_worker_database_merges_views_events_and_samples(tmp_pat
             "VALUES (1, 'run-worker', 'detect', 0, 0, 'stage_detect', '{\"elapsed_ms\": 42}')"
         )
         conn.execute(
-            "INSERT INTO run_resource_samples (run_id, elapsed_s, cpu_pct, mem_used_mb, mem_pct, gpu_pct, vram_used_mb, stage) "
-            "VALUES ('run-worker', 1.5, 10, 20, 30, 40, 50, 'detect')"
+            "INSERT INTO run_resource_samples "
+            "(run_id, elapsed_s, cpu_pct, mem_used_mb, mem_pct, gpu_pct, vram_used_mb, decoder_pct, encoder_pct, mem_io_pct, stage) "
+            "VALUES ('run-worker', 1.5, 10, 20, 30, 40, 50, 60, 70, 80, 'detect')"
         )
         conn.execute("INSERT INTO pipeline_run_logs (run_id, line) VALUES ('run-worker', '[mf] line')")
 
@@ -255,10 +262,12 @@ def test_import_embedded_worker_database_merges_views_events_and_samples(tmp_pat
         ).fetchone()
         assert view[0] == str(tmp_path / "run-worker" / "crops" / "track_abc_det_12_rectified.jpg")
         event_video_id = conn.execute("SELECT video_id FROM pipeline_events WHERE run_id='run-worker'").fetchone()[0]
-        sample_stage = conn.execute("SELECT stage FROM run_resource_samples WHERE run_id='run-worker'").fetchone()[0]
+        sample = conn.execute(
+            "SELECT stage, decoder_pct, encoder_pct, mem_io_pct FROM run_resource_samples WHERE run_id='run-worker'"
+        ).fetchone()
         log_line = conn.execute("SELECT line FROM pipeline_run_logs WHERE run_id='run-worker'").fetchone()[0]
     assert event_video_id == 7
-    assert sample_stage == "detect"
+    assert sample == ("detect", 60.0, 70.0, 80.0)
     assert log_line == "[mf] line"
 
 
@@ -271,7 +280,18 @@ def test_import_handler_output_persists_stage_events_and_resource_samples(tmp_pa
             "status": "complete",
             "gpu": {"device_name": "RTX 4090"},
             "resource_stats": {"samples": 1},
-            "resource_samples": [{"elapsed_s": 0.5, "cpu_pct": 1, "ram_used_mb": 2, "ram_pct": 3, "gpu_pct": 4, "vram_used_mb": 5, "stage": "detect"}],
+            "resource_samples": [{
+                "elapsed_s": 0.5,
+                "cpu_pct": 1,
+                "ram_used_mb": 2,
+                "ram_pct": 3,
+                "gpu_pct": 4,
+                "vram_used_mb": 5,
+                "decoder_pct": 6,
+                "encoder_pct": 7,
+                "mem_io_pct": 8,
+                "stage": "detect",
+            }],
             "timings": {"total_s": 9},
             "diagnostics": {"stage_payloads": {"stage_detect": {"elapsed_ms": 42}}},
         },
@@ -286,10 +306,11 @@ def test_import_handler_output_persists_stage_events_and_resource_samples(tmp_pa
             "SELECT video_id, stage_id, data_json FROM pipeline_events WHERE run_id='run-handler' AND event_type='stage_detect'"
         ).fetchone()
         sample = conn.execute(
-            "SELECT elapsed_s, gpu_pct, stage FROM run_resource_samples WHERE run_id='run-handler'"
+            "SELECT elapsed_s, gpu_pct, decoder_pct, encoder_pct, mem_io_pct, stage "
+            "FROM run_resource_samples WHERE run_id='run-handler'"
         ).fetchone()
     assert telemetry["gpu"]["device_name"] == "RTX 4090"
     assert event[0] == 7
     assert event[1] == "detect"
     assert json.loads(event[2])["elapsed_ms"] == 42
-    assert sample == (0.5, 4.0, "detect")
+    assert sample == (0.5, 4.0, 6.0, 7.0, 8.0, "detect")

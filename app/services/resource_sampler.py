@@ -130,6 +130,9 @@ class ResourceSampler:
         mem_pct: Optional[float] = None
         gpu_pct: Optional[float] = None
         vram_used_mb: Optional[float] = None
+        decoder_pct: Optional[float] = None
+        encoder_pct: Optional[float] = None
+        mem_io_pct: Optional[float] = None
 
         try:
             import psutil
@@ -147,8 +150,17 @@ class ResourceSampler:
             handle = pynvml.nvmlDeviceGetHandleByIndex(0)
             util = pynvml.nvmlDeviceGetUtilizationRates(handle)
             gpu_pct = float(util.gpu)
+            mem_io_pct = float(util.memory)
             mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
             vram_used_mb = mem_info.used / 1e6
+            try:
+                decoder_pct = float(pynvml.nvmlDeviceGetDecoderUtilization(handle)[0])
+            except Exception:
+                pass
+            try:
+                encoder_pct = float(pynvml.nvmlDeviceGetEncoderUtilization(handle)[0])
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -172,12 +184,25 @@ class ResourceSampler:
 
         try:
             with sqlite3.connect(str(self.db_path)) as conn:
+                cols = {r[1] for r in conn.execute("PRAGMA table_info(run_resource_samples)").fetchall()}
+                values = {
+                    "run_id": self.run_id,
+                    "elapsed_s": elapsed_s,
+                    "cpu_pct": cpu_pct,
+                    "mem_used_mb": mem_used_mb,
+                    "mem_pct": mem_pct,
+                    "gpu_pct": gpu_pct,
+                    "vram_used_mb": vram_used_mb,
+                    "decoder_pct": decoder_pct,
+                    "encoder_pct": encoder_pct,
+                    "mem_io_pct": mem_io_pct,
+                    "stage": self.current_stage,
+                }
+                insert_cols = [c for c in values if c in cols]
                 conn.execute(
-                    "INSERT INTO run_resource_samples "
-                    "(run_id, elapsed_s, cpu_pct, mem_used_mb, mem_pct, gpu_pct, vram_used_mb, stage) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (self.run_id, elapsed_s, cpu_pct, mem_used_mb, mem_pct, gpu_pct, vram_used_mb, self.current_stage),
+                    f"INSERT INTO run_resource_samples ({', '.join(insert_cols)}) "
+                    f"VALUES ({', '.join('?' for _ in insert_cols)})",
+                    [values[c] for c in insert_cols],
                 )
         except Exception:
             pass
- pass

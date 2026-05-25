@@ -319,6 +319,9 @@ class ResultImporter:
             "mem_pct": sample.get("mem_pct", sample.get("ram_pct")),
             "gpu_pct": sample.get("gpu_pct"),
             "vram_used_mb": sample.get("vram_used_mb"),
+            "decoder_pct": sample.get("decoder_pct"),
+            "encoder_pct": sample.get("encoder_pct"),
+            "mem_io_pct": sample.get("mem_io_pct"),
             "stage": sample.get("stage", "unknown"),
         }
         insert_cols = [c for c in values if c in cols]

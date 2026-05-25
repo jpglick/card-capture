@@ -7,6 +7,7 @@ saves 750×1050 JPEG crops, and returns image paths + metadata.
 from __future__ import annotations
 
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -34,6 +35,65 @@ class RefineOutput:
     frame_count: int
     accepted_frame_count: int
     video_id: int
+
+
+def _torch_cuda_memory_snapshot(device: str) -> Dict[str, float]:
+    try:
+        import torch
+
+        resolved_name = "cuda" if device == "auto" and torch.cuda.is_available() else device
+        if resolved_name == "auto":
+            resolved_name = "cpu"
+        resolved = torch.device(resolved_name)
+        if resolved.type != "cuda" or not torch.cuda.is_available():
+            return {}
+        torch.cuda.synchronize(resolved)
+        return {
+            "allocated_mb": round(torch.cuda.memory_allocated(resolved) / 1_048_576, 1),
+            "reserved_mb": round(torch.cuda.memory_reserved(resolved) / 1_048_576, 1),
+            "max_allocated_mb": round(torch.cuda.max_memory_allocated(resolved) / 1_048_576, 1),
+            "max_reserved_mb": round(torch.cuda.max_memory_reserved(resolved) / 1_048_576, 1),
+        }
+    except Exception:
+        return {}
+
+
+def _describe_kornia_batch(
+    batch_items: List[Tuple[Any, Any]],
+    *,
+    batch_ids: List[int],
+    elapsed_s: float,
+    device: str,
+    memory_before: Dict[str, float],
+    memory_after: Dict[str, float],
+) -> Dict[str, Any]:
+    shapes = []
+    input_pixels_total = 0
+    for image_or_path, _corners in batch_items:
+        shape = list(image_or_path.shape) if hasattr(image_or_path, "shape") else None
+        shapes.append(tuple(shape) if shape else None)
+        if shape and len(shape) >= 2:
+            input_pixels_total += int(shape[0]) * int(shape[1])
+
+    shape_counts = [
+        {"shape": list(shape) if shape else None, "count": count}
+        for shape, count in sorted(Counter(shapes).items(), key=lambda item: (item[0] is None, item[0] or ()))
+    ]
+    memory_delta = {
+        key: round(memory_after[key] - memory_before[key], 1)
+        for key in memory_before.keys() & memory_after.keys()
+    }
+    return {
+        "batch_size": len(batch_items),
+        "detection_ids": list(batch_ids),
+        "elapsed_ms": round(elapsed_s * 1000, 1),
+        "device": device,
+        "input_shapes": shape_counts,
+        "input_pixels_total": input_pixels_total,
+        "cuda_memory_before_mb": memory_before,
+        "cuda_memory_after_mb": memory_after,
+        "cuda_memory_delta_mb": memory_delta,
+    }
 
 
 def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
@@ -188,6 +248,7 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
         "other": 0.0,
     }
     _op_counts: Dict[str, int] = {k: 0 for k in _t_ops}
+    _kornia_batches: List[Dict[str, Any]] = []
 
     def _tick(label: str, started_at: float) -> float:
         _t_ops[label] += time.time() - started_at
@@ -265,9 +326,21 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
                 batch_ids.append(c["detection_id"])
             if batch_items:
                 try:
+                    memory_before = _torch_cuda_memory_snapshot(ctx.kornia_device)
                     _t = time.time()
                     warped = kornia_normalizer.warp_canonical_batch(batch_items, rotate_180=ctx.rotate_180)
-                    _tick("kornia_warp_batch", _t)
+                    memory_after = _torch_cuda_memory_snapshot(ctx.kornia_device)
+                    _elapsed = time.time() - _t
+                    _t_ops["kornia_warp_batch"] += _elapsed
+                    _op_counts["kornia_warp_batch"] += 1
+                    _kornia_batches.append(_describe_kornia_batch(
+                        batch_items,
+                        batch_ids=batch_ids,
+                        elapsed_s=_elapsed,
+                        device=ctx.kornia_device,
+                        memory_before=memory_before,
+                        memory_after=memory_after,
+                    ))
                     for did, img in zip(batch_ids, warped):
                         normalized_by_detection[did] = img
                 except Exception as e:
@@ -470,6 +543,7 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
         "tracks_refined": len(refined_tracks),
         "op_seconds": {k: round(v, 3) for k, v in _t_ops.items() if v > 0},
         "op_calls": {k: _op_counts[k] for k in _t_ops if _op_counts[k] > 0},
+        "kornia_batches": _kornia_batches,
     }
 
     out = RefineOutput(
