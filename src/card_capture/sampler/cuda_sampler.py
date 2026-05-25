@@ -108,6 +108,14 @@ class CudaSampler:
         if resolved is None:
             raise ValueError("video_path must be provided")
 
+        # decord's bridge is threading.local(): the module-level set_bridge('torch')
+        # ran on the import (main) thread only. The Phase-B prefetch in
+        # _run_cuda_inference iterates this sampler from a daemon producer thread,
+        # which gets the default 'native' bridge and makes VideoReader/VideoLoader
+        # return decord NDArray (no .cpu()). Re-assert the bridge in whatever thread
+        # actually decodes — idempotent, cheap, and safe on the main thread too.
+        decord.bridge.set_bridge('torch')
+
         # Probe video dimensions with a lightweight CPU reader
         probe = decord.VideoReader(str(resolved), ctx=decord.cpu(0))
         total = len(probe)

@@ -45,3 +45,33 @@ def test_sample_gpu_batches_keeps_tensor_and_resizes_thumbnail(monkeypatch):
         assert f.image.shape[1] == 640                   # thumbnail width
         assert f.image.shape[0] == round(H * 640 / W)    # aspect-preserved height
     assert [f.frame_index for f in frames] == [4, 6]
+
+
+def test_prepare_loader_sets_torch_bridge_for_decode_thread(monkeypatch):
+    """decord's bridge is threading.local(): the module-level set_bridge('torch')
+    only applies to the import (main) thread. _run_cuda_inference's Phase-B
+    prefetch runs the sampler in a daemon producer thread, which would otherwise
+    get the default 'native' bridge and make decord return NDArray (no .cpu()).
+    _prepare_loader must re-assert the torch bridge in whatever thread decodes."""
+    import card_capture.sampler.cuda_sampler as cs
+
+    H, W = 64, 64
+    fake_vr = MagicMock()
+    fake_vr.__len__ = lambda self: 10
+    fake_vr.get_avg_fps.return_value = 30.0
+    fake_vr.__getitem__ = lambda self, i: torch.zeros((H, W, 3), dtype=torch.uint8)
+
+    fake_decord = MagicMock()
+    fake_decord.cpu.return_value = "cpu_ctx"
+    fake_decord.VideoReader.return_value = fake_vr
+    fake_decord.VideoLoader.return_value = []
+    monkeypatch.setattr(cs, "decord", fake_decord)
+
+    sampler = cs.CudaSampler.__new__(cs.CudaSampler)
+    sampler.video_path = "/fake/video.MOV"
+    sampler.stride = 2
+    sampler._gpu_ctx = "gpu_ctx"
+
+    sampler._prepare_loader(batch_size=2, video_path="/fake/video.MOV")
+
+    fake_decord.bridge.set_bridge.assert_called_with("torch")
