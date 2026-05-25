@@ -28,6 +28,23 @@ except Exception as _e:
 from card_capture.models import FrameSample
 
 
+def _gpu_thumbnails(batch_u8, target_w: int):
+    """Resize a (N,H,W,3) uint8 tensor to width target_w on its device; return numpy.
+
+    Aspect-preserving. The only data that crosses PCIe is the small thumbnail.
+    """
+    import torch
+    import torch.nn.functional as F
+
+    n, H, W, _ = batch_u8.shape
+    if W <= target_w:
+        return batch_u8.cpu().numpy()
+    th = max(1, round(H * target_w / W))
+    t = batch_u8.permute(0, 3, 1, 2).float()
+    r = F.interpolate(t, size=(th, target_w), mode="bilinear", align_corners=False)
+    return r.clamp_(0, 255).to(torch.uint8).permute(0, 2, 3, 1).contiguous().cpu().numpy()
+
+
 def _probe_gpu() -> object:
     """Return a decord GPU context (index 0), or raise on failure."""
     return decord.gpu(0)
@@ -85,16 +102,8 @@ class CudaSampler:
         for batch in self.sample_batches(batch_size=32, video_path=video_path):
             yield from batch
 
-    def sample_batches(
-        self,
-        batch_size: int = 32,
-        video_path: Optional[Union[Path, str]] = None,
-    ) -> Iterator[list]:
-        """Yield lists of FrameSample using VideoLoader for continuous GPU streaming.
-
-        VideoLoader handles batch management internally. Only batch_size frames
-        are in RAM at once regardless of video length.
-        """
+    def _prepare_loader(self, batch_size: int, video_path):
+        """Probe dims and build the decord VideoLoader. Returns (vl, fps, h, w) or (None, fps, h, w)."""
         resolved = Path(video_path) if video_path else self.video_path
         if resolved is None:
             raise ValueError("video_path must be provided")
@@ -112,7 +121,7 @@ class CudaSampler:
         del probe
 
         if total == 0:
-            return
+            return None, fps, h, w
 
         # interval=stride-1: 0 → every frame, 1 → every 2nd frame, etc.
         vl = decord.VideoLoader(
@@ -123,7 +132,34 @@ class CudaSampler:
             skip=0,
             shuffle=0,
         )
+        return vl, fps, h, w
 
+    @staticmethod
+    def _flatten_indices(batch_indices):
+        """decord yields (N,2) [video_idx, frame_idx] pairs; take the frame_idx column."""
+        # decord VideoLoader returns batch_indices as (N, 2) — pairs of
+        # [video_idx, frame_idx]. We only have one video (vl was given a
+        # single path), so take the frame_idx column. The previous
+        # reshape(-1) doubled the length to 2N and caused an IndexError
+        # when we tried to align with frames_np (length N).
+        idx_arr = batch_indices.cpu().numpy()
+        if idx_arr.ndim == 2:
+            return idx_arr[:, 1].astype(int)
+        return idx_arr.reshape(-1).astype(int)
+
+    def sample_batches(
+        self,
+        batch_size: int = 32,
+        video_path: Optional[Union[Path, str]] = None,
+    ) -> Iterator[list]:
+        """Yield lists of FrameSample using VideoLoader for continuous GPU streaming.
+
+        VideoLoader handles batch management internally. Only batch_size frames
+        are in RAM at once regardless of video length.
+        """
+        vl, fps, h, w = self._prepare_loader(batch_size, video_path)
+        if vl is None:
+            return
         for batch_data, batch_indices in vl:
             # Torch bridge: VideoLoader yields torch.Tensor on the loader's ctx
             # (cuda when NVDEC-enabled). Convert to numpy at this boundary so
@@ -131,16 +167,7 @@ class CudaSampler:
             # numpy contract. A future optimization is to push torch tensors
             # all the way through to kornia and skip this copy entirely.
             frames_np = batch_data.cpu().numpy()                 # (N, H, W, 3)
-            # decord VideoLoader returns batch_indices as (N, 2) — pairs of
-            # [video_idx, frame_idx]. We only have one video (vl was given a
-            # single path), so take the frame_idx column. The previous
-            # reshape(-1) doubled the length to 2N and caused an IndexError
-            # when we tried to align with frames_np (length N).
-            idx_arr = batch_indices.cpu().numpy()
-            if idx_arr.ndim == 2:
-                indices_flat = idx_arr[:, 1].astype(int)
-            else:
-                indices_flat = idx_arr.reshape(-1).astype(int)
+            indices_flat = self._flatten_indices(batch_indices)
 
             batch = [
                 FrameSample(
@@ -153,3 +180,34 @@ class CudaSampler:
                 for i, idx in enumerate(indices_flat)
             ]
             yield batch
+
+    def sample_gpu_batches(
+        self,
+        batch_size: int = 32,
+        thumbnail_width: int = 640,
+        video_path: Optional[Union[Path, str]] = None,
+    ):
+        """Yield (gpu_tensor_batch, [FrameSample]) keeping full-res frames on the GPU.
+
+        The 4K tensor stays on-device for the warp; each FrameSample.image is a
+        small CPU thumbnail (width=thumbnail_width) for YOLO, while width/height
+        carry the ORIGINAL frame dims so the detector scales corners back to
+        full-frame coordinates.
+        """
+        vl, fps, h, w = self._prepare_loader(batch_size, video_path)
+        if vl is None:
+            return
+        for batch_data, batch_indices in vl:
+            indices_flat = self._flatten_indices(batch_indices)
+            thumbs = _gpu_thumbnails(batch_data, thumbnail_width)  # numpy (N, th, tw, 3)
+            frames = [
+                FrameSample(
+                    frame_index=int(idx),
+                    timestamp_ms=int(idx * 1000 / fps),
+                    image=thumbs[i],
+                    width=w,
+                    height=h,
+                )
+                for i, idx in enumerate(indices_flat)
+            ]
+            yield batch_data, frames
