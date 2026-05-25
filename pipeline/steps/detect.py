@@ -233,37 +233,39 @@ def _run_cuda_inference(
 
     # Stream in batch_size chunks — avoids loading the entire video (~11 GB for 4K)
     # into RAM at once before YOLO inference begins.
-    for batch in sampler.sample_batches(batch_size=batch_size):
-        total_frames += len(batch)
+    # gpu_batch is a GPU-resident (N,H,W,3) uint8 tensor; frames carry 640px thumbnails
+    # as .image plus original 4K width/height so detect_batch scales corners correctly.
+    for gpu_batch, frames in sampler.sample_gpu_batches(
+        batch_size=batch_size, thumbnail_width=detector.detection_width
+    ):
+        total_frames += len(frames)
 
         packets_in = [
             FramePacket(
                 frame_index=f.frame_index,
                 timestamp_ms=f.timestamp_ms,
-                image=f.image,
+                image=f.image,            # 640px thumbnail; detector scales corners via width/height
                 width=f.width,
                 height=f.height,
                 triage_metrics={},
             )
-            for f in batch
+            for f in frames
         ]
 
         _t = _time.time()
-        packets_out = detector.detect_batch(
-            packets_in, detector.confidence_threshold
-        )
+        packets_out = detector.detect_batch(packets_in, detector.confidence_threshold)
         yolo_elapsed_s += _time.time() - _t
         yolo_batches += 1
 
-        for f in batch:
+        for f in frames:
             accepted_frame_presence.append((f.frame_index, f.timestamp_ms, True))
 
-        # Map frame_index -> source image so we can warp detections from the
-        # frame that is still in RAM (no second decode in refine).
-        frame_by_index = {f.frame_index: f.image for f in batch}
+        # Position of each frame within this GPU batch, so we can slice the
+        # resident 4K tensor for warping (no re-decode, no host upload).
+        pos_by_frame = {f.frame_index: i for i, f in enumerate(frames)}
 
-        warp_items = []   # (image, corners)
-        warp_ids = []     # detection_id aligned with warp_items
+        warp_items = []   # (gpu_tensor_slice, corners)
+        warp_ids = []
         for pkt in packets_out:
             cd = pkt.corner_detection
             this_id = det_id
@@ -281,18 +283,15 @@ def _run_cuda_inference(
                 }
             )
             if crop_cache is not None and cd.corners:
-                src = frame_by_index.get(pkt.frame_index)
-                if src is not None:
-                    warp_items.append((src, [(float(p[0]), float(p[1])) for p in cd.corners]))
+                pos = pos_by_frame.get(pkt.frame_index)
+                if pos is not None:
+                    warp_items.append((gpu_batch[pos], [(float(p[0]), float(p[1])) for p in cd.corners]))
                     warp_ids.append(this_id)
             det_id += 1
 
         if crop_cache is not None and warp_items:
             try:
-                warped = normalizer.warp_canonical_batch(warp_items, rotate_180=ctx.rotate_180)
-                # warp_canonical_batch drops None images (cv2.imread path); here
-                # inputs are always ndarrays so counts must match. Guard against a
-                # silent detection_id→crop misalignment if that ever changes.
+                warped = normalizer.warp_canonical_batch_gpu(warp_items, rotate_180=ctx.rotate_180)
                 if len(warped) != len(warp_ids):
                     raise RuntimeError(
                         f"warp count mismatch: {len(warped)} crops for {len(warp_ids)} detections"
