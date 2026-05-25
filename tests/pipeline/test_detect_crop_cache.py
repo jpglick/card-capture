@@ -58,7 +58,7 @@ def test_run_cuda_inference_warps_from_gpu_tensor(tmp_path, monkeypatch):
     captured = {}
 
     class _FakeNorm:
-        def warp_canonical_batch_gpu(self, batch_items, rotate_180=False):
+        def warp_canonical_batch_gpu(self, batch_items, rotate_180=False, return_gpu=False):
             captured["items"] = batch_items
             return [np.full((1050, 750, 3), i + 1, dtype=np.uint8) for i in range(len(batch_items))]
     monkeypatch.setattr(detect, "KorniaNormalizer", lambda **k: _FakeNorm())

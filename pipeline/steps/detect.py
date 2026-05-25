@@ -235,9 +235,33 @@ def _run_cuda_inference(
     # into RAM at once before YOLO inference begins.
     # gpu_batch is a GPU-resident (N,H,W,3) uint8 tensor; frames carry 640px thumbnails
     # as .image plus original 4K width/height so detect_batch scales corners correctly.
-    for gpu_batch, frames in sampler.sample_gpu_batches(
-        batch_size=batch_size, thumbnail_width=detector.detection_width
-    ):
+    import queue as _queue
+    import threading as _threading
+
+    _q: "_queue.Queue" = _queue.Queue(maxsize=2)
+    _SENTINEL = object()
+
+    def _producer():
+        try:
+            for item in sampler.sample_gpu_batches(
+                batch_size=batch_size, thumbnail_width=detector.detection_width
+            ):
+                _q.put(item)          # blocks while 2 batches are buffered (RAM/VRAM bound)
+        except Exception as e:        # surface decode errors to the consumer
+            _q.put(("__error__", e))
+        finally:
+            _q.put(_SENTINEL)
+
+    _producer_thread = _threading.Thread(target=_producer, daemon=True)
+    _producer_thread.start()
+
+    while True:
+        item = _q.get()
+        if item is _SENTINEL:
+            break
+        if isinstance(item, tuple) and len(item) == 2 and item[0] == "__error__":
+            raise item[1]
+        gpu_batch, frames = item
         total_frames += len(frames)
 
         packets_in = [
@@ -292,7 +316,7 @@ def _run_cuda_inference(
 
         if crop_cache is not None and warp_items:
             try:
-                warped = normalizer.warp_canonical_batch_gpu(warp_items, rotate_180=ctx.rotate_180)
+                warped = normalizer.warp_canonical_batch_gpu(warp_items, rotate_180=ctx.rotate_180, return_gpu=True)
                 if len(warped) != len(warp_ids):
                     raise RuntimeError(
                         f"warp count mismatch: {len(warped)} crops for {len(warp_ids)} detections"

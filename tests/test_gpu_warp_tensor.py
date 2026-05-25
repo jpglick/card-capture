@@ -40,3 +40,20 @@ def test_gpu_tensor_warp_rotate_180_matches_numpy():
     from_numpy = norm.warp_canonical_batch([(img, corners)], rotate_180=True)
     from_tensor = norm.warp_canonical_batch_gpu([(torch.from_numpy(img), corners)], rotate_180=True)
     assert np.array_equal(from_numpy[0], from_tensor[0])
+
+
+def test_warp_gpu_return_matches_numpy():
+    import torch
+    import numpy as np
+    from card_capture.gpu_refinement import KorniaNormalizer
+    norm = KorniaNormalizer(width=750, height=1050, device="cpu")
+    img = np.random.randint(0, 256, (300, 200, 3), dtype=np.uint8)
+    corners = [(10.0, 10.0), (180.0, 12.0), (185.0, 280.0), (8.0, 275.0)]
+    cpu_list = norm.warp_canonical_batch_gpu([(torch.from_numpy(img), corners)], rotate_180=False)
+    gpu = norm.warp_canonical_batch_gpu(
+        [(torch.from_numpy(img), corners)], rotate_180=False, return_gpu=True
+    )
+    assert hasattr(gpu, "shape") and gpu.shape[0] == 1  # batched tensor
+    assert gpu.shape == (1, 1050, 750, 3)
+    # Check bit-identity after roundtrip
+    assert np.array_equal(cpu_list[0], gpu.cpu().numpy()[0])

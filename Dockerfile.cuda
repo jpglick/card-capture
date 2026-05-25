@@ -75,6 +75,7 @@ RUN printf 'void nvcuvid_stub(void) {}' > /tmp/stub.c && \
 RUN pip install \
         "av>=12.0.0" \
         "ultralytics>=8.1.0" \
+        "tensorrt" \
         "kornia>=0.7.2" \
         "httpx>=0.27.0" \
         "fastapi>=0.110.0" \

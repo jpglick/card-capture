@@ -34,9 +34,13 @@ class KorniaNormalizer:
         return cv2.getPerspectiveTransform(pts_src, pts_dst)
 
     def _warp_from_stacked(
-        self, batch_u8: "torch.Tensor", matrices_np: List[np.ndarray], rotate_180: bool
-    ) -> List[np.ndarray]:
-        """Warp a stacked uint8 (B,H,W,3) BGR tensor (already on device) → list of BGR crops.
+        self,
+        batch_u8: "torch.Tensor",
+        matrices_np: List[np.ndarray],
+        rotate_180: bool,
+        return_gpu: bool = False,
+    ) -> Union[List[np.ndarray], "torch.Tensor"]:
+        """Warp a stacked uint8 (B,H,W,3) BGR tensor (already on device) → list of BGR crops or batched tensor.
 
         Single GPU warp core shared by the numpy and GPU-tensor entry points.
         Channel handling is unchanged from the original warp_canonical_batch:
@@ -53,20 +57,25 @@ class KorniaNormalizer:
         )
         del batch_t
 
-        warped_u8 = (warped[:, [2, 1, 0], :, :] * 255.0).clamp_(0, 255).to(torch.uint8)
-        warped_u8 = warped_u8.permute(0, 2, 3, 1).contiguous().cpu().numpy()
+        out = (warped[:, [2, 1, 0], :, :] * 255.0).clamp_(0, 255).to(torch.uint8)
+        out = out.permute(0, 2, 3, 1).contiguous()  # (N,H,W,3) BGR
         del warped
 
-        images: List[np.ndarray] = []
-        for bgr in warped_u8:
-            if rotate_180:
-                bgr = cv2.rotate(bgr, cv2.ROTATE_180)
-            images.append(bgr)
-        return images
+        if rotate_180:
+            out = torch.rot90(out, 2, dims=[1, 2])
+
+        if return_gpu:
+            return out  # device tensor, stays resident
+
+        np_out = out.cpu().numpy()
+        return [np_out[i] for i in range(np_out.shape[0])]
 
     def warp_canonical_batch(
-        self, batch_data: List[Tuple[Union[str, np.ndarray], List[Point]]], rotate_180: bool = True
-    ) -> List[np.ndarray]:
+        self,
+        batch_data: List[Tuple[Union[str, np.ndarray], List[Point]]],
+        rotate_180: bool = True,
+        return_gpu: bool = False,
+    ) -> Union[List[np.ndarray], "torch.Tensor"]:
         """Warp from numpy images (or image paths). Uploads to GPU, then warps.
 
         Optimized 2026-05-24 — measured 1138 ms/batch in production, dominated
@@ -85,13 +94,16 @@ class KorniaNormalizer:
             imgs.append(img)
             mats.append(self._perspective_matrix(corners))
         if not imgs:
-            return []
+            return [] if not return_gpu else torch.empty(0).to(self.device)
         batch_u8 = torch.from_numpy(np.stack(imgs, axis=0)).to(self.device, non_blocking=True)
-        return self._warp_from_stacked(batch_u8, mats, rotate_180)
+        return self._warp_from_stacked(batch_u8, mats, rotate_180, return_gpu=return_gpu)
 
     def warp_canonical_batch_gpu(
-        self, batch_data: List[Tuple["torch.Tensor", List[Point]]], rotate_180: bool = True
-    ) -> List[np.ndarray]:
+        self,
+        batch_data: List[Tuple["torch.Tensor", List[Point]]],
+        rotate_180: bool = True,
+        return_gpu: bool = False,
+    ) -> Union[List[np.ndarray], "torch.Tensor"]:
         """Warp from GPU-resident uint8 (H,W,3) BGR tensors — no host→device upload.
 
         Each item's image is a torch tensor already on the GPU (a slice of the
@@ -108,6 +120,6 @@ class KorniaNormalizer:
             tensors.append(img_t)
             mats.append(self._perspective_matrix(corners))
         if not tensors:
-            return []
+            return [] if not return_gpu else torch.empty(0).to(self.device)
         batch_u8 = torch.stack(tensors, dim=0).to(self.device, non_blocking=True)
-        return self._warp_from_stacked(batch_u8, mats, rotate_180)
+        return self._warp_from_stacked(batch_u8, mats, rotate_180, return_gpu=return_gpu)

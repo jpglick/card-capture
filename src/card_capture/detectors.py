@@ -202,6 +202,7 @@ class CardcaptorUltralyticsDetector:
         self.detection_width = detection_width
         self.device = device
         self._model = None
+        self._half = False
 
     def detect(self, frame: FrameSample) -> List[CardDetection]:
         detections = self.detect_batch(
@@ -253,7 +254,7 @@ class CardcaptorUltralyticsDetector:
             detect_images.append(detect_image)
             scale_factors.append((scale_x, scale_y, frame.width, frame.height))
 
-        results = model(detect_images, conf=confidence_threshold, verbose=False)
+        results = model(detect_images, conf=confidence_threshold, half=getattr(self, "_half", False), verbose=False)
         detections: List[DetectionPacket] = []
         for frame, result, (scale_x, scale_y, frame_width, frame_height) in zip(frames, results, scale_factors):
             obb = getattr(result, "obb", None)
@@ -325,20 +326,40 @@ class CardcaptorUltralyticsDetector:
                 "Install with: pip install '.[model]'"
             ) from exc
 
-        # Backend selection notes (benchmarked on M4, YOLO11m-OBB, batch=16):
-        #   MPS PyTorch:          94ms/frame  ← winner
-        #   ONNX+CoreML EP b=1:  325ms/frame  (ANE for 419/441 ops, but loop overhead dominates)
-        #   ONNX CPU b=16:       296ms/frame  (CoreML EP rejects b>1, falls back to CPU)
-        # MPS wins by 3×. ANE excels at lightweight mobile architectures; YOLO11m's
-        # 134 layers saturate the GPU more efficiently. ONNX kept in models/ as a
-        # verified-correct fallback for non-MPS environments.
-
-        # Primary: MPS / CPU
-        model_path = _resolve_model_path(self.repo_id, self.filename)
-        self._model = YOLO(model_path)
         self._device = self._resolve_device()
+        model_path = _resolve_model_path(self.repo_id, self.filename)
+
+        # TensorRT fast path (CUDA only). Engines are GPU/TRT-version specific and
+        # cannot be prebuilt in the image, so we build-once-cache on the worker.
+        # Ladder: cached .engine → export .engine → FP16 .pt → FP32 .pt.
+        if self._device == "cuda":
+            import os
+            engine_path = os.path.splitext(model_path)[0] + ".engine"
+            try:
+                if not os.path.exists(engine_path):
+                    exporter = YOLO(model_path)
+                    # dynamic batch so the final short batch still runs; half=FP16.
+                    out = exporter.export(format="engine", half=True, dynamic=True,
+                                          imgsz=self.detection_width, device=0, verbose=False)
+                    engine_path = str(out) if out else engine_path
+                self._model = YOLO(engine_path)
+                print(f"[detector] backend=tensorrt engine={engine_path}", flush=True)
+                self._half = True
+                return self._model
+            except Exception as e:
+                print(f"[detector] TensorRT unavailable ({e}); falling back to .pt FP16", flush=True)
+
+        self._model = YOLO(model_path)
         self._model.to(self._device)
-        print(f"[detector] backend={self._device}", flush=True)
+        # FP16 on CUDA even without TRT — the cheap ~2x win and our safety net.
+        self._half = False
+        if self._device == "cuda":
+            try:
+                self._model.half()
+                self._half = True
+            except Exception:
+                pass
+        print(f"[detector] backend={self._device} half={self._half}", flush=True)
         return self._model
 
     def _resolve_device(self) -> str:

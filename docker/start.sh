@@ -50,9 +50,16 @@ from ultralytics import YOLO
 from huggingface_hub import try_to_load_from_cache
 import numpy as np
 weights = try_to_load_from_cache("AlecKarfonta/cardcaptor-v3", "weights/cardcaptor_v3_best.pt")
-m = YOLO(weights)
-m.predict(np.zeros((640,640,3), dtype=np.uint8), device="cuda", imgsz=640, verbose=False)
-torch.cuda.synchronize()
+engine = os.path.splitext(weights)[0] + ".engine"
+try:
+    if not os.path.exists(engine):
+        YOLO(weights).export(format="engine", half=True, dynamic=True, imgsz=640, device=0, verbose=False)
+    m = YOLO(engine)
+    print(f"trt engine ready: {(time.time()-t)*1000:.0f}ms", flush=True)
+except Exception as e:
+    print(f"trt export failed ({e}); warming .pt fp16", flush=True)
+    m = YOLO(weights); m.half()
+m.predict(np.zeros((640,640,3), dtype=np.uint8), device="cuda", imgsz=640, half=True, verbose=False)
 print(f"yolo warmup: {(time.time()-t)*1000:.0f}ms", flush=True)
 
 t = time.time()

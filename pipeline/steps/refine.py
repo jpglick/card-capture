@@ -363,8 +363,68 @@ def run(ctx: RunContext, track_out: TrackOutput,
                     print(f"Kornia warp failed: {e}")
                     normalized_by_detection = {}
 
+        # FUSED MODE: batch GPU scoring and ops if we have GPU tensors
+        is_gpu_batch = False
+        batch_indices = []
+        batch_tensors = []
+        if decoded_crops:
+            import torch
+            for i, c in enumerate(scored_candidates):
+                norm = normalized_by_detection.get(c["detection_id"])
+                if torch.is_tensor(norm):
+                    is_gpu_batch = True
+                    batch_indices.append(i)
+                    batch_tensors.append(norm)
+
+        batch_quality_scores = {}
+        batch_glare_centroids = {}
+        batch_phashes = {}
+        batch_glare_masks = {}
+
+        if is_gpu_batch and batch_tensors:
+            import torch
+            from card_capture.ml import gpu_ops
+            stacked = torch.stack(batch_tensors)
+            
+            # Scorer.score_batch
+            confidences = [float(scored_candidates[i]["confidence"]) for i in batch_indices]
+            novelties = [float(detection_lookup.get(scored_candidates[i]["detection_id"], {}).get("novelty_score", 1.0)) for i in batch_indices]
+            
+            _t = time.time()
+            qs_list = scorer.score_batch(stacked, confidences, novelties=novelties)
+            _t_ops["quality_scoring"] += time.time() - _t
+            _op_counts["quality_scoring"] += 1
+            for i, idx in enumerate(batch_indices):
+                batch_quality_scores[idx] = qs_list[i]
+            
+            # Glare centroid
+            _t = time.time()
+            centroids = gpu_ops.glare_centroid_batch(stacked)
+            _t_ops["glare_centroid"] += time.time() - _t
+            _op_counts["glare_centroid"] += 1
+            for i, idx in enumerate(batch_indices):
+                batch_glare_centroids[idx] = centroids[i]
+                
+            # pHash
+            _t = time.time()
+            phashes = gpu_ops.phash_batch(stacked)
+            _t_ops["phash"] += time.time() - _t
+            _op_counts["phash"] += 1
+            for i, idx in enumerate(batch_indices):
+                batch_phashes[idx] = phashes[i]
+                
+            # Glare mask
+            _t = time.time()
+            masks = gpu_ops.glare_mask_batch(stacked)
+            _t_ops["glare_mask"] += time.time() - _t
+            _op_counts["glare_mask"] += 1
+            for i, idx in enumerate(batch_indices):
+                # Convert bool mask to uint8 0/255 and compress
+                m_np = (masks[i].to(torch.uint8) * 255).cpu().numpy()
+                batch_glare_masks[idx] = _compress_array(m_np)
+
         frame_entries = []
-        for c in scored_candidates:
+        for i, c in enumerate(scored_candidates):
             raw = decoded_images.get(c["frame_index"])
             det_row = detection_lookup.get(c["detection_id"], {})
             if raw is None:
@@ -378,39 +438,47 @@ def run(ctx: RunContext, track_out: TrackOutput,
                 normalized = normalizer.normalize(raw, c["corners"], rotate_180=ctx.rotate_180)
                 _tick("precision_normalizer_fallback", _t)
 
-            # Compute novelty score
-            novelty_score = det_row.get("novelty_score", 1.0)
-            if decoded_crops is None and bg_model is not None and c["corners"]:
-                try:
-                    _t = time.time()
-                    novelty_score = float(quad_novelty(
-                        raw, c["corners"], bg_model,
-                        color_space="lab", lab_weights=(1.0, 0.5, 0.5),
-                    ))
-                    _tick("novelty_scoring", _t)
-                except Exception:
-                    pass
+            if i in batch_quality_scores:
+                # Use pre-computed batched results
+                quality_score = batch_quality_scores[i]
+                glare_x, glare_y = batch_glare_centroids[i] if batch_glare_centroids[i] else (None, None)
+                _phash = batch_phashes[i]
+                _gmask = batch_glare_masks[i]
+            else:
+                # Fallback to per-image scoring
+                # Compute novelty score
+                novelty_score = det_row.get("novelty_score", 1.0)
+                if decoded_crops is None and bg_model is not None and c["corners"]:
+                    try:
+                        _t = time.time()
+                        novelty_score = float(quad_novelty(
+                            raw, c["corners"], bg_model,
+                            color_space="lab", lab_weights=(1.0, 0.5, 0.5),
+                        ))
+                        _tick("novelty_scoring", _t)
+                    except Exception:
+                        pass
 
-            _t = time.time()
-            quality_score = scorer.score(
-                normalized,
-                float(c["confidence"]),
-                novelty=novelty_score,
-            )
-            _tick("quality_scoring", _t)
+                _t = time.time()
+                quality_score = scorer.score(
+                    normalized,
+                    float(c["confidence"]),
+                    novelty=novelty_score,
+                )
+                _tick("quality_scoring", _t)
 
-            _t = time.time()
-            glare_centroid = find_glare_centroid(normalized)
-            glare_x, glare_y = glare_centroid if glare_centroid else (None, None)
-            _tick("glare_centroid", _t)
+                _t = time.time()
+                glare_centroid = find_glare_centroid(normalized)
+                glare_x, glare_y = glare_centroid if glare_centroid else (None, None)
+                _tick("glare_centroid", _t)
 
-            _t = time.time()
-            _phash = deduplicator.compute_phash(normalized)
-            _tick("phash", _t)
+                _t = time.time()
+                _phash = deduplicator.compute_phash(normalized)
+                _tick("phash", _t)
 
-            _t = time.time()
-            _gmask = _compress_array(_glare_mask(normalized))
-            _tick("glare_mask", _t)
+                _t = time.time()
+                _gmask = _compress_array(_glare_mask(normalized))
+                _tick("glare_mask", _t)
 
             frame_entries.append({
                 "candidate": c,
@@ -461,7 +529,12 @@ def run(ctx: RunContext, track_out: TrackOutput,
             # Persist candidate image
             img_path = crops_dir / f"track_{instance_id[:8]}_det_{det_id}_rectified.jpg"
             _t = time.time()
-            cv2.imwrite(str(img_path), entry["normalized"])
+            
+            save_img = entry["normalized"]
+            if hasattr(save_img, "cpu"): # torch tensor
+                save_img = save_img.cpu().numpy()
+                
+            cv2.imwrite(str(img_path), save_img)
             _tick("imwrite", _t)
 
             frame_entry_paths.append({
@@ -475,6 +548,7 @@ def run(ctx: RunContext, track_out: TrackOutput,
                 "glare_x": entry["glare_x"],
                 "glare_y": entry["glare_y"],
                 "sharpness": entry["sharpness"],
+                "glare_mask": entry["glare_mask"],
                 "is_canonical": is_canonical,
                 "confidence": float(c.get("confidence", 0.0)),
                 "corners": [(float(x), float(y)) for x, y in c["corners"]] if c["corners"] else [],
