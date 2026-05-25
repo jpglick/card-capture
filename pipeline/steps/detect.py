@@ -290,6 +290,13 @@ def _run_cuda_inference(
         if crop_cache is not None and warp_items:
             try:
                 warped = normalizer.warp_canonical_batch(warp_items, rotate_180=ctx.rotate_180)
+                # warp_canonical_batch drops None images (cv2.imread path); here
+                # inputs are always ndarrays so counts must match. Guard against a
+                # silent detection_id→crop misalignment if that ever changes.
+                if len(warped) != len(warp_ids):
+                    raise RuntimeError(
+                        f"warp count mismatch: {len(warped)} crops for {len(warp_ids)} detections"
+                    )
                 for wid, img in zip(warp_ids, warped):
                     crop_cache[wid] = img
             except Exception as e:
