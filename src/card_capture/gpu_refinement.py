@@ -34,7 +34,7 @@ class KorniaNormalizer:
         return cv2.getPerspectiveTransform(pts_src, pts_dst)
 
     def _warp_from_stacked(
-        self, batch_u8, matrices_np: List[np.ndarray], rotate_180: bool
+        self, batch_u8: "torch.Tensor", matrices_np: List[np.ndarray], rotate_180: bool
     ) -> List[np.ndarray]:
         """Warp a stacked uint8 (B,H,W,3) BGR tensor (already on device) → list of BGR crops.
 
@@ -96,6 +96,9 @@ class KorniaNormalizer:
 
         Each item's image is a torch tensor already on the GPU (a slice of the
         decoded decord batch). Skips the np.stack/from_numpy/.to() upload.
+
+        Contract: all input tensors must be uint8 (H,W,3) and reside on the same device.
+        Mixed-device inputs will raise at torch.stack(); no additional runtime check is added.
         """
         tensors: List["torch.Tensor"] = []
         mats: List[np.ndarray] = []

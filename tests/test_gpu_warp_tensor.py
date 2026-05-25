@@ -32,3 +32,11 @@ def test_gpu_tensor_warp_matches_numpy():
 def test_gpu_tensor_warp_empty_returns_empty():
     norm = KorniaNormalizer(width=750, height=1050, device="cpu")
     assert norm.warp_canonical_batch_gpu([]) == []
+
+
+def test_gpu_tensor_warp_rotate_180_matches_numpy():
+    norm = KorniaNormalizer(width=750, height=1050, device="cpu")
+    img, corners = _img_and_corners()
+    from_numpy = norm.warp_canonical_batch([(img, corners)], rotate_180=True)
+    from_tensor = norm.warp_canonical_batch_gpu([(torch.from_numpy(img), corners)], rotate_180=True)
+    assert np.array_equal(from_numpy[0], from_tensor[0])
