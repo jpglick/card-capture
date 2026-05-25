@@ -262,10 +262,11 @@ def _run_cuda_inference(
 
         # Position of each frame within this GPU batch, so we can slice the
         # resident 4K tensor for warping (no re-decode, no host upload).
+        # frame_index is unique per batch under CudaSampler's stride guarantee.
         pos_by_frame = {f.frame_index: i for i, f in enumerate(frames)}
 
         warp_items = []   # (gpu_tensor_slice, corners)
-        warp_ids = []
+        warp_ids = []     # detection_id aligned with warp_items (guards the count check below)
         for pkt in packets_out:
             cd = pkt.corner_detection
             this_id = det_id
