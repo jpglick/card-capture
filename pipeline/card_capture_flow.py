@@ -11,6 +11,7 @@ from metaflow import FlowSpec, Parameter, current, step
 
 from pipeline.steps import (
     detect, novelty, track, refine, score, resolve, fuse, dedup, store,
+    fused_refine,
 )
 
 
@@ -77,52 +78,73 @@ class CardCaptureFlow(FlowSpec):
     @step
     def detect(self):
         _t0 = _time.time()
-        self.detect_out = detect.run(self.run_context)
-        _elapsed_ms = int((_time.time() - _t0) * 1000)
         ctx = self.run_context
         _run_id = self.ui_run_id or current.run_id
-        # Merge the detect-stage telemetry (yolo_device, yolo_frames, yolo_batches,
-        # yolo_elapsed_s, triage_pass_rate, etc.) into the stage event's data_json.
-        # The runpod_handler diagnostic surfaces this as stage_payloads.stage_detect.
-        _record_stage_timing(
-            ctx.db_path, _run_id, ctx.video_id or 0, "detect", _elapsed_ms,
-            extra=self.detect_out.detect_telemetry or {},
-        )
+        if ctx.detector == "cuda":
+            # Fused path: decode + warp + novelty + track + refine in one step
+            # so the crop cache stays in memory (no Metaflow artifact spill).
+            self.refine_out = fused_refine.run(ctx)
+            self._fused = True
+            _elapsed_ms = int((_time.time() - _t0) * 1000)
+            _record_stage_timing(
+                ctx.db_path, _run_id, ctx.video_id or 0, "detect", _elapsed_ms,
+                extra=getattr(self.refine_out, "refine_telemetry", None) or {},
+            )
+        else:
+            self.detect_out = detect.run(ctx)
+            self._fused = False
+            _elapsed_ms = int((_time.time() - _t0) * 1000)
+            _record_stage_timing(
+                ctx.db_path, _run_id, ctx.video_id or 0, "detect", _elapsed_ms,
+                extra=self.detect_out.detect_telemetry or {},
+            )
         self.next(self.novelty)
 
     @step
     def novelty(self):
-        _t0 = _time.time()
-        self.novelty_out = novelty.run(self.run_context, self.detect_out)
-        _elapsed_ms = int((_time.time() - _t0) * 1000)
-        ctx = self.run_context
-        _record_stage_timing(ctx.db_path, self.ui_run_id or current.run_id, ctx.video_id or 0, "novelty", _elapsed_ms)
+        if not self._fused:
+            _t0 = _time.time()
+            self.novelty_out = novelty.run(self.run_context, self.detect_out)
+            _elapsed_ms = int((_time.time() - _t0) * 1000)
+            ctx = self.run_context
+            _record_stage_timing(ctx.db_path, self.ui_run_id or current.run_id, ctx.video_id or 0, "novelty", _elapsed_ms)
         self.next(self.track)
 
     @step
     def track(self):
-        _t0 = _time.time()
-        self.track_out = track.run(self.run_context, self.novelty_out)
-        _elapsed_ms = int((_time.time() - _t0) * 1000)
-        ctx = self.run_context
-        _record_stage_timing(ctx.db_path, self.ui_run_id or current.run_id, ctx.video_id or 0, "track", _elapsed_ms)
+        if not self._fused:
+            _t0 = _time.time()
+            self.track_out = track.run(self.run_context, self.novelty_out)
+            _elapsed_ms = int((_time.time() - _t0) * 1000)
+            ctx = self.run_context
+            _record_stage_timing(ctx.db_path, self.ui_run_id or current.run_id, ctx.video_id or 0, "track", _elapsed_ms)
         self.next(self.refine)
 
     @step
     def refine(self):
-        _t0 = _time.time()
-        self.refine_out = refine.run(self.run_context, self.track_out)
-        _elapsed_ms = int((_time.time() - _t0) * 1000)
-        ctx = self.run_context
-        # Surface per-op timings (op_seconds + op_calls) into stage_refine
-        # data_json so the handler diagnostic shows which CPU-bound step
-        # dominates refine's wall time. Optional attribute — falls back to
-        # bare timing if refine.run didn't set it.
-        _refine_extra = getattr(self.refine_out, "refine_telemetry", None) or {}
-        _record_stage_timing(
-            ctx.db_path, self.ui_run_id or current.run_id, ctx.video_id or 0,
-            "refine", _elapsed_ms, extra=_refine_extra,
-        )
+        if not self._fused:
+            _t0 = _time.time()
+            self.refine_out = refine.run(self.run_context, self.track_out)
+            _elapsed_ms = int((_time.time() - _t0) * 1000)
+            ctx = self.run_context
+            # Surface per-op timings (op_seconds + op_calls) into stage_refine
+            # data_json so the handler diagnostic shows which CPU-bound step
+            # dominates refine's wall time. Optional attribute — falls back to
+            # bare timing if refine.run didn't set it.
+            _refine_extra = getattr(self.refine_out, "refine_telemetry", None) or {}
+            _record_stage_timing(
+                ctx.db_path, self.ui_run_id or current.run_id, ctx.video_id or 0,
+                "refine", _elapsed_ms, extra=_refine_extra,
+            )
+        else:
+            # Fused path already produced self.refine_out in the detect step;
+            # emit a refine stage event so the diagnostic still shows it.
+            ctx = self.run_context
+            _refine_extra = getattr(self.refine_out, "refine_telemetry", None) or {}
+            _record_stage_timing(
+                ctx.db_path, self.ui_run_id or current.run_id, ctx.video_id or 0,
+                "refine", 0, extra=_refine_extra,
+            )
         self.next(self.score)
 
     @step

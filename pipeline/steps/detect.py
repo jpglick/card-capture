@@ -13,6 +13,7 @@ import json as _json
 import sqlite3 as _sqlite3
 
 from pipeline.steps.start import RunContext
+from card_capture.gpu_refinement import KorniaNormalizer
 
 
 @dataclass
@@ -203,6 +204,7 @@ def _run_cuda_inference(
     detector: "CardcaptorUltralyticsDetector",
     output_dir: Path,
     frame_dir: Path,
+    crop_cache: Optional[dict] = None,
 ) -> "DetectOutput":
     """Single-process CUDA inference path: decode → batch YOLO → DetectOutput.
 
@@ -220,6 +222,14 @@ def _run_cuda_inference(
     total_frames = 0
     yolo_batches = 0
     yolo_elapsed_s = 0.0
+
+    normalizer = None
+    if crop_cache is not None:
+        try:
+            normalizer = KorniaNormalizer(width=750, height=1050, device=ctx.kornia_device)
+        except Exception as e:
+            print(f"[detect] KorniaNormalizer unavailable, crop cache disabled: {e}", flush=True)
+            crop_cache = None
 
     # Stream in batch_size chunks — avoids loading the entire video (~11 GB for 4K)
     # into RAM at once before YOLO inference begins.
@@ -248,11 +258,18 @@ def _run_cuda_inference(
         for f in batch:
             accepted_frame_presence.append((f.frame_index, f.timestamp_ms, True))
 
+        # Map frame_index -> source image so we can warp detections from the
+        # frame that is still in RAM (no second decode in refine).
+        frame_by_index = {f.frame_index: f.image for f in batch}
+
+        warp_items = []   # (image, corners)
+        warp_ids = []     # detection_id aligned with warp_items
         for pkt in packets_out:
             cd = pkt.corner_detection
+            this_id = det_id
             detection_rows.append(
                 {
-                    "detection_id": det_id,
+                    "detection_id": this_id,
                     "frame_index": pkt.frame_index,
                     "timestamp_ms": pkt.timestamp_ms,
                     "width": pkt.width,
@@ -263,7 +280,20 @@ def _run_cuda_inference(
                     "triage_metrics": {},
                 }
             )
+            if crop_cache is not None and cd.corners:
+                src = frame_by_index.get(pkt.frame_index)
+                if src is not None:
+                    warp_items.append((src, [(float(p[0]), float(p[1])) for p in cd.corners]))
+                    warp_ids.append(this_id)
             det_id += 1
+
+        if crop_cache is not None and warp_items:
+            try:
+                warped = normalizer.warp_canonical_batch(warp_items, rotate_180=ctx.rotate_180)
+                for wid, img in zip(warp_ids, warped):
+                    crop_cache[wid] = img
+            except Exception as e:
+                print(f"[detect] crop warp failed for batch: {e}", flush=True)
 
     return DetectOutput(
         frame_count=total_frames,

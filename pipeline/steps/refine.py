@@ -96,12 +96,14 @@ def _describe_kornia_batch(
     }
 
 
-def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
+def run(ctx: RunContext, track_out: TrackOutput,
+        decoded_crops: Optional[Dict[int, Any]] = None) -> RefineOutput:
     """Decode high-res frames and warp each candidate to 750×1050.
 
     Args:
         ctx:       RunContext from the start step.
         track_out: Output from the track step.
+        decoded_crops: Optional pre-warped crops from the fused pipeline.
 
     Returns:
         ``RefineOutput`` with per-track lists of rectified image paths.
@@ -165,33 +167,40 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
 
     # Compute union of all frame indices needed by Laplacian scan and Kornia warp,
     # then decode once via NVDEC instead of two separate CPU VideoCapture passes.
-    _lap_scan_indices = _compute_laplacian_scan_indices(_lap_ranges, ctx.laplacian_scan_stride)
-    _all_needed = canonical_indices | _lap_scan_indices
+    # FUSED MODE: when decoded_crops is supplied, every detection was already
+    # warped during the detect pass — skip decode and the laplacian rescan.
     decoded_images: Dict[int, np.ndarray] = {}
-    _t_decode_start = time.time()
-    if _all_needed:
-        decoded_images = decode_frames_gpu(video_path, sorted(_all_needed))
-    _decode_frames_elapsed = time.time() - _t_decode_start
+    _lap_scan_indices: set = set()
+    _decode_frames_elapsed = 0.0
+    if decoded_crops is None:
+        _lap_scan_indices = _compute_laplacian_scan_indices(_lap_ranges, ctx.laplacian_scan_stride)
+        _all_needed = canonical_indices | _lap_scan_indices
+        _t_decode_start = time.time()
+        if _all_needed:
+            decoded_images = decode_frames_gpu(video_path, sorted(_all_needed))
+        _decode_frames_elapsed = time.time() - _t_decode_start
 
     _lap_results: Dict[str, list] = {}
-    _t_lap_start = time.time()
-    try:
-        _lap_results = _laplacian_select_frames(
-            video_path,
-            _lap_ranges,
-            scan_stride=ctx.laplacian_scan_stride,
-            top_k=_lap_top_k,
-            max_corner_gap=ctx.max_corner_gap_frames,
-            decoded_frames=decoded_images if decoded_images else None,
-        )
-    except Exception as _e:
-        print(f"[Refine] Laplacian scan failed, falling back to temporal-stride frames: {_e}")
-    _laplacian_scan_elapsed = time.time() - _t_lap_start
+    _laplacian_scan_elapsed = 0.0
+    if decoded_crops is None:
+        _t_lap_start = time.time()
+        try:
+            _lap_results = _laplacian_select_frames(
+                video_path,
+                _lap_ranges,
+                scan_stride=ctx.laplacian_scan_stride,
+                top_k=_lap_top_k,
+                max_corner_gap=ctx.max_corner_gap_frames,
+                decoded_frames=decoded_images if decoded_images else None,
+            )
+        except Exception as _e:
+            print(f"[Refine] Laplacian scan failed, falling back to temporal-stride frames: {_e}")
+        _laplacian_scan_elapsed = time.time() - _t_lap_start
 
-    # Add any non-YOLO Laplacian-selected frames to the canonical decode set
-    for _sel_list in _lap_results.values():
-        for _fi, _ in _sel_list:
-            canonical_indices.add(int(_fi))
+        # Add any non-YOLO Laplacian-selected frames to the canonical decode set
+        for _sel_list in _lap_results.values():
+            for _fi, _ in _sel_list:
+                canonical_indices.add(int(_fi))
     # ----------------------------------------
 
     # Set up Kornia normalizer
@@ -299,7 +308,7 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
             scored_candidates = (_lap_leading + _remaining)[:8]
 
         # Apply RANSAC corner refinement if enabled
-        if ctx.corner_refinement:
+        if ctx.corner_refinement and decoded_crops is None:
             _t = time.time()
             from card_capture.ml.inference.corner_refinement import refine_corners
             for c in scored_candidates:
@@ -311,9 +320,16 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
                         print(f"Corner refinement failed for {instance_id}: {e}")
             _tick("corner_refinement", _t)
 
-        # Batch Kornia warp if available
+        # Batch Kornia warp if available. FUSED MODE: detections were already
+        # warped during detect — pull the cached 750x1050 crops by detection_id
+        # and skip the GPU warp entirely.
         normalized_by_detection: Dict[int, np.ndarray] = {}
-        if kornia_normalizer is not None and scored_candidates:
+        if decoded_crops is not None:
+            for c in scored_candidates:
+                cached = decoded_crops.get(c["detection_id"])
+                if cached is not None:
+                    normalized_by_detection[c["detection_id"]] = cached
+        elif kornia_normalizer is not None and scored_candidates:
             batch_items = []
             batch_ids = []
             for c in scored_candidates:
@@ -363,8 +379,8 @@ def run(ctx: RunContext, track_out: TrackOutput) -> RefineOutput:
                 _tick("precision_normalizer_fallback", _t)
 
             # Compute novelty score
-            novelty_score = 1.0
-            if bg_model is not None and c["corners"]:
+            novelty_score = det_row.get("novelty_score", 1.0)
+            if decoded_crops is None and bg_model is not None and c["corners"]:
                 try:
                     _t = time.time()
                     novelty_score = float(quad_novelty(
