@@ -41,15 +41,20 @@ def test_detect_output_frame_count(tmp_path):
     frames = [_make_frame_sample(i) for i in range(10)]
 
     sampler = MagicMock(spec=CudaSampler)
-    def _batches(batch_size=32, video_path=None):
+    def _gpu_batches(batch_size=32, thumbnail_width=640, video_path=None):
+        # CudaSampler now yields (gpu_tensor_batch, [FrameSample]); _run_cuda_inference
+        # only indexes the tensor when a crop_cache is passed (not in these tests),
+        # so a placeholder stands in for the GPU batch.
+        from unittest.mock import MagicMock as _MM
         for i in range(0, len(frames), batch_size):
-            yield frames[i:i+batch_size]
-    sampler.sample_batches.side_effect = _batches
+            yield _MM(), frames[i:i+batch_size]
+    sampler.sample_gpu_batches.side_effect = _gpu_batches
     sampler.last_selected_frame_count = len(frames)
     sampler.last_source_fps = 60.0
 
     detector = MagicMock()
     detector.confidence_threshold = 0.5
+    detector.detection_width = 640
     detector.detect_batch.return_value = []  # no detections
 
     out = _run_cuda_inference(ctx, sampler, detector, tmp_path, tmp_path)
@@ -67,15 +72,20 @@ def test_detect_output_batching(tmp_path):
     frames = [_make_frame_sample(i) for i in range(10)]
 
     sampler = MagicMock(spec=CudaSampler)
-    def _batches(batch_size=32, video_path=None):
+    def _gpu_batches(batch_size=32, thumbnail_width=640, video_path=None):
+        # CudaSampler now yields (gpu_tensor_batch, [FrameSample]); _run_cuda_inference
+        # only indexes the tensor when a crop_cache is passed (not in these tests),
+        # so a placeholder stands in for the GPU batch.
+        from unittest.mock import MagicMock as _MM
         for i in range(0, len(frames), batch_size):
-            yield frames[i:i+batch_size]
-    sampler.sample_batches.side_effect = _batches
+            yield _MM(), frames[i:i+batch_size]
+    sampler.sample_gpu_batches.side_effect = _gpu_batches
     sampler.last_selected_frame_count = len(frames)
     sampler.last_source_fps = 60.0
 
     detector = MagicMock()
     detector.confidence_threshold = 0.5
+    detector.detection_width = 640
     detector.detect_batch.return_value = []
 
     _run_cuda_inference(ctx, sampler, detector, tmp_path, tmp_path)
@@ -93,10 +103,14 @@ def test_detect_output_has_detection_rows(tmp_path):
     frames = [_make_frame_sample(0)]
 
     sampler = MagicMock(spec=CudaSampler)
-    def _batches(batch_size=32, video_path=None):
+    def _gpu_batches(batch_size=32, thumbnail_width=640, video_path=None):
+        # CudaSampler now yields (gpu_tensor_batch, [FrameSample]); _run_cuda_inference
+        # only indexes the tensor when a crop_cache is passed (not in these tests),
+        # so a placeholder stands in for the GPU batch.
+        from unittest.mock import MagicMock as _MM
         for i in range(0, len(frames), batch_size):
-            yield frames[i:i+batch_size]
-    sampler.sample_batches.side_effect = _batches
+            yield _MM(), frames[i:i+batch_size]
+    sampler.sample_gpu_batches.side_effect = _gpu_batches
     sampler.last_selected_frame_count = 1
     sampler.last_source_fps = 60.0
 
@@ -113,6 +127,7 @@ def test_detect_output_has_detection_rows(tmp_path):
 
     detector = MagicMock()
     detector.confidence_threshold = 0.5
+    detector.detection_width = 640
     detector.detect_batch.return_value = [pkt]
 
     out = _run_cuda_inference(ctx, sampler, detector, tmp_path, tmp_path)
