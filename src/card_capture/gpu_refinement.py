@@ -22,63 +22,39 @@ class KorniaNormalizer:
             device = probe_torch_device_status("auto").resolved
         self.device = torch.device(device)
 
-    def warp_canonical_batch(
-        self, batch_data: List[Tuple[Union[str, np.ndarray], List[Point]]], rotate_180: bool = True
+    def _perspective_matrix(self, corners: List[Point]) -> np.ndarray:
+        """CPU-side 3x3 perspective matrix mapping the card quad → portrait canvas."""
+        pts_dst = np.array(
+            [[0, 0], [self.width, 0], [self.width, self.height], [0, self.height]],
+            dtype=np.float32,
+        )
+        ordered = order_points_clockwise(corners)
+        oriented = _orient_for_target_canvas(ordered, self.width, self.height)
+        pts_src = np.array(oriented, dtype=np.float32)
+        return cv2.getPerspectiveTransform(pts_src, pts_dst)
+
+    def _warp_from_stacked(
+        self, batch_u8, matrices_np: List[np.ndarray], rotate_180: bool
     ) -> List[np.ndarray]:
+        """Warp a stacked uint8 (B,H,W,3) BGR tensor (already on device) → list of BGR crops.
+
+        Single GPU warp core shared by the numpy and GPU-tensor entry points.
+        Channel handling is unchanged from the original warp_canonical_batch:
+        BGR in (index-swapped to RGB for kornia, swapped back to BGR on output).
         """
-        batch_data: List of (image_or_path, corners)
-
-        Optimized 2026-05-24 — measured 1138 ms/batch in production, dominated
-        by per-candidate CPU float-conversion of 4K frames (~24MB uint8 each
-        → 95MB float32). Now uploads uint8 to GPU and does float/scale/channel
-        reorder on the device. PCIe bandwidth per candidate drops ~4x; per-batch
-        CPU work drops from ~520 ms (8 candidates) to ~40 ms.
-        """
-        tensors_u8 = []   # CPU uint8 (H, W, 3) BGR — uploaded as-is
-        matrices_np = []  # CPU float32 (3, 3) perspective matrices
-
-        for image_or_path, corners in batch_data:
-            if isinstance(image_or_path, np.ndarray):
-                img = image_or_path
-            else:
-                img = cv2.imread(image_or_path)
-            if img is None:
-                continue
-
-            # Stay in BGR uint8 — convert + scale + channel-reorder on GPU below
-            tensors_u8.append(img)
-
-            # Destination corners (portrait)
-            pts_dst = np.array([[0, 0], [self.width, 0], [self.width, self.height], [0, self.height]], dtype=np.float32)
-            ordered = order_points_clockwise(corners)
-            oriented = _orient_for_target_canvas(ordered, self.width, self.height)
-            pts_src = np.array(oriented, dtype=np.float32)
-
-            M = cv2.getPerspectiveTransform(pts_src, pts_dst)
-            matrices_np.append(M)
-
-        if not tensors_u8:
-            return []
-
-        # Bulk upload to GPU as uint8 — 4x less PCIe than uploading float32.
-        # Stack on CPU (zero-copy via from_numpy) then move once.
-        stacked_u8 = np.stack(tensors_u8, axis=0)  # (B, H, W, 3) uint8 BGR
-        batch_u8 = torch.from_numpy(stacked_u8).to(self.device, non_blocking=True)
-        # Permute HWC->CHW, swap BGR->RGB by index, convert to float32 / 255.0 — all on GPU
         batch_t = batch_u8.permute(0, 3, 1, 2)[:, [2, 1, 0], :, :].float() / 255.0
         del batch_u8
 
-        stacked_m = np.stack(matrices_np, axis=0)
-        batch_m = torch.from_numpy(stacked_m).to(self.device, non_blocking=True)
-
-        # Warp on GPU (the actual compute — already cheap)
-        warped = kornia.geometry.transform.warp_perspective(batch_t, batch_m, (self.height, self.width))
+        batch_m = torch.from_numpy(np.stack(matrices_np, axis=0).astype(np.float32)).to(
+            self.device, non_blocking=True
+        )
+        warped = kornia.geometry.transform.warp_perspective(
+            batch_t, batch_m, (self.height, self.width)
+        )
         del batch_t
 
-        # Channel swap RGB->BGR + scale to 0-255 + permute back to HWC + uint8 — on GPU,
-        # then one batched .cpu() download.
         warped_u8 = (warped[:, [2, 1, 0], :, :] * 255.0).clamp_(0, 255).to(torch.uint8)
-        warped_u8 = warped_u8.permute(0, 2, 3, 1).contiguous().cpu().numpy()  # (B, H, W, 3)
+        warped_u8 = warped_u8.permute(0, 2, 3, 1).contiguous().cpu().numpy()
         del warped
 
         images: List[np.ndarray] = []
@@ -87,3 +63,48 @@ class KorniaNormalizer:
                 bgr = cv2.rotate(bgr, cv2.ROTATE_180)
             images.append(bgr)
         return images
+
+    def warp_canonical_batch(
+        self, batch_data: List[Tuple[Union[str, np.ndarray], List[Point]]], rotate_180: bool = True
+    ) -> List[np.ndarray]:
+        """Warp from numpy images (or image paths). Uploads to GPU, then warps.
+
+        Optimized 2026-05-24 — measured 1138 ms/batch in production, dominated
+        by per-candidate CPU float-conversion of 4K frames (~24MB uint8 each
+        → 95MB float32). Uploads uint8 to GPU and does float/scale/channel
+        reorder on the device. PCIe bandwidth per candidate drops ~4x; per-batch
+        CPU work drops from ~520 ms (8 candidates) to ~40 ms.
+        Shared warp core (_warp_from_stacked) also used by warp_canonical_batch_gpu.
+        """
+        imgs: List[np.ndarray] = []
+        mats: List[np.ndarray] = []
+        for image_or_path, corners in batch_data:
+            img = image_or_path if isinstance(image_or_path, np.ndarray) else cv2.imread(image_or_path)
+            if img is None:
+                continue
+            imgs.append(img)
+            mats.append(self._perspective_matrix(corners))
+        if not imgs:
+            return []
+        batch_u8 = torch.from_numpy(np.stack(imgs, axis=0)).to(self.device, non_blocking=True)
+        return self._warp_from_stacked(batch_u8, mats, rotate_180)
+
+    def warp_canonical_batch_gpu(
+        self, batch_data: List[Tuple["torch.Tensor", List[Point]]], rotate_180: bool = True
+    ) -> List[np.ndarray]:
+        """Warp from GPU-resident uint8 (H,W,3) BGR tensors — no host→device upload.
+
+        Each item's image is a torch tensor already on the GPU (a slice of the
+        decoded decord batch). Skips the np.stack/from_numpy/.to() upload.
+        """
+        tensors: List["torch.Tensor"] = []
+        mats: List[np.ndarray] = []
+        for img_t, corners in batch_data:
+            if img_t is None:
+                continue
+            tensors.append(img_t)
+            mats.append(self._perspective_matrix(corners))
+        if not tensors:
+            return []
+        batch_u8 = torch.stack(tensors, dim=0).to(self.device, non_blocking=True)
+        return self._warp_from_stacked(batch_u8, mats, rotate_180)
