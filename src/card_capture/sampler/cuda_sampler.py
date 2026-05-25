@@ -38,7 +38,7 @@ def _gpu_thumbnails(batch_u8, target_w: int):
 
     n, H, W, _ = batch_u8.shape
     if W <= target_w:
-        return batch_u8.cpu().numpy()
+        return batch_u8.contiguous().cpu().numpy()
     th = max(1, round(H * target_w / W))
     t = batch_u8.permute(0, 3, 1, 2).float()
     r = F.interpolate(t, size=(th, target_w), mode="bilinear", align_corners=False)
@@ -102,7 +102,7 @@ class CudaSampler:
         for batch in self.sample_batches(batch_size=32, video_path=video_path):
             yield from batch
 
-    def _prepare_loader(self, batch_size: int, video_path):
+    def _prepare_loader(self, batch_size: int, video_path) -> tuple:
         """Probe dims and build the decord VideoLoader. Returns (vl, fps, h, w) or (None, fps, h, w)."""
         resolved = Path(video_path) if video_path else self.video_path
         if resolved is None:
@@ -186,7 +186,7 @@ class CudaSampler:
         batch_size: int = 32,
         thumbnail_width: int = 640,
         video_path: Optional[Union[Path, str]] = None,
-    ):
+    ) -> Iterator[tuple]:
         """Yield (gpu_tensor_batch, [FrameSample]) keeping full-res frames on the GPU.
 
         The 4K tensor stays on-device for the warp; each FrameSample.image is a

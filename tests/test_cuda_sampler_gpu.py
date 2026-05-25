@@ -35,6 +35,7 @@ def test_sample_gpu_batches_keeps_tensor_and_resizes_thumbnail(monkeypatch):
     assert len(out) == 1
     gpu_batch, frames = out[0]
 
+    assert gpu_batch is batch_tensor
     assert isinstance(gpu_batch, torch.Tensor)
     assert gpu_batch.shape == (2, H, W, 3)
 
