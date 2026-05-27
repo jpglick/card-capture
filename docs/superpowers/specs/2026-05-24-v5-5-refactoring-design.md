@@ -42,7 +42,7 @@ This document focuses on software engineering refactoring. It does not propose n
 
 - **Contracts over conventions.** If production GPU execution must stay on GPU, represent that through types, interfaces, guards, and tests.
 - **Explicit debug modes.** CPU debug should be a selected backend, not a silent fallback path.
-- **Coarse orchestration, strict execution.** Metaflow should call well-defined execution units and receive serializable artifacts, while runtime-specific execution rules are enforced inside those units.
+- **Coarse orchestration, strict execution.** Metaflow, if retained, should call one well-defined execution unit and receive serializable artifacts, while runtime-specific execution rules are enforced inside that unit.
 - **Single ownership of telemetry.** Timing and resource metrics should be emitted through structured telemetry, not scraped from stdout.
 - **Platform adapters at the edge.** Beam, RunPod, Vast.ai, and local execution should differ at runner and transport boundaries, not inside pipeline logic.
 - **Agent-safe architecture.** Rules that are easy for AI agents to violate must be written as explicit standards and backed by tests where possible.
@@ -80,7 +80,7 @@ The standards document should cover:
 
 Initial standards should include rules such as:
 
-- Metaflow flow files must orchestrate steps and artifacts only; they must not contain algorithmic logic, direct SQL, provider upload/download logic, or stdout timing parsers.
+- Metaflow flow files, if retained, must orchestrate submission and artifacts only; they must not contain algorithmic logic, direct SQL, provider upload/download logic, or stdout timing parsers.
 - Production GPU execution must use the strict GPU runtime; it must not silently fallback to CPU.
 - CPU execution must be selected through an explicit CPU debug backend.
 - GPU hot-path modules must not call `cv2.VideoCapture`, `cv2.imread`, `PIL.Image.open`, `torch.Tensor.cpu`, or `torch.Tensor.numpy` except through approved boundary modules.
@@ -123,13 +123,15 @@ If a requested change appears to violate a standard, the agent should stop and s
 
 ### Target Shape
 
-Metaflow should own pipeline orchestration:
+Metaflow should own only coarse orchestration if it remains in the local path:
 
-- Step graph.
-- Resume and retry boundaries.
+- Run submission.
+- Coarse resume and retry boundaries.
 - Serializable artifacts.
-- Structured step-level metadata.
-- Conditional branch selection for coarse execution modes.
+- Structured run-level metadata.
+- Conditional selection of one execution unit for `strict_gpu` or `cpu_debug`.
+
+Metaflow should not own local stage execution. The local stage sequence should run inside one `PipelineRuntime` process so decoded frames, loaded models, GPU sessions, and process-local caches can be reused across stages.
 
 Metaflow should not own:
 
@@ -140,19 +142,19 @@ Metaflow should not own:
 
 ### Proposed Refactor
 
-Introduce a thin Metaflow flow that delegates to explicit execution services:
+Introduce a thin Metaflow wrapper, if retained, that delegates to explicit execution services:
 
 ```text
 CardCaptureFlow
     start
     choose_runtime
-        strict_gpu
-        cpu_debug
+    run_runtime
+        runtime_mode = strict_gpu | cpu_debug
     import_results
     end
 ```
 
-The flow should select a runtime branch from an artifact such as `runtime_mode`, not from hidden environment state. The selected branch calls a runtime implementation that owns the execution contract.
+The flow should select a runtime mode from an artifact such as `runtime_mode`, not from hidden environment state. The selected mode calls a runtime implementation that owns the full execution contract in one process.
 
 Artifacts passed between Metaflow steps should remain serializable:
 
@@ -319,17 +321,79 @@ The app imports from the manifest rather than reconstructing provider-specific f
 
 ## Section 4: Repo Structure
 
-Stub for follow-up.
+The repo should make the V5.5 boundaries obvious from file paths. The current split between top-level `pipeline/`, `app/services`, and broad `src/card_capture/*` helpers makes it too easy to put runtime, platform, storage, and algorithmic code in whichever module is closest.
 
-Topics to define:
+### Target Shape
 
-- Pipeline orchestration package boundaries.
-- Runtime backend package boundaries.
-- GPU-only package boundary and forbidden imports.
-- Shared contracts location.
-- App runner versus remote worker ownership.
-- Where platform adapters live.
-- Migration path for legacy modules.
+Use package boundaries that map to ownership:
+
+```text
+pipeline/
+    card_capture_flow.py          optional Metaflow wrapper / submission shell
+    contracts.py                  transitional imports only; move stable contracts below
+
+src/card_capture/
+    pipeline/
+        runtime.py                PipelineRuntime interface and in-process stage sequence
+        request.py                PipelineRequest / PipelineResult / RunManifest models
+        telemetry.py              PipelineTelemetry interface and event schema
+        stages/                   stage orchestration facades, not low-level algorithms
+    runtime/
+        cpu_debug.py              intentional CPU backend
+        strict_gpu.py             strict GPU backend
+        gpu_session.py            GpuSession and strict guard lifecycle
+        batches.py                device-tagged batch/result types
+        guards.py                 forbidden-op guard implementation
+    platforms/
+        local.py                  local in-process runner
+        runpod.py                 RunPod adapter
+        beam.py                   Beam adapter
+        vastai.py                 Vast.ai adapter, if retained
+        manifests.py              manifest read/write and artifact reference helpers
+    data/
+        connection.py
+        schema.py
+        repositories/
+```
+
+Existing algorithm modules such as detection, sampling, tracking, scoring, fusion, and ML inference can stay under their current domain packages initially. The refactor should wrap them behind `card_capture.pipeline.stages` and runtime backends before moving files. File moves should happen only after tests make ownership clear.
+
+### Boundary Rules
+
+- `pipeline/` is orchestration/submission only. It may create a `PipelineRequest`, call a runner/runtime, and persist a manifest reference. It should not contain algorithmic stage bodies.
+- `card_capture.pipeline` owns the logical pipeline sequence, request/result contracts, telemetry contracts, and stage facades.
+- `card_capture.runtime` owns backend selection, GPU session lifecycle, strict GPU guards, CPU debug implementations, and device-residency types.
+- `card_capture.platforms` owns provider transport, preflight, artifact upload/download, remote job lifecycle, and provider failure mapping.
+- `card_capture.data` owns database connections, migrations/schema helpers, repositories, and app-facing query services.
+- `app/services` owns HTTP/API-facing workflow state and user-facing status mapping. It should call `PipelineRunner` or data repositories rather than importing provider clients or opening SQLite directly.
+- Remote worker entrypoints should be thin shells that deserialize a request, call the same runtime contract, and write a manifest. They should not fork their own pipeline semantics.
+
+### GPU-Only Boundary
+
+Strict GPU code needs a boundary that is enforceable by tests:
+
+- GPU hot-path modules must require `GpuSession` or a device-tagged batch type for entry.
+- GPU hot-path modules may import Torch/Kornia/CUDA decode helpers and runtime guards.
+- GPU hot-path modules must not import OpenCV image/file IO helpers, PIL image loaders, `sqlite3`, app services, or platform adapters.
+- CPU debug modules may share pure math/geometry utilities, but should not be imported by strict GPU modules.
+- Shared dataclasses should live in contract modules with no heavyweight runtime side effects.
+
+### Migration Direction
+
+1. Add the new packages as wrappers around existing code.
+2. Move shared request/result/manifest/telemetry contracts out of top-level `pipeline/contracts.py` once stable.
+3. Route local execution through `card_capture.pipeline.runtime.PipelineRuntime` before moving provider adapters.
+4. Move direct provider logic out of app services into `card_capture.platforms`.
+5. Move database writes and reads behind `card_capture.data`.
+6. Add architecture tests for import direction before doing large file moves.
+7. Deprecate legacy modules only after call sites have moved and compatibility shims are no longer needed.
+
+### Open Questions
+
+- Whether the top-level `pipeline/` package should remain long term or become a compatibility layer only.
+- Whether provider adapters should live in `card_capture.platforms` or under `app/services` until the API boundary settles.
+- Whether current worker modules should be split by platform or collapsed behind one worker entrypoint.
+- How much of `pipeline/contracts.py` should be preserved for Metaflow compatibility while the new contract package is introduced.
 
 ---
 
@@ -424,52 +488,225 @@ After wrappers exist, add an architecture test that fails on new `sqlite3.connec
 
 ## Section 6: Testing
 
-Stub for follow-up.
+Testing for V5.5 should prove the architecture boundaries, not only the happy-path card outputs. The current risk is that a future change can reintroduce host transfers, raw SQL, provider leakage, or per-stage process overhead while still passing narrow algorithm tests.
 
-Topics to define:
+### Test Categories
 
-- Contract tests for `StrictGpuRuntime`.
-- Architecture tests that forbid raw SQL outside the data access layer.
-- CPU debug parity tests.
-- Static import tests for GPU-only packages.
-- Runtime monkeypatch guards for forbidden CPU operations.
-- Metaflow graph smoke tests.
-- Provider adapter tests with fake transport.
-- Manifest import/export tests.
-- Performance regression tests and minimum telemetry assertions.
+Add focused suites:
+
+- `tests/architecture/`: static import and raw-SQL boundary checks.
+- `tests/runtime/`: `PipelineRuntime`, `StrictGpuRuntime`, `CpuDebugRuntime`, `GpuSession`, device-tagged batches, and forbidden-op guards.
+- `tests/platforms/`: local, RunPod, Beam, and Vast.ai adapters using fake transports and fake artifact stores.
+- `tests/data/`: repository contracts, migration/schema behavior, and transactional invariants.
+- `tests/pipeline/`: stage sequencing, manifest generation, telemetry emission, and Metaflow wrapper smoke tests.
+- `tests/regression/`: golden corpus and performance baselines.
+
+### Contract Tests
+
+Strict runtime tests should assert:
+
+- `strict_gpu` fails when CUDA/NVDEC requirements are missing unless the test explicitly uses a fake capability.
+- Hot-path functions reject CPU tensors, path-only frame references, or batches without a `GpuSession`.
+- Forbidden operations such as `cv2.VideoCapture`, `cv2.imread`, `PIL.Image.open`, `.cpu()`, and `.numpy()` fail inside guarded strict sections.
+- Final export boundaries are explicit and telemetered.
+- Contract violations appear in the run manifest and telemetry stream with stable codes.
+
+CPU debug tests should assert:
+
+- CPU debug is selected explicitly through runtime mode, not by missing GPU dependencies.
+- CPU debug returns the same manifest shape as strict GPU.
+- A small fixture run preserves stage ordering, card identity fields, and output schema even if numerical quality metrics differ slightly.
+
+### Architecture Tests
+
+Static tests should fail on:
+
+- Raw SQL or `sqlite3.connect` outside `card_capture.data`, migrations, and allowlisted schema tests.
+- Provider SDK/client imports outside `card_capture.platforms` and explicit app composition roots.
+- App service imports from GPU hot-path modules.
+- GPU hot-path imports from app, platform, data, PIL image loading, or OpenCV file IO modules.
+- New per-stage Metaflow algorithm bodies in the local execution path.
+
+These tests should be simple AST/import scanners with allowlists checked into the repo. The goal is to stop architectural drift early, not to build a general linter.
+
+### Telemetry and Manifest Tests
+
+Every runtime and platform adapter should have tests that verify:
+
+- A `RunManifest` round-trips through JSON without provider-specific assumptions.
+- Stage timing, runtime mode, backend capability, warnings, and contract violations are present when expected.
+- The app can import results only from the manifest and repositories.
+- The telemetry adapter can persist SQLite events without pipeline steps writing SQL directly.
+
+### Performance Regression Tests
+
+Add a lightweight performance lane with explicit tolerances:
+
+- A small fixture verifies that local execution does not spawn one process per stage.
+- A sampled real-video benchmark records decode count, model-load count, frame reread count, and stage timings.
+- The local path should assert one model load per model per run and no post-detect source-video reopen except an explicit fallback.
+- Performance reports should be informational on ordinary PRs until the baseline stabilizes, then become gated for large regressions.
+
+### Metaflow Tests
+
+Metaflow tests should match the amended target shape:
+
+- If Metaflow remains, smoke-test a one-step wrapper that calls the runtime and stores a manifest artifact.
+- Do not preserve tests that require a per-stage local Metaflow graph.
+- Remote-submission tests may verify that Metaflow can submit or track a provider run, but provider semantics still belong to `PipelineRunner` and platform adapters.
+
+### Open Questions
+
+- Which test markers should identify CUDA, MPS, provider, benchmark, and slow real-video tests.
+- Whether architecture tests should live under pytest only or also run as a pre-commit hook.
+- Which real video becomes the canonical performance baseline for V5.5.
 
 ---
 
 ## Section 7: CI
 
-Stub for follow-up.
+CI should separate fast architectural feedback from slower hardware and provider validation. The default PR lane should be cheap and deterministic; GPU/provider lanes should run when relevant, on demand, or nightly.
 
-Topics to define:
+### Required PR Lanes
 
-- CPU-only fast test lane.
-- Static architecture lint lane.
-- Optional CUDA lane.
-- Nightly or manual GPU integration lane.
-- Metaflow smoke lane.
-- Provider contract tests with mocked Beam/RunPod/Vast.ai APIs.
-- Performance baseline reporting.
+Run on every PR:
+
+- Formatting and ordinary lint/type checks, using the repo's existing tools.
+- CPU-only unit tests, including CPU debug runtime contract tests.
+- Architecture boundary tests for imports, raw SQL, provider leakage, and forbidden local Metaflow stage bodies.
+- Manifest serialization tests.
+- Data access layer tests against temporary SQLite databases.
+- Provider adapter contract tests with fake transports only.
+- App runner/importer tests that prove app code consumes `PipelineRunner`, manifests, and repositories.
+
+This lane must not require CUDA, provider credentials, local model downloads, or large video assets.
+
+### Optional Hardware Lanes
+
+Run on labels, manual dispatch, or branches that touch GPU/runtime code:
+
+- CUDA strict-runtime tests on a CUDA runner with NVDEC capability preflight.
+- MPS/CoreML smoke tests on Apple Silicon, if such a runner is available outside GitHub-hosted CI.
+- GPU guard tests that monkeypatch forbidden CPU operations and assert strict sections fail correctly.
+- Small real-video smoke runs that verify no post-detect reread and no repeated model load.
+
+Hardware lanes should publish manifests, telemetry summaries, and capability reports as artifacts even when they fail.
+
+### Nightly / Manual Integration Lanes
+
+Run slower validation outside the default PR path:
+
+- Real-video performance baseline against the selected V5.5 benchmark video.
+- Provider smoke tests for RunPod and Beam using test credentials.
+- Vast.ai smoke test only if Vast.ai remains a supported runtime platform.
+- End-to-end app submission/import test using a fake or disposable artifact store.
+- Golden-corpus regression report.
+
+Nightly jobs should trend timings, decode counts, model-load counts, frame reread counts, and card-output deltas. CI should fail only on clear contract violations at first; performance thresholds can tighten after the baseline is stable.
+
+### CI Artifacts
+
+Each relevant lane should upload:
+
+- `run_manifest.json`.
+- Structured telemetry summary.
+- Runtime capability/preflight report.
+- Architecture-test report.
+- Performance baseline report, when run.
+
+These artifacts are part of the debugging contract. The goal is to diagnose CI failures from structured output, not stdout scraping.
+
+### Open Questions
+
+- Which CI provider can supply CUDA/NVDEC and, separately, Apple Silicon for MPS/CoreML validation.
+- Whether provider smoke tests should run in GitHub Actions or in a scheduled external runner.
+- What threshold turns performance reporting from advisory into blocking.
 
 ---
 
 ## Section 8: Runtime Platforms
 
-Stub for follow-up.
+Runtime platforms should differ only at the runner, transport, artifact, and preflight boundaries. They should all execute the same `PipelineRequest` contract and return the same `RunManifest` shape.
 
-Topics to define:
+### Platform Matrix
 
-- Local CPU debug.
-- Local CUDA.
-- RunPod serverless.
-- Beam endpoint.
-- Vast.ai lifecycle support or deprecation.
-- Artifact storage and transfer model per platform.
-- GPU driver/NVDEC preflight contract.
-- Platform-specific telemetry and failure mapping.
+| Platform | Purpose | Runtime mode | Execution shape | Artifact model |
+| --- | --- | --- | --- | --- |
+| Local CPU debug | Deterministic local development and CI | `cpu_debug` | In-process `PipelineRuntime` | Local paths |
+| Local CUDA | Primary single-machine production path | `strict_gpu` | In-process `PipelineRuntime` | Local paths or configured artifact root |
+| RunPod serverless | Remote GPU execution | `strict_gpu` | Worker deserializes request, runs runtime once, uploads manifest | Object storage / signed URLs |
+| Beam endpoint | Remote GPU execution | `strict_gpu` | Endpoint/job adapter implements `PipelineRunner` | Beam volume/object references |
+| Vast.ai | Legacy/manual GPU capacity unless retained | `strict_gpu` | Explicit lifecycle adapter or deprecated | SSH/rsync/object storage, if supported |
+
+### Shared Platform Contract
+
+Every platform adapter should implement the same responsibilities:
+
+- Validate runtime capability before accepting work.
+- Materialize or reference the input video.
+- Execute exactly one runtime call per run.
+- Persist outputs and a manifest.
+- Return provider-neutral status, telemetry, warnings, and failure codes.
+- Avoid writing database state directly; app-side import owns persistence through repositories.
+
+Provider adapters may own upload/download, polling, cancellation, credential handling, and failure translation. They should not own stage ordering, CPU/GPU fallback policy, scoring thresholds, storage schema, or app-facing result shaping.
+
+### Preflight Contract
+
+Strict GPU platforms must report:
+
+- CUDA availability and device name.
+- Driver/runtime versions.
+- NVDEC or chosen decode backend availability.
+- Torch/Kornia/model runtime availability.
+- Model artifact presence and version.
+- Writable output/artifact location.
+- Expected memory floor for the configured video size.
+
+Preflight failures should map to stable codes such as `missing_cuda`, `missing_nvdec`, `missing_model`, `insufficient_vram`, `artifact_store_unavailable`, and `unsupported_runtime_mode`.
+
+### Artifact Transfer
+
+Manifests should refer to artifacts through typed references rather than provider-specific paths:
+
+```text
+artifact://local/run_id/cards/...
+artifact://s3/bucket/key
+artifact://beam/volume/path
+artifact://runpod/job_id/path
+```
+
+The app imports a completed run by reading the manifest and asking the platform/artifact layer to resolve references. It should not infer provider paths from run IDs.
+
+### Failure and Telemetry Mapping
+
+All platforms should map provider failures into common categories:
+
+- `preflight_failed`
+- `submission_failed`
+- `input_transfer_failed`
+- `runtime_contract_failed`
+- `runtime_execution_failed`
+- `output_transfer_failed`
+- `result_import_failed`
+- `cancelled`
+- `timeout`
+
+The original provider payload can be retained in debug metadata, but app logic and user-facing status should use the common categories.
+
+### Platform Decisions
+
+- Local CPU debug stays first-class but explicit.
+- Local CUDA is the reference implementation for strict GPU behavior and single-process execution.
+- RunPod and Beam should be normal adapters, not special cases in app or pipeline code.
+- Vast.ai should either be brought behind the same adapter contract or deprecated. A half-supported lifecycle path is worse than no official support because it encourages provider-specific assumptions.
+
+### Open Questions
+
+- Whether Beam or RunPod should be the first remote adapter completed against the new contract.
+- Whether artifact storage should standardize on object storage for all remote platforms.
+- Whether Vast.ai is still worth maintaining after RunPod/Beam support stabilizes.
+- How cancellation and partial-output cleanup should behave across providers.
 
 ---
 
@@ -490,11 +727,13 @@ Topics to define:
 - Move GPU hot-path code behind the new session boundary.
 - Convert silent CPU fallbacks into explicit backend selection.
 
-### Phase 3: Metaflow Slimming
+### Phase 3: Single-Process Runtime and Metaflow Slimming
 
 - Move timing writes out of flow step bodies.
 - Replace hidden runtime selection with explicit branch selection.
 - Make Metaflow artifacts point to manifests and structured outputs.
+- Route local execution through one in-process runtime call instead of per-stage Metaflow subprocesses.
+- Preserve Metaflow only as a one-step wrapper or remote submission shell if it still adds operational value.
 
 ### Phase 4: Platform Adapter Cleanup
 
@@ -514,6 +753,12 @@ Topics to define:
 - Pipeline, app service, and platform code use repository/query interfaces for database access.
 - `docs/architecture/standards.md` exists and states the binding architecture rules AI agents must follow.
 - At least the highest-risk standards have automated enforcement through tests, lint, or runtime guards.
+- Package boundaries exist for pipeline contracts, runtime backends, platform adapters, and the data access layer.
+- Architecture tests fail on new raw SQL, provider leakage, forbidden GPU imports, or per-stage local Metaflow bodies outside allowlisted modules.
+- CI has a fast CPU-only lane that validates contracts and architecture without provider credentials or GPU hardware.
+- CUDA/provider/performance lanes emit manifests, telemetry summaries, and capability reports as artifacts when they run.
+- All supported platforms accept the same request contract and return the same manifest shape.
+- Provider-specific failures are mapped to stable, provider-neutral categories before app-facing status handling.
 - CPU debug remains available as an explicit runtime backend.
 - Existing algorithmic outputs are preserved unless a later algorithm-specific design says otherwise.
 
@@ -521,14 +766,15 @@ Topics to define:
 
 ## Notes for Expansion
 
-This draft intentionally leaves repo structure, testing, CI, and runtime platforms as stubs. The main architectural decisions captured here are:
+The main architectural decisions captured here are:
 
-- Metaflow is orchestration, not GPU residency enforcement.
+- Local execution is a single in-process runtime call; Metaflow, if retained, is orchestration/submission rather than stage execution or GPU residency enforcement.
 - GPU/CPU selection is a runtime/backend decision, not scattered conditionals.
+- Repo structure should make pipeline contracts, runtime backends, platform adapters, and data access ownership visible.
 - Database access is a repository/query-layer concern, not an incidental implementation detail in any module.
 - The final V5.5 output includes an architectural standards document for AI agents and contributors.
 - Strict GPU execution is enforced with session capabilities, device-tagged types, guards, and tests.
-- Platform differences belong in runner adapters and manifests.
+- Platform differences belong in runner adapters, preflight checks, artifact references, failure mapping, and manifests.
 
 ---
 
