@@ -4,6 +4,12 @@
 **Status:** Draft  
 **Scope:** Software engineering refactors for pipeline correctness, performance enforcement, and runtime portability
 
+## Decision Posture
+
+This document is a working collection of thoughts from developing, profiling, and running the system. Everything here is open to debate, revision, or rejection as new evidence appears.
+
+The project owner is the final authority for V5.5 decisions. External architecture patterns, framework conventions, agent recommendations, and implementation plans are inputs to evaluate, not obligations. The deciding standard is what best serves this system's correctness, performance, maintainability, and operating reality.
+
 ---
 
 ## Problem
@@ -19,7 +25,7 @@ This document focuses on software engineering refactoring. It does not propose n
 ## Goals
 
 - Make pipeline execution contracts explicit enough that hidden CPU work and repeated load/decode work fail fast.
-- Treat Metaflow as orchestration and artifact lineage, not as the enforcement layer for GPU memory residency.
+- Remove Metaflow from the codebase and replace it with a lightweight runtime/runner contract that is small enough to enforce.
 - Replace scattered CPU/GPU conditionals with runtime interfaces and backend implementations.
 - Replace scattered SQL access with an explicit data access layer and ownership rules.
 - Separate runner, platform, telemetry, and pipeline concerns so Beam, RunPod, local CUDA, and CPU debug can share the same contract.
@@ -33,7 +39,7 @@ This document focuses on software engineering refactoring. It does not propose n
 - No algorithm redesigns.
 - No quality metric or threshold tuning.
 - No new model training work.
-- No requirement to pass GPU tensors as Metaflow artifacts.
+- No new general-purpose workflow/DAG framework unless a future decision explicitly chooses one.
 - No attempt to make CPU fallback transparent in production.
 
 ---
@@ -42,8 +48,9 @@ This document focuses on software engineering refactoring. It does not propose n
 
 - **Contracts over conventions.** If production GPU execution must stay on GPU, represent that through types, interfaces, guards, and tests.
 - **Explicit debug modes.** CPU debug should be a selected backend, not a silent fallback path.
-- **Coarse orchestration, strict execution.** Metaflow, if retained, should call one well-defined execution unit and receive serializable artifacts, while runtime-specific execution rules are enforced inside that unit.
-- **Single ownership of telemetry.** Timing and resource metrics should be emitted through structured telemetry, not scraped from stdout.
+- **Small contracts over workflow frameworks.** The replacement for Metaflow should be a small collection of interfaces, dataclasses, and CLI entrypoints, not another orchestration layer.
+- **Duplicate across backend contexts when it clarifies ownership.** Prefer local duplication in CPU debug, CUDA, MPS/CoreML, RunPod, and Beam code over shared conditionals that bend one backend around another.
+- **Telemetry is first-class.** Timing, resource metrics, contract violations, and result summaries should be emitted through structured telemetry/metrics APIs, not scraped from stdout.
 - **Platform adapters at the edge.** Beam, RunPod, Vast.ai, and local execution should differ at runner and transport boundaries, not inside pipeline logic.
 - **Agent-safe architecture.** Rules that are easy for AI agents to violate must be written as explicit standards and backed by tests where possible.
 
@@ -80,11 +87,12 @@ The standards document should cover:
 
 Initial standards should include rules such as:
 
-- Metaflow flow files, if retained, must orchestrate submission and artifacts only; they must not contain algorithmic logic, direct SQL, provider upload/download logic, or stdout timing parsers.
+- Metaflow must be removed from production code. New orchestration code must use the lightweight runtime/runner contracts instead of a workflow framework.
 - Production GPU execution must use the strict GPU runtime; it must not silently fallback to CPU.
 - CPU execution must be selected through an explicit CPU debug backend.
+- Backend-specific code may duplicate small amounts of logic when the alternative is conditionals that obscure runtime ownership.
 - GPU hot-path modules must not call `cv2.VideoCapture`, `cv2.imread`, `PIL.Image.open`, `torch.Tensor.cpu`, or `torch.Tensor.numpy` except through approved boundary modules.
-- App services, pipeline steps, platform runners, and Metaflow flows must not open SQLite connections directly.
+- App services, pipeline runtime code, and platform runners must not open SQLite connections directly.
 - Raw SQL must live in the data access layer, migrations/schema code, or allowlisted test helpers.
 - Platform-specific code must live in provider adapters and must communicate through runner contracts and manifests.
 - Timing and resource metrics must be emitted through structured telemetry interfaces, not parsed from logs.
@@ -112,51 +120,60 @@ If a requested change appears to violate a standard, the agent should stop and s
 
 ---
 
-## Section 1: Metaflow Usage Refactor
+## Section 1: Metaflow Removal and Lightweight Runtime Contract
 
 ### Current Issues
 
 - The app invokes Metaflow as a subprocess and parses stdout for step timings.
 - Stage timing is duplicated between flow code, runner diagnostics, and handler diagnostics.
-- The flow mostly behaves as a linear script wrapper, so Metaflow's graph, artifact, and runtime metadata capabilities are underused.
+- The flow mostly behaves as a linear script wrapper, so Metaflow adds process boundaries, import/model reloads, datastore serialization, and graph semantics without providing value proportional to that cost.
 - Runtime decisions such as CPU debug versus GPU execution are represented indirectly through config files, environment variables, and detector names.
+- Metaflow has been a hindrance for this system because it makes the fast local path harder: state cannot stay in memory, frames cannot stay decoded, and GPU-resident work cannot cross step boundaries.
 
 ### Target Shape
 
-Metaflow should own only coarse orchestration if it remains in the local path:
+Remove Metaflow from the production code path. The replacement should be deliberately small:
 
-- Run submission.
-- Coarse resume and retry boundaries.
-- Serializable artifacts.
-- Structured run-level metadata.
-- Conditional selection of one execution unit for `strict_gpu` or `cpu_debug`.
+- A `PipelineRuntime` protocol that executes one run in one process.
+- A `PipelineRunner` protocol that handles local or remote submission.
+- A `PipelineTelemetry` / metrics sink that receives structured events and samples.
+- A `RunManifest` model that is the only interchange format between runtime, platform adapters, and app import.
+- A small CLI entrypoint for local runs, smoke runs, and performance harness runs.
 
-Metaflow should not own local stage execution. The local stage sequence should run inside one `PipelineRuntime` process so decoded frames, loaded models, GPU sessions, and process-local caches can be reused across stages.
+The local stage sequence should run inside one `PipelineRuntime` process so decoded frames, loaded models, GPU sessions, and process-local caches can be reused across stages. Remote platforms can run the same request contract inside their worker process and return the same manifest shape.
 
-Metaflow should not own:
+The replacement should not own:
 
 - GPU memory residency.
 - CPU/GPU fallback policy inside hot-path compute.
 - Provider-specific upload/download mechanics.
 - App-facing telemetry formatting.
+- Retry semantics beyond explicit, coarse per-run retry.
+- A general DAG, step scheduler, or artifact datastore.
 
 ### Proposed Refactor
 
-Introduce a thin Metaflow wrapper, if retained, that delegates to explicit execution services:
+Introduce a tiny runtime surface:
 
-```text
-CardCaptureFlow
-    start
-    choose_runtime
-    run_runtime
-        runtime_mode = strict_gpu | cpu_debug
-    import_results
-    end
+```python
+class PipelineRuntime(Protocol):
+    def run(self, request: PipelineRunRequest) -> PipelineRunResult: ...
+
+class PipelineRunner(Protocol):
+    def submit(self, request: PipelineRunRequest) -> PipelineRunHandle: ...
+    def wait(self, handle: PipelineRunHandle) -> PipelineRunResult: ...
+    def cancel(self, handle: PipelineRunHandle) -> None: ...
+
+class PipelineTelemetry(Protocol):
+    def stage_started(self, stage: str, metadata: Mapping[str, object]) -> None: ...
+    def stage_finished(self, stage: str, elapsed_ms: int, metadata: Mapping[str, object]) -> None: ...
+    def resource_sample(self, sample: Mapping[str, object]) -> None: ...
+    def contract_violation(self, code: str, metadata: Mapping[str, object]) -> None: ...
 ```
 
-The flow should select a runtime mode from an artifact such as `runtime_mode`, not from hidden environment state. The selected mode calls a runtime implementation that owns the full execution contract in one process.
+Runtime mode should be an explicit field in `PipelineRunRequest`, not hidden environment state. The selected runtime implementation owns the full execution contract in one process.
 
-Artifacts passed between Metaflow steps should remain serializable:
+Values passed between runtime, runner, app import, and performance harness code should remain serializable:
 
 - Run IDs.
 - Input and output paths.
@@ -166,25 +183,36 @@ Artifacts passed between Metaflow steps should remain serializable:
 
 They should not include CUDA tensors, model objects, open video handles, worker processes, or other process-local resources.
 
+### Backend Duplication Policy
+
+Do not force all backends through one implementation when their constraints differ. It is acceptable, and often preferable, to duplicate small pieces of code in separate backend modules when the shared alternative would introduce conditionals such as:
+
+- `if cuda`.
+- `if mps`.
+- `if cpu_debug`.
+- `if remote_provider`.
+- `if has_gpu_decode`.
+
+Shared code should be limited to stable contracts, pure geometry/math utilities, manifest/telemetry schemas, and genuinely backend-neutral helpers. Runtime-specific decode, model loading, frame caching, memory transfer, and export rules should live with the backend that owns them.
+
 ### Structured Telemetry
 
-Replace stdout timing parsing with a single telemetry interface:
+Replace stdout timing parsing with a single telemetry and metrics surface. The custom `PipelineTelemetry` protocol should remain the application-facing contract, while the implementation can publish metrics through a real library.
 
-```python
-class PipelineTelemetry:
-    def stage_started(self, stage: str, metadata: dict) -> None: ...
-    def stage_finished(self, stage: str, elapsed_ms: int, metadata: dict) -> None: ...
-    def resource_sample(self, sample: dict) -> None: ...
-    def contract_violation(self, code: str, metadata: dict) -> None: ...
-```
+Candidate direction:
 
-The Metaflow flow, app runner, and platform handlers can all consume the same telemetry stream. SQLite events may remain the app compatibility layer, but they should be written by telemetry adapters rather than ad hoc timing calls in each step.
+- Use OpenTelemetry Metrics as the primary instrumentation API for counters, histograms, gauges, and resource attributes. The OpenTelemetry Python metrics API is built around a `MeterProvider`, `Meter`, and instruments for recording measurements: <https://opentelemetry-python.readthedocs.io/en/latest/api/metrics.html>.
+- Keep a project-local `PipelineTelemetry` facade so app code, runtime code, and tests do not depend directly on one vendor/exporter shape.
+- Write telemetry to at least two sinks: structured JSON/manifest output for run debugging, and a metrics exporter for local/performance/production analysis.
+- Evaluate MLflow Tracking for performance experiments because it already models runs, params, metrics, and artifacts: <https://mlflow.org/docs/latest/ml/tracking>.
+
+The runtime, app runner, platform handlers, and performance harness should consume the same telemetry stream. SQLite events may remain the app compatibility layer, but they should be written by telemetry adapters rather than ad hoc timing calls in each stage.
 
 ### Open Questions
 
-- Minimum Metaflow version required for conditional branching.
-- Whether Metaflow should continue to run inside remote workers or only wrap remote submissions from the app side.
-- Whether current per-stage step names should be preserved for operator familiarity.
+- Whether OpenTelemetry alone is enough, or whether MLflow should be added specifically for experiment tracking.
+- Whether the metrics exporter should default to local JSON, Prometheus/OpenMetrics, OTLP, or a combination.
+- Whether current per-stage names should be preserved for operator familiarity in telemetry, even though stage execution is no longer a workflow graph.
 
 ---
 
@@ -329,7 +357,6 @@ Use package boundaries that map to ownership:
 
 ```text
 pipeline/
-    card_capture_flow.py          optional Metaflow wrapper / submission shell
     contracts.py                  transitional imports only; move stable contracts below
 
 src/card_capture/
@@ -386,14 +413,14 @@ Strict GPU code needs a boundary that is enforceable by tests:
 4. Move direct provider logic out of app services into `card_capture.platforms`.
 5. Move database writes and reads behind `card_capture.data`.
 6. Add architecture tests for import direction before doing large file moves.
-7. Deprecate legacy modules only after call sites have moved and compatibility shims are no longer needed.
+7. Delete Metaflow modules, tests, and dependencies after call sites have moved and the replacement runtime contract is covered.
 
 ### Open Questions
 
 - Whether the top-level `pipeline/` package should remain long term or become a compatibility layer only.
 - Whether provider adapters should live in `card_capture.platforms` or under `app/services` until the API boundary settles.
 - Whether current worker modules should be split by platform or collapsed behind one worker entrypoint.
-- How much of `pipeline/contracts.py` should be preserved for Metaflow compatibility while the new contract package is introduced.
+- Whether top-level `pipeline/contracts.py` should be deleted immediately or kept as a short-lived compatibility import while the new contract package is introduced.
 
 ---
 
@@ -443,7 +470,7 @@ Raw SQL should be allowed only in:
 
 Raw SQL should not appear in:
 
-- Metaflow flow definitions.
+- Legacy orchestration wrappers.
 - Pipeline step implementations.
 - Runtime/platform runners.
 - App API handlers.
@@ -498,7 +525,8 @@ Add focused suites:
 - `tests/runtime/`: `PipelineRuntime`, `StrictGpuRuntime`, `CpuDebugRuntime`, `GpuSession`, device-tagged batches, and forbidden-op guards.
 - `tests/platforms/`: local, RunPod, Beam, and Vast.ai adapters using fake transports and fake artifact stores.
 - `tests/data/`: repository contracts, migration/schema behavior, and transactional invariants.
-- `tests/pipeline/`: stage sequencing, manifest generation, telemetry emission, and Metaflow wrapper smoke tests.
+- `tests/pipeline/`: stage sequencing, manifest generation, telemetry emission, and runtime contract smoke tests.
+- `tests/performance/`: benchmark harness tests, telemetry artifact validation, and sample-video fixture checks.
 - `tests/regression/`: golden corpus and performance baselines.
 
 ### Contract Tests
@@ -525,7 +553,7 @@ Static tests should fail on:
 - Provider SDK/client imports outside `card_capture.platforms` and explicit app composition roots.
 - App service imports from GPU hot-path modules.
 - GPU hot-path imports from app, platform, data, PIL image loading, or OpenCV file IO modules.
-- New per-stage Metaflow algorithm bodies in the local execution path.
+- Any Metaflow import, flow definition, or workflow framework dependency after the removal phase.
 
 These tests should be simple AST/import scanners with allowlists checked into the repo. The goal is to stop architectural drift early, not to build a general linter.
 
@@ -540,26 +568,36 @@ Every runtime and platform adapter should have tests that verify:
 
 ### Performance Regression Tests
 
-Add a lightweight performance lane with explicit tolerances:
+Add a lightweight performance harness with explicit tolerances and artifacts. It should be easy for an agent to run an experiment, inspect telemetry, change code, rerun, and compare results.
 
-- A small fixture verifies that local execution does not spawn one process per stage.
-- A sampled real-video benchmark records decode count, model-load count, frame reread count, and stage timings.
-- The local path should assert one model load per model per run and no post-detect source-video reopen except an explicit fallback.
-- Performance reports should be informational on ordinary PRs until the baseline stabilizes, then become gated for large regressions.
+Required shape:
 
-### Metaflow Tests
+- Store one or more benchmark videos under a documented local path or fixture fetch mechanism. At least one should represent the real 4K phone HEVC workload.
+- Provide one command, for example `python -m harness.performance run --profile v5_5_local --video IMG_5922.MOV --out reports/perf/<run_id>`.
+- Emit `run_manifest.json`, telemetry JSON/JSONL, machine/runtime capability metadata, git SHA, command/config params, and a compact comparison report.
+- Record decode count, model-load count, frame reread count, GPU/CPU utilization samples, memory samples, stage timings, cards produced, and quality/regression summary fields.
+- Assert one runtime process, one model load per model per run, and no post-detect source-video reopen except an explicit fallback.
+- Allow advisory thresholds at first, then tighten into blocking thresholds once the baseline stabilizes.
 
-Metaflow tests should match the amended target shape:
+Research direction:
 
-- If Metaflow remains, smoke-test a one-step wrapper that calls the runtime and stores a manifest artifact.
-- Do not preserve tests that require a per-stage local Metaflow graph.
-- Remote-submission tests may verify that Metaflow can submit or track a provider run, but provider semantics still belong to `PipelineRunner` and platform adapters.
+- Use the OpenAI Evals pattern as inspiration: dataset/cases, runner, recorder, and aggregate report. The useful part is the shape, not the dependency: <https://github.com/openai/evals>.
+- Use `pytest-benchmark` for microbenchmarks where pytest integration and compare mode are enough: <https://pytest-benchmark.readthedocs.io/>.
+- Consider ASV only for isolated Python microbenchmarks and long-term trend dashboards; full-video GPU experiments probably need the custom harness because they depend on hardware, videos, artifacts, and telemetry: <https://asv.readthedocs.io/>.
+- Consider MLflow Tracking for experiment/run storage if local JSON reports become too hard to compare across branches and machines: <https://mlflow.org/docs/latest/ml/tracking>.
+
+### Skipped Test Policy
+
+Skipped tests are allowed only when they represent unavailable external capability, such as missing CUDA hardware or missing provider credentials, and the skip reason must name the capability. Skips that hide known failures should be converted into explicit failing tests or moved behind a clearly named quarantine marker with an issue/reference.
+
+V5.5 should include a cleanup pass that removes stale skipped tests, turns planned-but-missing tests into real tests, and documents any remaining hardware/provider skips.
 
 ### Open Questions
 
 - Which test markers should identify CUDA, MPS, provider, benchmark, and slow real-video tests.
 - Whether architecture tests should live under pytest only or also run as a pre-commit hook.
 - Which real video becomes the canonical performance baseline for V5.5.
+- Whether the performance harness should store experiment history as local files only or use MLflow from the start.
 
 ---
 
@@ -573,11 +611,12 @@ Run on every PR:
 
 - Formatting and ordinary lint/type checks, using the repo's existing tools.
 - CPU-only unit tests, including CPU debug runtime contract tests.
-- Architecture boundary tests for imports, raw SQL, provider leakage, and forbidden local Metaflow stage bodies.
+- Architecture boundary tests for imports, raw SQL, provider leakage, and forbidden Metaflow/workflow framework usage.
 - Manifest serialization tests.
 - Data access layer tests against temporary SQLite databases.
 - Provider adapter contract tests with fake transports only.
 - App runner/importer tests that prove app code consumes `PipelineRunner`, manifests, and repositories.
+- Skip audit that fails on unexplained skips or skips masking known failures.
 
 This lane must not require CUDA, provider credentials, local model downloads, or large video assets.
 
@@ -615,6 +654,19 @@ Each relevant lane should upload:
 - Performance baseline report, when run.
 
 These artifacts are part of the debugging contract. The goal is to diagnose CI failures from structured output, not stdout scraping.
+
+### CI Prerequisite
+
+Before beginning the V5.5 refactor, fix existing CI failures. The refactor should not start on top of a red baseline because it will be impossible to distinguish architecture regressions from existing breakage.
+
+Prerequisite work:
+
+- Make the default CI lane green.
+- Remove or justify skipped tests.
+- Convert planned tests that already describe desired confidence into real tests before changing the architecture they protect.
+- Add architecture tests for the highest-risk boundaries before moving code.
+- Add telemetry/manifest tests before replacing runner behavior.
+- Add the first performance harness smoke test before optimizing the single-process runtime.
 
 ### Open Questions
 
@@ -712,11 +764,18 @@ The original provider payload can be retained in debug metadata, but app logic a
 
 ## Migration Strategy
 
+### Phase 0: CI and Confidence Baseline
+
+- Fix existing CI failures.
+- Remove stale skipped tests or convert them into explicit hardware/provider skips.
+- Implement the planned contract, telemetry, manifest, architecture, and performance-harness smoke tests needed to protect the refactor.
+- Establish the first real-video performance baseline and store its manifest/telemetry artifacts.
+
 ### Phase 1: Contracts and Telemetry
 
 - Add `docs/architecture/standards.md` with the initial binding rules from this design.
 - Add runtime interfaces and result manifest contracts.
-- Add structured telemetry abstraction.
+- Add structured telemetry abstraction and choose the first metrics implementation.
 - Stop adding new stdout parsing dependencies.
 - Keep current pipeline behavior otherwise unchanged.
 
@@ -727,13 +786,12 @@ The original provider payload can be retained in debug metadata, but app logic a
 - Move GPU hot-path code behind the new session boundary.
 - Convert silent CPU fallbacks into explicit backend selection.
 
-### Phase 3: Single-Process Runtime and Metaflow Slimming
+### Phase 3: Single-Process Runtime and Metaflow Removal
 
-- Move timing writes out of flow step bodies.
+- Move timing writes out of legacy flow step bodies.
 - Replace hidden runtime selection with explicit branch selection.
-- Make Metaflow artifacts point to manifests and structured outputs.
 - Route local execution through one in-process runtime call instead of per-stage Metaflow subprocesses.
-- Preserve Metaflow only as a one-step wrapper or remote submission shell if it still adds operational value.
+- Delete Metaflow flow code, tests, dependencies, and documentation once the replacement runtime/runner path is covered.
 
 ### Phase 4: Platform Adapter Cleanup
 
@@ -747,16 +805,19 @@ The original provider payload can be retained in debug metadata, but app logic a
 
 - A production GPU run cannot silently use CPU fallback inside strict execution.
 - Hidden host transfers and frame rereads fail in strict tests.
-- Metaflow no longer needs stdout parsing for step timing.
+- Metaflow is removed from production code and dependency manifests.
 - Beam can be completed by implementing a platform adapter, not by editing core pipeline logic.
 - Raw SQL is restricted to the data access layer, migration/schema code, and explicit test helpers.
 - Pipeline, app service, and platform code use repository/query interfaces for database access.
 - `docs/architecture/standards.md` exists and states the binding architecture rules AI agents must follow.
 - At least the highest-risk standards have automated enforcement through tests, lint, or runtime guards.
 - Package boundaries exist for pipeline contracts, runtime backends, platform adapters, and the data access layer.
-- Architecture tests fail on new raw SQL, provider leakage, forbidden GPU imports, or per-stage local Metaflow bodies outside allowlisted modules.
+- Architecture tests fail on new raw SQL, provider leakage, forbidden GPU imports, or forbidden workflow-framework usage.
+- The default CI lane is green before the refactor begins.
+- Stale skipped tests are removed or converted into explicit hardware/provider skips.
 - CI has a fast CPU-only lane that validates contracts and architecture without provider credentials or GPU hardware.
 - CUDA/provider/performance lanes emit manifests, telemetry summaries, and capability reports as artifacts when they run.
+- A documented performance harness can run at least one real-video benchmark and produce comparable telemetry artifacts.
 - All supported platforms accept the same request contract and return the same manifest shape.
 - Provider-specific failures are mapped to stable, provider-neutral categories before app-facing status handling.
 - CPU debug remains available as an explicit runtime backend.
@@ -768,8 +829,11 @@ The original provider payload can be retained in debug metadata, but app logic a
 
 The main architectural decisions captured here are:
 
-- Local execution is a single in-process runtime call; Metaflow, if retained, is orchestration/submission rather than stage execution or GPU residency enforcement.
+- Local execution is a single in-process runtime call; Metaflow is removed rather than retained as orchestration.
 - GPU/CPU selection is a runtime/backend decision, not scattered conditionals.
+- Backend-specific duplication is acceptable when it avoids misleading conditionals or shared code bent around one backend.
+- Telemetry and metrics are first-class runtime outputs, not incidental logs.
+- Performance testing needs a repeatable harness with sample videos, one-command execution, telemetry capture, and comparable reports.
 - Repo structure should make pipeline contracts, runtime backends, platform adapters, and data access ownership visible.
 - Database access is a repository/query-layer concern, not an incidental implementation detail in any module.
 - The final V5.5 output includes an architectural standards document for AI agents and contributors.
@@ -812,16 +876,11 @@ Within one `run()` call the stages share, as plain in-memory objects:
 - **Decoded frames** — frames decoded in detect are reused by refine; **the re-decode is eliminated**, not optimized.
 - **GPU-resident tensors** — crops/embeddings stay on-device across stages; no `.cpu()` roundtrip and no pickling. (Generalizes the existing `fused_refine` precedent to all runtimes and all stages.)
 
-Metaflow, if retained at all, is reduced to one of:
-
-- **(a) a one-step wrapper** that calls `runtime.run(request)` and records the returned manifest as its single artifact; or
-- **(b) dropped for local execution entirely**, and used only as a remote *submission* shell — which the `PipelineRunner` contract in Section 3 already covers.
-
-The `choose_runtime → {strict_gpu | cpu_debug}` branch in Section 1 stays, but each branch is a **single execution unit**, not an 11-node graph.
+Metaflow is removed. The replacement is the lightweight `PipelineRuntime` / `PipelineRunner` surface in Section 1. Runtime selection still exists, but it is plain request data such as `runtime_mode = strict_gpu | cpu_debug`, not a workflow branch.
 
 ### What this amendment does NOT change
 
-The rest of V5.5 is orthogonal and still wanted — none of it depends on Metaflow's graph:
+The rest of V5.5 is orthogonal and still wanted — none of it depends on a workflow graph:
 
 - Strict GPU runtime, `GpuSession`, device-tagged batch types, and forbidden-op guards (Section 2).
 - The `PipelineRunner` contract and result manifests (Section 3).
@@ -837,8 +896,8 @@ Dropping the per-stage graph gives up: per-stage resume/retry, per-stage artifac
 - A local run executes all stages in a single process; no stage is a separate OS process.
 - Models are instantiated at most once per run.
 - `refine` (and any post-detect stage) consumes decoded frames produced by `detect`; no module re-opens the source video after detect except an explicit, telemetered fallback.
-- Metaflow, if present, holds only serializable artifacts (run id, manifest path, telemetry summary) and contains no per-stage algorithmic step bodies.
+- Metaflow imports, flow definitions, dependency declarations, and tests are removed.
 
 ### Migration note
 
-This reorders the draft's Phase 3 ("Metaflow Slimming") ahead of where it sits today and makes it concrete: the single-process `PipelineRuntime` is the unit Phase 2's strict-GPU boundary should wrap, and the `fused_refine` CUDA path is the reference implementation to generalize.
+This reorders the draft's Phase 3 ahead of where it sits today and makes it concrete: the single-process `PipelineRuntime` is the unit Phase 2's strict-GPU boundary should wrap, Metaflow removal is part of the refactor rather than a future option, and the `fused_refine` CUDA path is the reference implementation to generalize.
