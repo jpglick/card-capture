@@ -90,9 +90,9 @@ def _resolve_reader_backend(preferred: str) -> str:
     backend = preferred.strip().lower()
     if backend == "auto":
         return "decord" if _decord_available() else "pyav"
-    if backend in {"decord", "pyav"}:
+    if backend in {"decord", "pyav", "torchvision", "opencv"}:
         return backend
-    raise ValueError("preferred backend must be one of: auto, decord, pyav")
+    raise ValueError("preferred backend must be one of: auto, decord, pyav, torchvision, opencv")
 
 
 @dataclass

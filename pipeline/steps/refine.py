@@ -139,12 +139,32 @@ def run(ctx: RunContext, track_out: TrackOutput,
         row["detection_id"]: row for row in detection_rows_list
     }
 
+    # Cheap-score (MPS) path: detections carry warp-free flatness/clarity, so we
+    # shortlist the top-K per track NOW and decode only those frames. Building the
+    # decode set from every candidate would re-decode thousands of 4K frames — the
+    # exact cost this path exists to avoid (and enough to OOM/crash refine).
+    _cheap_mode = decoded_crops is None and any(
+        "flatness" in detection_lookup.get(c["detection_id"], {}).get("triage_metrics", {})
+        for td in tracks_data for c in td["candidates"]
+    )
+    _cheap_selection: Dict[Any, list] = {}
+    if _cheap_mode:
+        for track_dict in tracks_data:
+            _cheap_selection[track_dict["instance_id"]] = _select_cheap_candidates(
+                track_dict["candidates"], detection_lookup, top_k=5)
+
     # Determine which high-res frames to decode
     canonical_indices: set = set()
-    for track_dict in tracks_data:
-        for c in track_dict["candidates"]:
-            if c["frame_index"] is not None:
-                canonical_indices.add(int(c["frame_index"]))
+    if _cheap_mode:
+        for _sel in _cheap_selection.values():
+            for c in _sel:
+                if c["frame_index"] is not None:
+                    canonical_indices.add(int(c["frame_index"]))
+    else:
+        for track_dict in tracks_data:
+            for c in track_dict["candidates"]:
+                if c["frame_index"] is not None:
+                    canonical_indices.add(int(c["frame_index"]))
 
     # --- In-track Laplacian quality scan ---
     # Temporal stride selected frames at ~3fps per track. Within each confirmed
@@ -169,20 +189,28 @@ def run(ctx: RunContext, track_out: TrackOutput,
     # then decode once via NVDEC instead of two separate CPU VideoCapture passes.
     # FUSED MODE: when decoded_crops is supplied, every detection was already
     # warped during the detect pass — skip decode and the laplacian rescan.
-    decoded_images: Dict[int, np.ndarray] = {}
+    decoded_images: Dict[int, Union[np.ndarray, "torch.Tensor"]] = {}
     _lap_scan_indices: set = set()
     _decode_frames_elapsed = 0.0
+    
+    # Resolve device for zero-download path
+    from card_capture.detectors import probe_torch_device_status
+    resolved_device = probe_torch_device_status(ctx.kornia_device).resolved
+    is_gpu = resolved_device != "cpu"
+
     if decoded_crops is None:
-        _lap_scan_indices = _compute_laplacian_scan_indices(_lap_ranges, ctx.laplacian_scan_stride)
+        if not _cheap_mode:
+            _lap_scan_indices = _compute_laplacian_scan_indices(_lap_ranges, ctx.laplacian_scan_stride)
         _all_needed = canonical_indices | _lap_scan_indices
         _t_decode_start = time.time()
         if _all_needed:
-            decoded_images = decode_frames_gpu(video_path, sorted(_all_needed))
+            # ZERO-DOWNLOAD: Request tensors if on GPU to avoid host roundtrip
+            decoded_images = decode_frames_gpu(video_path, sorted(_all_needed), return_tensors=is_gpu)
         _decode_frames_elapsed = time.time() - _t_decode_start
 
     _lap_results: Dict[str, list] = {}
     _laplacian_scan_elapsed = 0.0
-    if decoded_crops is None:
+    if decoded_crops is None and not _cheap_mode:
         _t_lap_start = time.time()
         try:
             _lap_results = _laplacian_select_frames(
@@ -203,18 +231,19 @@ def run(ctx: RunContext, track_out: TrackOutput,
                 canonical_indices.add(int(_fi))
     # ----------------------------------------
 
-    # Set up Kornia normalizer
+    # Set up Kornia normalizer (MPS-or-fail: no silent CPU downgrade).
+    from card_capture.detectors import probe_torch_device_status
+    from card_capture import gpu_utils
+    if ctx.kornia_device == "mps":
+        resolved_device = gpu_utils.require_device("mps").type
+    else:
+        resolved_device = probe_torch_device_status(ctx.kornia_device).resolved
+
     normalizer = PrecisionNormalizer()
-    kornia_normalizer: Optional[KorniaNormalizer] = None
-    if ctx.use_kornia:
-        try:
-            kornia_normalizer = KorniaNormalizer(
-                width=normalizer.width,
-                height=normalizer.height,
-                device=ctx.kornia_device,
-            )
-        except Exception:
-            kornia_normalizer = None
+    kornia_normalizer = _make_kornia_normalizer(
+        KorniaNormalizer, ctx.use_kornia, resolved_device,
+        normalizer.width, normalizer.height,
+    )
 
     deduplicator = VisualDeduplicator()
     scorer = QualityScorer()
@@ -264,12 +293,25 @@ def run(ctx: RunContext, track_out: TrackOutput,
         _op_counts[label] += 1
         return time.time()
 
-    for track_dict in tracks_data:
+    total_tracks = len(tracks_data)
+    _t_start_loop = time.time()
+    for i, track_dict in enumerate(tracks_data):
+        # PROGRESS REPORTING: Emit track-level progress with throughput
+        if i % 5 == 0 or i == total_tracks - 1:
+            pct = int((i + 1) * 100 / total_tracks) if total_tracks else 100
+            elapsed = time.time() - _t_start_loop
+            tracks_per_s = (i + 1) / elapsed if elapsed > 0 else 0
+            print(f"[progress] refine {pct}% detail: Refining track {i + 1}/{total_tracks} ({tracks_per_s:.1f} tracks/s)", flush=True)
+
         instance_id = track_dict["instance_id"]
         candidates_data = track_dict["candidates"]
 
-        # Sort by score and take top 8 for canonical selection
-        scored_candidates = sorted(candidates_data, key=lambda c: c["score_total"], reverse=True)[:8]
+        # Sort by score and take top for canonical selection
+        if _cheap_mode:
+            scored_candidates = _cheap_selection.get(instance_id, [])
+        else:
+            scored_candidates = sorted(
+                candidates_data, key=lambda c: c["score_total"], reverse=True)[:8]
 
         # Reorder: put Laplacian-selected frames first. This overrides the
         # quality-score ranking so the sharpest frame(s) from the dense scan
@@ -315,7 +357,9 @@ def run(ctx: RunContext, track_out: TrackOutput,
                 raw = decoded_images.get(c["frame_index"])
                 if raw is not None and c["corners"]:
                     try:
-                        c["corners"] = refine_corners(raw, c["corners"])
+                        # Corner refinement needs numpy
+                        raw_np = raw.cpu().numpy() if torch.is_tensor(raw) else raw
+                        c["corners"] = refine_corners(raw_np, c["corners"])
                     except Exception as e:
                         print(f"Corner refinement failed for {instance_id}: {e}")
             _tick("corner_refinement", _t)
@@ -342,10 +386,12 @@ def run(ctx: RunContext, track_out: TrackOutput,
                 batch_ids.append(c["detection_id"])
             if batch_items:
                 try:
-                    memory_before = _torch_cuda_memory_snapshot(ctx.kornia_device)
+                    memory_before = _torch_cuda_memory_snapshot(resolved_device)
                     _t = time.time()
-                    warped = kornia_normalizer.warp_canonical_batch(batch_items, rotate_180=ctx.rotate_180)
-                    memory_after = _torch_cuda_memory_snapshot(ctx.kornia_device)
+                    warped = kornia_normalizer.warp_canonical_batch(
+                        batch_items, rotate_180=ctx.rotate_180, return_gpu=True
+                    )
+                    memory_after = _torch_cuda_memory_snapshot(resolved_device)
                     _elapsed = time.time() - _t
                     _t_ops["kornia_warp_batch"] += _elapsed
                     _op_counts["kornia_warp_batch"] += 1
@@ -353,40 +399,47 @@ def run(ctx: RunContext, track_out: TrackOutput,
                         batch_items,
                         batch_ids=batch_ids,
                         elapsed_s=_elapsed,
-                        device=ctx.kornia_device,
+                        device=resolved_device,
                         memory_before=memory_before,
                         memory_after=memory_after,
                     ))
-                    for did, img in zip(batch_ids, warped):
-                        normalized_by_detection[did] = img
+                    # Storing slices (views) of the GPU tensor
+                    for i, did in enumerate(batch_ids):
+                        normalized_by_detection[did] = warped[i]
                 except Exception as e:
                     print(f"Kornia warp failed: {e}")
                     normalized_by_detection = {}
 
-        # FUSED MODE: batch GPU scoring and ops if we have GPU tensors
-        is_gpu_batch = False
+        # BATCH GPU scoring and ops (works for both fused and standard paths)
         batch_indices = []
         batch_tensors = []
-        if decoded_crops:
-            import torch
-            for i, c in enumerate(scored_candidates):
-                norm = normalized_by_detection.get(c["detection_id"])
+        import torch
+        for i, c in enumerate(scored_candidates):
+            norm = normalized_by_detection.get(c["detection_id"])
+            if norm is not None:
                 if torch.is_tensor(norm):
-                    is_gpu_batch = True
                     batch_indices.append(i)
                     batch_tensors.append(norm)
+                elif isinstance(norm, np.ndarray) and ctx.kornia_device != "cpu":
+                    # Upload back to GPU for the batched pass
+                    batch_indices.append(i)
+                    batch_tensors.append(torch.from_numpy(norm).to(resolved_device, non_blocking=True))
+
+        is_gpu_batch = len(batch_tensors) > 0
 
         batch_quality_scores = {}
         batch_glare_centroids = {}
         batch_phashes = {}
         batch_glare_masks = {}
+        batch_reid_embeddings = {}
 
         if is_gpu_batch and batch_tensors:
             import torch
+            import torch.nn.functional as F
             from card_capture.ml import gpu_ops
             stacked = torch.stack(batch_tensors)
             
-            # Scorer.score_batch
+            # 1. Scorer.score_batch
             confidences = [float(scored_candidates[i]["confidence"]) for i in batch_indices]
             novelties = [float(detection_lookup.get(scored_candidates[i]["detection_id"], {}).get("novelty_score", 1.0)) for i in batch_indices]
             
@@ -397,7 +450,26 @@ def run(ctx: RunContext, track_out: TrackOutput,
             for i, idx in enumerate(batch_indices):
                 batch_quality_scores[idx] = qs_list[i]
             
-            # Glare centroid
+            # 2. ReID Embedding (DINOv2) — DIRECTLY ON GPU TENSORS
+            if embedder:
+                try:
+                    _t = time.time()
+                    # Our 'stacked' is (N, 1050, 750, 3) uint8 BGR
+                    # Convert to RGB and resize to 224x224 (standard DINOv2 input)
+                    _dino_in = stacked[:, :, :, [2, 1, 0]].permute(0, 3, 1, 2).float() / 255.0
+                    _dino_in = F.interpolate(_dino_in, size=(224, 224), mode="bicubic", align_corners=False)
+                    
+                    _emb_tensor = embedder.embed_tensors_batch(_dino_in)
+                    _emb_np = _emb_tensor.cpu().numpy()
+                    _tick("reid_embed_batch", _t)
+                    
+                    for i, idx in enumerate(batch_indices):
+                        batch_reid_embeddings[idx] = _emb_np[i].tolist()
+                    del _dino_in, _emb_tensor, _emb_np
+                except Exception as _e:
+                    print(f"[Refine] Direct tensor ReID failed: {_e}")
+
+            # 3. Glare centroid
             _t = time.time()
             centroids = gpu_ops.glare_centroid_batch(stacked)
             _t_ops["glare_centroid"] += time.time() - _t
@@ -405,7 +477,7 @@ def run(ctx: RunContext, track_out: TrackOutput,
             for i, idx in enumerate(batch_indices):
                 batch_glare_centroids[idx] = centroids[i]
                 
-            # pHash
+            # 4. pHash
             _t = time.time()
             phashes = gpu_ops.phash_batch(stacked)
             _t_ops["phash"] += time.time() - _t
@@ -413,7 +485,7 @@ def run(ctx: RunContext, track_out: TrackOutput,
             for i, idx in enumerate(batch_indices):
                 batch_phashes[idx] = phashes[i]
                 
-            # Glare mask
+            # 5. Glare mask
             _t = time.time()
             masks = gpu_ops.glare_mask_batch(stacked)
             _t_ops["glare_mask"] += time.time() - _t
@@ -435,8 +507,12 @@ def run(ctx: RunContext, track_out: TrackOutput,
             normalized = normalized_by_detection.get(c["detection_id"])
             if normalized is None:
                 _t = time.time()
-                normalized = normalizer.normalize(raw, c["corners"], rotate_180=ctx.rotate_180)
+                # PrecisionNormalizer needs numpy
+                raw_np = raw.cpu().numpy() if torch.is_tensor(raw) else raw
+                normalized = normalizer.normalize(raw_np, c["corners"], rotate_180=ctx.rotate_180)
                 _tick("precision_normalizer_fallback", _t)
+
+            normalized_np = normalized.cpu().numpy() if torch.is_tensor(normalized) else normalized
 
             if i in batch_quality_scores:
                 # Use pre-computed batched results
@@ -446,13 +522,16 @@ def run(ctx: RunContext, track_out: TrackOutput,
                 _gmask = batch_glare_masks[i]
             else:
                 # Fallback to per-image scoring
+                # Ensure we have numpy for CPU-bound scorers
+                raw_np = raw.cpu().numpy() if torch.is_tensor(raw) else raw
+                
                 # Compute novelty score
                 novelty_score = det_row.get("novelty_score", 1.0)
                 if decoded_crops is None and bg_model is not None and c["corners"]:
                     try:
                         _t = time.time()
                         novelty_score = float(quad_novelty(
-                            raw, c["corners"], bg_model,
+                            raw_np, c["corners"], bg_model,
                             color_space="lab", lab_weights=(1.0, 0.5, 0.5),
                         ))
                         _tick("novelty_scoring", _t)
@@ -461,23 +540,23 @@ def run(ctx: RunContext, track_out: TrackOutput,
 
                 _t = time.time()
                 quality_score = scorer.score(
-                    normalized,
+                    normalized_np,
                     float(c["confidence"]),
                     novelty=novelty_score,
                 )
                 _tick("quality_scoring", _t)
 
                 _t = time.time()
-                glare_centroid = find_glare_centroid(normalized)
+                glare_centroid = find_glare_centroid(normalized_np)
                 glare_x, glare_y = glare_centroid if glare_centroid else (None, None)
                 _tick("glare_centroid", _t)
 
                 _t = time.time()
-                _phash = deduplicator.compute_phash(normalized)
+                _phash = deduplicator.compute_phash(normalized_np)
                 _tick("phash", _t)
 
                 _t = time.time()
-                _gmask = _compress_array(_glare_mask(normalized))
+                _gmask = _compress_array(_glare_mask(normalized_np))
                 _tick("glare_mask", _t)
 
             frame_entries.append({
@@ -593,28 +672,8 @@ def run(ctx: RunContext, track_out: TrackOutput,
             "canonical_detection_ids": list(canonical_detection_ids),
             "best_canonical_detection_id": best_canonical["candidate"].detection_id,
             "best_canonical_image_path": best_image_path or "",
-            "reid_embedding": None,  # filled in by batch embedding pass below
+            "reid_embedding": batch_reid_embeddings.get(frame_entries[0]["candidate"]["detection_id"]) if batch_reid_embeddings else None,
         })
-
-    # Batch ReID embeddings for all tracks in one GPU pass
-    if embedder:
-        _embed_jobs = [
-            (i, rt["best_canonical_image_path"])
-            for i, rt in enumerate(refined_tracks)
-            if rt["best_canonical_image_path"]
-        ]
-        if _embed_jobs:
-            try:
-                from PIL import Image as _PIL_Image
-                _pil_images = [_PIL_Image.open(p).convert("RGB") for _, p in _embed_jobs]
-                _t = time.time()
-                _emb_tensor = embedder.embed_batch(_pil_images)
-                _emb_np = _emb_tensor.cpu().numpy()
-                _tick("reid_embed_batch", _t)
-                for _batch_i, (_track_i, _) in enumerate(_embed_jobs):
-                    refined_tracks[_track_i]["reid_embedding"] = _emb_np[_batch_i].tolist()
-            except Exception as _e:
-                print(f"[Refine] Batch embedding failed: {_e}")
 
     t_refine = time.time() - t_refine_start
     # Print the per-op breakdown so logs surface it even before stage_payloads
@@ -631,6 +690,7 @@ def run(ctx: RunContext, track_out: TrackOutput,
     # _record_stage_timing can merge them into stage_detect-style telemetry.
     refine_telemetry = {
         "tracks_refined": len(refined_tracks),
+        "device": resolved_device,
         "op_seconds": {k: round(v, 3) for k, v in _t_ops.items() if v > 0},
         "op_calls": {k: _op_counts[k] for k in _t_ops if _op_counts[k] > 0},
         "kornia_batches": _kornia_batches,
@@ -653,3 +713,40 @@ def run(ctx: RunContext, track_out: TrackOutput,
     # and doesn't break any consumer that pickles RefineOutput.
     out.refine_telemetry = refine_telemetry  # type: ignore[attr-defined]
     return out
+
+
+def _make_kornia_normalizer(kornia_cls, use_kornia, device, width, height):
+    """Construct a KorniaNormalizer, or return None when warping is disabled or
+    explicitly on CPU. On a GPU device (mps/cuda) an init failure RAISES — no
+    silent CPU fallback (MPS-or-fail)."""
+    if not use_kornia:
+        return None
+    try:
+        return kornia_cls(width=width, height=height, device=device)
+    except Exception:
+        if device == "cpu":
+            return None
+        raise
+
+
+def _select_cheap_candidates(candidates_data, detection_lookup, top_k=5):
+    """Rank candidates by combined flatness + (per-track normalized) clarity and
+    return the top_k. Used only when detections carry cheap scores (MPS path)."""
+    def _scores(c):
+        tm = detection_lookup.get(c["detection_id"], {}).get("triage_metrics", {})
+        return float(tm.get("flatness", 0.0)), float(tm.get("clarity", 0.0))
+    clarities = [_scores(c)[1] for c in candidates_data]
+    max_clar = max(clarities) if clarities else 0.0
+    def _combined(c):
+        flat, clar = _scores(c)
+        norm_clar = (clar / max_clar) if max_clar > 0 else 0.0
+        return 0.5 * flat + 0.5 * norm_clar
+    return sorted(candidates_data, key=_combined, reverse=True)[:top_k]
+
+
+def _has_cheap_scores(candidates_data, detection_lookup) -> bool:
+    for c in candidates_data:
+        tm = detection_lookup.get(c["detection_id"], {}).get("triage_metrics", {})
+        if "flatness" in tm:
+            return True
+    return False

@@ -1,4 +1,4 @@
-"""Tests for _run_cuda_inference — mocked sampler and detector."""
+"""Tests for _run_fused_inference — mocked sampler and detector."""
 import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -34,7 +34,7 @@ def _make_ctx(tmp_path, batch_size=4):
 
 def test_detect_output_frame_count(tmp_path):
     """DetectOutput.frame_count matches number of sampled frames."""
-    from pipeline.steps.detect import _run_cuda_inference
+    from pipeline.steps.detect import _run_fused_inference
     from card_capture.sampler.cuda_sampler import CudaSampler
 
     ctx = _make_ctx(tmp_path)
@@ -42,7 +42,7 @@ def test_detect_output_frame_count(tmp_path):
 
     sampler = MagicMock(spec=CudaSampler)
     def _gpu_batches(batch_size=32, thumbnail_width=640, video_path=None):
-        # CudaSampler now yields (gpu_tensor_batch, [FrameSample]); _run_cuda_inference
+        # CudaSampler now yields (gpu_tensor_batch, [FrameSample]); _run_fused_inference
         # only indexes the tensor when a crop_cache is passed (not in these tests),
         # so a placeholder stands in for the GPU batch.
         from unittest.mock import MagicMock as _MM
@@ -57,7 +57,7 @@ def test_detect_output_frame_count(tmp_path):
     detector.detection_width = 640
     detector.detect_batch.return_value = []  # no detections
 
-    out = _run_cuda_inference(ctx, sampler, detector, tmp_path, tmp_path)
+    out = _run_fused_inference(ctx, sampler, detector, tmp_path, tmp_path)
     assert out.frame_count == 10
     assert out.accepted_frame_count == 10
     assert out.detection_rows == []
@@ -65,7 +65,7 @@ def test_detect_output_frame_count(tmp_path):
 
 def test_detect_output_batching(tmp_path):
     """With batch_size=4 and 10 frames, detect_batch is called 3 times."""
-    from pipeline.steps.detect import _run_cuda_inference
+    from pipeline.steps.detect import _run_fused_inference
     from card_capture.sampler.cuda_sampler import CudaSampler
 
     ctx = _make_ctx(tmp_path, batch_size=4)
@@ -73,7 +73,7 @@ def test_detect_output_batching(tmp_path):
 
     sampler = MagicMock(spec=CudaSampler)
     def _gpu_batches(batch_size=32, thumbnail_width=640, video_path=None):
-        # CudaSampler now yields (gpu_tensor_batch, [FrameSample]); _run_cuda_inference
+        # CudaSampler now yields (gpu_tensor_batch, [FrameSample]); _run_fused_inference
         # only indexes the tensor when a crop_cache is passed (not in these tests),
         # so a placeholder stands in for the GPU batch.
         from unittest.mock import MagicMock as _MM
@@ -88,14 +88,14 @@ def test_detect_output_batching(tmp_path):
     detector.detection_width = 640
     detector.detect_batch.return_value = []
 
-    _run_cuda_inference(ctx, sampler, detector, tmp_path, tmp_path)
+    _run_fused_inference(ctx, sampler, detector, tmp_path, tmp_path)
     # 10 frames / batch_size=4 → ceil(10/4) = 3 calls
     assert detector.detect_batch.call_count == 3
 
 
 def test_detect_output_has_detection_rows(tmp_path):
     """Detections returned by detect_batch appear in detection_rows."""
-    from pipeline.steps.detect import _run_cuda_inference
+    from pipeline.steps.detect import _run_fused_inference
     from card_capture.sampler.cuda_sampler import CudaSampler
     from card_capture.models import DetectionPacket, FramePacket, CornerDetection
 
@@ -104,7 +104,7 @@ def test_detect_output_has_detection_rows(tmp_path):
 
     sampler = MagicMock(spec=CudaSampler)
     def _gpu_batches(batch_size=32, thumbnail_width=640, video_path=None):
-        # CudaSampler now yields (gpu_tensor_batch, [FrameSample]); _run_cuda_inference
+        # CudaSampler now yields (gpu_tensor_batch, [FrameSample]); _run_fused_inference
         # only indexes the tensor when a crop_cache is passed (not in these tests),
         # so a placeholder stands in for the GPU batch.
         from unittest.mock import MagicMock as _MM
@@ -130,7 +130,7 @@ def test_detect_output_has_detection_rows(tmp_path):
     detector.detection_width = 640
     detector.detect_batch.return_value = [pkt]
 
-    out = _run_cuda_inference(ctx, sampler, detector, tmp_path, tmp_path)
+    out = _run_fused_inference(ctx, sampler, detector, tmp_path, tmp_path)
     assert len(out.detection_rows) == 1
     assert out.detection_rows[0]["confidence"] == pytest.approx(0.85)
     assert out.detection_rows[0]["frame_index"] == 0

@@ -13,20 +13,20 @@ from pathlib import Path
 from typing import Any, Dict
 
 from pipeline.steps import novelty, track, refine
-from pipeline.steps.detect import _build_sampler_detector, _run_cuda_inference, _save_corner_samples
+from pipeline.steps.detect import _build_sampler_detector, _run_fused_inference, _save_corner_samples
 from pipeline.steps.refine import RefineOutput
 from pipeline.steps.start import RunContext
 
 
 def run(ctx: RunContext) -> RefineOutput:
-    """Execute the fused CUDA path and return a RefineOutput for the score step."""
+    """Execute the fused detection/refinement path and return a RefineOutput."""
     sampler, detector = _build_sampler_detector(ctx)
     output_dir = Path(ctx.output_dir)
     frame_dir = Path(ctx.frame_dir)
 
     crop_cache: Dict[int, Any] = {}
     _t_infer = time.time()
-    detect_out = _run_cuda_inference(
+    detect_out = _run_fused_inference(
         ctx, sampler, detector, output_dir, frame_dir, crop_cache=crop_cache,
     )
     _infer_elapsed = time.time() - _t_infer
@@ -35,6 +35,21 @@ def run(ctx: RunContext) -> RefineOutput:
 
     novelty_out = novelty.run(ctx, detect_out)
     track_out = track.run(ctx, novelty_out)
+
+    # CRITICAL: Prune crop cache to only keep detections that survived tracking.
+    # In long 4K videos, YOLO can produce thousands of candidates, and keeping
+    # them all in RAM will cause OOM.
+    active_det_ids = set()
+    for track_data in track_out.tracks_data:
+        for cand in track_data.get("candidates", []):
+            active_det_ids.add(cand["detection_id"])
+    
+    original_count = len(crop_cache)
+    crop_cache = {k: v for k, v in crop_cache.items() if k in active_det_ids}
+    pruned_count = original_count - len(crop_cache)
+    if pruned_count > 0:
+        print(f"[fused] Pruned {pruned_count} crops from cache (remaining: {len(crop_cache)})", flush=True)
+
     refine_out = refine.run(ctx, track_out, decoded_crops=crop_cache)
 
     # Surface fused-path telemetry alongside refine's own op breakdown so the

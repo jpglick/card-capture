@@ -43,7 +43,16 @@ def phash_batch(bgr_u8: torch.Tensor) -> List[str]:
     by, bx = int(h * 0.2), int(w * 0.2)
     inner = bgr_u8[:, by:h - by, bx:w - bx, :]
     gray = rgb_gray_batch(inner).unsqueeze(1)                       # (N,1,h',w')
-    resized = F.interpolate(gray, size=(32, 32), mode="area").squeeze(1)
+    
+    # MPS workaround: adaptive_avg_pool2d (used by F.interpolate area) requires 
+    # input size to be divisible by output size on MPS. 
+    # Fall back to CPU for the resize if on MPS.
+    if gray.device.type == "mps":
+        orig_device = gray.device
+        resized = F.interpolate(gray.cpu(), size=(32, 32), mode="area").to(orig_device).squeeze(1)
+    else:
+        resized = F.interpolate(gray, size=(32, 32), mode="area").squeeze(1)
+        
     dct = gpu_dct2(resized)
     low = dct[:, :8, :8].reshape(n, 64)
     med = low.median(dim=1, keepdim=True).values
@@ -144,3 +153,61 @@ def border_purity_batch(gray_f: torch.Tensor) -> torch.Tensor:
 
     ratio = ring_std / (interior_std + 1e-3)
     return (1.0 - ratio).clamp(0.0, 1.0)
+
+
+def gpu_roi_mean_abs_diff(frame_t: torch.Tensor, bg_t: torch.Tensor, bbox: Tuple[int, int, int, int]) -> torch.Tensor:
+    """Mean absolute difference between frame and background within a bounding box.
+    Used for fast GPU-resident novelty scoring.
+    frame_t, bg_t are (C, H, W) tensors. bbox is (x0, y0, x1, y1).
+    Returns a 0-dim tensor.
+    """
+    x0, y0, x1, y1 = bbox
+    # Ensure within bounds
+    h, w = frame_t.shape[1], frame_t.shape[2]
+    x0 = max(0, min(x0, w - 1)); x1 = max(x0 + 1, min(x1, w))
+    y0 = max(0, min(y0, h - 1)); y1 = max(y0 + 1, min(y1, h))
+    
+    roi_f = frame_t[:, y0:y1, x0:x1]
+    roi_b = bg_t[:, y0:y1, x0:x1]
+    return torch.abs(roi_f - roi_b).mean()
+
+
+def yuv_nv12_to_rgb_batch(nv12_u8: torch.Tensor, h: int, w: int) -> torch.Tensor:
+    """(N, 1.5*H, W) uint8 NV12 tensor → (N,H,W,3) uint8 RGB.
+    Performs hardware-accelerated color conversion on GPU (MPS/CUDA).
+    Returns RGB for direct YOLO tensor inference.
+    """
+    n = nv12_u8.shape[0]
+    # Slicing the Y and interleaved UV planes
+    y = nv12_u8[:, :h, :].unsqueeze(1).float()      # (N, 1, H, W)
+    uv = nv12_u8[:, h:, :].float()                   # (N, H/2, W)
+    
+    # De-interleave UV plane: U is at even cols, V is at odd cols
+    u_plane = uv[:, :, 0::2].unsqueeze(1)            # (N, 1, H/2, W/2)
+    v_plane = uv[:, :, 1::2].unsqueeze(1)            # (N, 1, H/2, W/2)
+    
+    # Upsample chroma to match luma resolution
+    u = F.interpolate(u_plane, size=(h, w), mode='nearest')
+    v = F.interpolate(v_plane, size=(h, w), mode='nearest')
+    
+    # BT.601 coefficients
+    y_shifted = (y - 16.0) * 1.164
+    
+    # R = 1.164(Y-16) + 1.596(V-128)
+    r = y_shifted + 1.596 * (v - 128.0)
+    # G = 1.164(Y-16) - 0.813(V-128) - 0.391(U-128)
+    g = y_shifted - 0.813 * (v - 128.0) - 0.391 * (u - 128.0)
+    # B = 1.164(Y-16) + 2.018(U-128)
+    b = y_shifted + 2.018 * (u - 128.0)
+    
+    # Combine to RGB and clamp to valid uint8 range
+    # Final shape: (N, H, W, 3)
+    return torch.cat([r, g, b], dim=1).clamp(0, 255).to(torch.uint8).permute(0, 2, 3, 1).contiguous()
+
+
+def yuv_nv12_to_bgr_batch(nv12_u8: torch.Tensor, h: int, w: int) -> torch.Tensor:
+    """(N, 1.5*H, W) uint8 NV12 tensor → (N,H,W,3) uint8 BGR.
+    Same as above but returns BGR. Used for legacy paths.
+    """
+    rgb = yuv_nv12_to_rgb_batch(nv12_u8, h, w)
+    return rgb[:, :, :, [2, 1, 0]].contiguous()

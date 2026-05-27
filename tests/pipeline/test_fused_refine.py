@@ -33,7 +33,7 @@ def test_fused_refine_pipes_crop_cache_into_refine(tmp_path, monkeypatch):
             sampler_telemetry={"sampler_type": "CudaSampler"},
             video_id=1, detect_telemetry={"yolo_frames": 1},
         )
-    monkeypatch.setattr(fused_refine, "_run_cuda_inference", _fake_cuda_inference)
+    monkeypatch.setattr(fused_refine, "_run_fused_inference", _fake_cuda_inference)
 
     monkeypatch.setattr(
         fused_refine.novelty, "run",

@@ -11,6 +11,7 @@
     let loading = $state(true);
     let error = $state<string | null>(null);
     let liveLines = $state<string[]>([]);
+    let progressMap = $state<Record<string, { stage_id: string; pct: number; detail: string }>>({});
     let evtSource: EventSource | null = null;
     let pollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -53,6 +54,14 @@
             try {
                 const d = JSON.parse(e.data);
                 if (d.payload?.line) liveLines = [...liveLines, d.payload.line];
+            } catch {}
+        });
+        evtSource.addEventListener('stage_progress', (e: any) => {
+            try {
+                const d = JSON.parse(e.data);
+                if (d.payload?.stage_id) {
+                    progressMap[d.payload.stage_id] = d.payload;
+                }
             } catch {}
         });
         evtSource.addEventListener('run_completed', () => {
@@ -311,6 +320,25 @@
         </div>
     {/if}
 
+    {#if run.status === 'running' && Object.keys(progressMap).length > 0}
+        <div class="multi-progress">
+            {#each Object.values(progressMap).sort((a, b) => a.stage_id.localeCompare(b.stage_id)) as p}
+                <div class="progress-container">
+                    <div class="progress-info">
+                        <span class="progress-stage">
+                            <strong>{p.stage_id.replace('.', ' ')}</strong>
+                        </span>
+                        <span class="progress-detail">{p.detail}</span>
+                        <span class="progress-pct">{p.pct}%</span>
+                    </div>
+                    <div class="progress-bar-bg">
+                        <div class="progress-bar-fill" style="width: {p.pct}%; background: {stageColor(p.stage_id.split('.')[0])}"></div>
+                    </div>
+                </div>
+            {/each}
+        </div>
+    {/if}
+
     <h2>{run.status === 'running' ? 'Live log' : 'Run log'}</h2>
     <div class="log-box">
         {#if run.status === 'running' && liveLines.length === 0}
@@ -549,5 +577,40 @@
     }
     @media (max-width: 700px) {
         .charts-grid { grid-template-columns: 1fr; }
+    }
+
+    .progress-container {
+        background: white;
+        border-radius: 10px;
+        padding: 1rem 1.25rem;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        margin-bottom: 0.75rem;
+        border-left: 4px solid #727cf5;
+    }
+    .multi-progress {
+        margin-bottom: 2rem;
+    }
+
+    .progress-info {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        margin-bottom: 0.75rem;
+        font-size: 0.95rem;
+    }
+    .progress-stage { color: #313a46; font-weight: 500; }
+    .progress-stage strong { text-transform: capitalize; color: #727cf5; }
+    .progress-detail { color: #495057; font-size: 0.85rem; font-weight: 500; }
+    .progress-pct { font-weight: 700; color: #313a46; font-family: monospace; }
+    
+    .progress-bar-bg {
+        height: 10px;
+        background: #f1f3fa;
+        border-radius: 5px;
+        overflow: hidden;
+    }
+    .progress-bar-fill {
+        height: 100%;
+        transition: width 0.3s ease;
     }
 </style>

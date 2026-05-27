@@ -31,7 +31,7 @@ def test_prefetch_preserves_order_and_detections(tmp_path, monkeypatch):
         warp_canonical_batch_gpu=lambda items, rotate_180=False, return_gpu=False: [np.zeros((1050,750,3),np.uint8) for _ in items]))
 
     crop_cache = {}
-    out = detect._run_cuda_inference(ctx, sampler, detector, tmp_path, tmp_path, crop_cache=crop_cache)
+    out = detect._run_fused_inference(ctx, sampler, detector, tmp_path, tmp_path, crop_cache=crop_cache)
     assert [r["frame_index"] for r in out.detection_rows] == [0,1,2,3]   # order preserved
     assert out.frame_count == 4
     assert len(crop_cache) == 4
@@ -55,4 +55,4 @@ def test_prefetch_propagates_errors(tmp_path, monkeypatch):
     detector.detect_batch.return_value = []
 
     with pytest.raises(RuntimeError, match="decode failed"):
-        detect._run_cuda_inference(ctx, sampler, detector, tmp_path, tmp_path)
+        detect._run_fused_inference(ctx, sampler, detector, tmp_path, tmp_path)

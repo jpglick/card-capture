@@ -468,3 +468,28 @@ def compute_presence_metrics_batched(
             )
 
     return results
+
+
+def require_device(requested: str) -> torch.device:
+    """Resolve `requested` to a torch.device, raising rather than silently
+    downgrading to CPU. `requested` of "cpu" is honored (explicit). "auto"
+    requires a GPU (cuda or mps) and raises if none is present.
+    """
+    if requested == "cpu":
+        return torch.device("cpu")
+    if requested == "mps":
+        if not torch.backends.mps.is_available():
+            raise RuntimeError("MPS device requested but not available "
+                               "(this route is MPS-or-fail; no CPU fallback).")
+        return torch.device("mps")
+    if requested == "cuda":
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA device requested but not available.")
+        return torch.device("cuda")
+    # auto: require some accelerator
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if torch.backends.mps.is_available():
+        return torch.device("mps")
+    raise RuntimeError("No GPU (cuda/mps) available and this route forbids "
+                       "silent CPU fallback. Set device='cpu' explicitly to override.")

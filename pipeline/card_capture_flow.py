@@ -81,7 +81,7 @@ class CardCaptureFlow(FlowSpec):
         ctx = self.run_context
         _run_id = self.ui_run_id or current.run_id
         if ctx.detector == "cuda":
-            # Fused path: decode + warp + novelty + track + refine in one step
+            # CUDA fused path: decode + warp + novelty + track + refine in one step
             # so the crop cache stays in memory (no Metaflow artifact spill).
             self.refine_out = fused_refine.run(ctx)
             self._fused = True
@@ -163,28 +163,27 @@ class CardCaptureFlow(FlowSpec):
         _elapsed_ms = int((_time.time() - _t0) * 1000)
         ctx = self.run_context
         _record_stage_timing(ctx.db_path, self.ui_run_id or current.run_id, ctx.video_id or 0, "resolve", _elapsed_ms)
-        self.next(self.fuse_fanout)
-
-    @step
-    def fuse_fanout(self):
-        tracks = list(self.resolve_out.prepared_tracks)
-        # Metaflow foreach requires ≥1 item; sentinel None is filtered in fuse_join
-        self.fanout = tracks if tracks else [None]
-        self.next(self.fuse, foreach="fanout")
+        self.next(self.fuse)
 
     @step
     def fuse(self):
-        prepared_track = self.input
-        self.fuse_out = fuse.run(self.run_context, prepared_track) if prepared_track is not None else None
-        self.next(self.fuse_join)
-
-    @step
-    def fuse_join(self, inputs):
-        self.fused_canonicals = [
-            inp.fuse_out.fused_canonical for inp in inputs
-            if inp.fuse_out is not None
-        ]
-        self.merge_artifacts(inputs, exclude=["fuse_out"])
+        # Fuse each prepared track in-process. Previously a Metaflow ``foreach``
+        # spawned one subprocess per track; on a 27-card video that fanned out to
+        # 128 tasks, each paying ~2-3s of Python/import/artifact overhead for what
+        # is usually a single-file copy — minutes of pure overhead. The per-track
+        # work (median fuse of a few crops, or a copy) is light, so a plain loop
+        # is far cheaper and produces identical ``fused_canonicals``.
+        _t0 = _time.time()
+        ctx = self.run_context
+        self.fused_canonicals = []
+        for prepared_track in self.resolve_out.prepared_tracks:
+            if prepared_track is None:
+                continue
+            fuse_out = fuse.run(ctx, prepared_track)
+            if fuse_out is not None:
+                self.fused_canonicals.append(fuse_out.fused_canonical)
+        _elapsed_ms = int((_time.time() - _t0) * 1000)
+        _record_stage_timing(ctx.db_path, self.ui_run_id or current.run_id, ctx.video_id or 0, "fuse", _elapsed_ms)
         self.next(self.dedup)
 
     @step

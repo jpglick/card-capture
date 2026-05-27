@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import os
+import platform
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Protocol
-import platform
+from typing import Any, Dict, Iterable, List, Optional, Protocol, Tuple, Union
 
 import cv2
 import numpy as np
+import torch
 
 from .models import (
     CardDetection,
@@ -14,195 +16,85 @@ from .models import (
     DetectionPacket,
     FramePacket,
     FrameSample,
-    Polygon,
+    Point,
 )
-
-from huggingface_hub import hf_hub_download
-from huggingface_hub import try_to_load_from_cache
-
-
-def _try_local_cache(repo_id: str, filename: str):
-    """Return the local cached path for (repo_id, filename), else None."""
-    try:
-        cached = try_to_load_from_cache(repo_id=repo_id, filename=filename)
-    except Exception:
-        return None
-    if isinstance(cached, str):
-        return cached
-    return None
-
-
-def _resolve_model_path(repo_id: str, filename: str) -> str:
-    """Prefer a locally cached weights file. Only hit the Hub if no cache exists."""
-    cached = _try_local_cache(repo_id, filename)
-    if cached:
-        return cached
-    return hf_hub_download(repo_id=repo_id, filename=filename)
 
 
 class CardDetector(Protocol):
-    runtime: str
-    model_name: str
-
-    def detect(self, frame: FrameSample) -> Iterable[CardDetection]:
-        ...
-
-
-class CornerDetector(Protocol):
-    def detect_batch(
-        self, frames: list[FramePacket], confidence_threshold: float
-    ) -> list[DetectionPacket]:
-        ...
-
-
-@dataclass(frozen=True)
-class TorchDeviceStatus:
-    requested: str
-    resolved: str
-    mps_built: bool
-    mps_available: bool
-    cuda_available: bool
-    reason: str
-
-
-def probe_torch_device_status(requested: str = "auto") -> TorchDeviceStatus:
-    normalized = requested.strip().lower()
-    if normalized not in {"auto", "cpu", "mps", "cuda"}:
-        raise ValueError(f"unsupported device request: {requested!r}")
-
-    try:
-        import torch
-    except ImportError:
-        return TorchDeviceStatus(
-            requested=normalized,
-            resolved="cpu",
-            mps_built=False,
-            mps_available=False,
-            cuda_available=False,
-            reason="torch_not_installed",
-        )
-
-    mps_built = bool(getattr(torch.backends, "mps", None) and torch.backends.mps.is_built())
-    mps_available = bool(getattr(torch.backends, "mps", None) and torch.backends.mps.is_available())
-    cuda_available = bool(torch.cuda.is_available())
-
-    if normalized == "cpu":
-        return TorchDeviceStatus(normalized, "cpu", mps_built, mps_available, cuda_available, "forced_cpu")
-    if normalized == "mps":
-        return TorchDeviceStatus(
-            normalized,
-            "mps" if mps_available else "cpu",
-            mps_built,
-            mps_available,
-            cuda_available,
-            "forced_mps" if mps_available else "mps_unavailable",
-        )
-    if normalized == "cuda":
-        if not cuda_available:
-            import os as _os
-            if _os.environ.get("CARD_CAPTURE_ALLOW_CPU_FALLBACK"):
-                return TorchDeviceStatus(
-                    normalized, "cpu", mps_built, mps_available, cuda_available, "cuda_unavailable_fallback"
-                )
-            raise RuntimeError(
-                "CUDA was explicitly requested (device='cuda') but torch.cuda.is_available() returned False. "
-                "Check that the GPU driver is accessible and torch was built with CUDA support. "
-                "Set CARD_CAPTURE_ALLOW_CPU_FALLBACK=1 to run on CPU instead."
-            )
-        return TorchDeviceStatus(
-            normalized, "cuda", mps_built, mps_available, cuda_available, "forced_cuda"
-        )
-
-    if platform.system() == "Darwin" and platform.machine() == "arm64" and mps_available:
-        return TorchDeviceStatus(normalized, "mps", mps_built, mps_available, cuda_available, "auto_mps")
-    if cuda_available:
-        return TorchDeviceStatus(normalized, "cuda", mps_built, mps_available, cuda_available, "auto_cuda")
-    return TorchDeviceStatus(
-        normalized,
-        "cpu",
-        mps_built,
-        mps_available,
-        cuda_available,
-        "mps_unavailable" if mps_built else "no_accelerator",
-    )
-
-
-class FakeCardDetector:
-    runtime = "fake"
-    model_name = "fake-card-detector"
+    """Protocol for card detection backends."""
 
     def detect(self, frame: FrameSample) -> List[CardDetection]:
-        x0 = frame.width * 0.12
-        x1 = frame.width * 0.88
-        y0 = frame.height * 0.12
-        y1 = frame.height * 0.88
+        """Detect cards in a single frame."""
+        ...
+
+    def detect_batch(
+        self,
+        frames: list[FramePacket],
+        confidence_threshold: float,
+        tensor_input: Optional["torch.Tensor"] = None,
+    ) -> list[DetectionPacket]:
+        """Detect cards in a batch of frames."""
+        ...
+
+
+class FakeCardDetector(CardDetector):
+    """Dummy detector that finds a card in the center of every frame."""
+
+    def detect(self, frame: FrameSample) -> List[CardDetection]:
+        h, w = frame.image.shape[:2]
         return [
             CardDetection(
                 frame_index=frame.frame_index,
                 timestamp_ms=frame.timestamp_ms,
-                polygon=((x0, y0), (x1, y0), (x1, y1), (x0, y1)),
-                confidence=0.99,
-                metadata={"runtime": self.runtime, "model": self.model_name},
+                polygon=((w // 4, h // 4), (3 * w // 4, h // 4), (3 * w // 4, 3 * h // 4), (w // 4, 3 * h // 4)),
+                confidence=0.95,
             )
         ]
 
-
-class FakeCornerDetector:
-    runtime = "fake"
-    model_name = "fake-corner-detector"
-
-    def __init__(self, confidence: float = 0.99):
-        self.confidence = confidence
-
     def detect_batch(
-        self, frames: list[FramePacket], confidence_threshold: float
+        self,
+        frames: list[FramePacket],
+        confidence_threshold: float,
+        tensor_input: Optional["torch.Tensor"] = None,
     ) -> list[DetectionPacket]:
-        if self.confidence < confidence_threshold:
-            return []
-
-        detections: list[DetectionPacket] = []
-        for frame in frames:
-            x0 = frame.width * 0.12
-            x1 = frame.width * 0.88
-            y0 = frame.height * 0.12
-            y1 = frame.height * 0.88
-            detections.append(
+        results = []
+        for f in frames:
+            h, w = f.height, f.width
+            cd = CornerDetection(
+                corners=((w // 4, h // 4), (3 * w // 4, h // 4), (3 * w // 4, 3 * h // 4), (w // 4, 3 * h // 4)),
+                confidence=0.95,
+            )
+            results.append(
                 DetectionPacket(
-                    frame_index=frame.frame_index,
-                    timestamp_ms=frame.timestamp_ms,
-                    width=frame.width,
-                    height=frame.height,
-                    corner_detection=CornerDetection(
-                        corners=((x0, y0), (x1, y0), (x1, y1), (x0, y1)),
-                        confidence=self.confidence,
-                        metadata={"runtime": self.runtime, "model": self.model_name},
-                    ),
+                    frame_index=f.frame_index,
+                    timestamp_ms=f.timestamp_ms,
+                    width=w,
+                    height=h,
+                    corner_detection=cd,
                 )
             )
-        return detections
+        return results
 
 
-class CardcaptorUltralyticsDetector:
-    runtime = "ultralytics"
-    model_name = "AlecKarfonta/cardcaptor-v3"
+class CardcaptorUltralyticsDetector(CardDetector):
+    """OBB detector using Ultralytics YOLOv8/v11."""
 
     def __init__(
         self,
-        confidence_threshold: float = 0.25,
         repo_id: str = "AlecKarfonta/cardcaptor-v3",
-        filename: str = "weights/cardcaptor_v3_best.pt",
+        filename: str = "cardcaptor_v3_best.pt",
         detection_width: int = 640,
+        confidence_threshold: float = 0.25,
         device: str = "auto",
     ):
-        if detection_width <= 0:
-            raise ValueError(f"detection_width must be a positive integer, got {detection_width!r}")
-        self.confidence_threshold = confidence_threshold
         self.repo_id = repo_id
         self.filename = filename
         self.detection_width = detection_width
+        self._conf_thresh = confidence_threshold
         self.device = device
         self._model = None
         self._half = False
+        self._is_coreml = False
 
     def detect(self, frame: FrameSample) -> List[CardDetection]:
         detections = self.detect_batch(
@@ -230,36 +122,64 @@ class CardcaptorUltralyticsDetector:
         ]
 
     def detect_batch(
-        self, frames: list[FramePacket], confidence_threshold: float
+        self,
+        frames: list[FramePacket],
+        confidence_threshold: float,
+        tensor_input: Optional["torch.Tensor"] = None,
     ) -> list[DetectionPacket]:
         if not frames:
             return []
         model = self._load_model()
-        detect_images: list[np.ndarray] = []
+        
+        # Scale factors: (scale_x, scale_y) to map detection coordinates back to original resolution.
         scale_factors: list[tuple[float, float, int, int]] = []
-        for frame in frames:
-            packet_h, packet_w = frame.image.shape[:2]
-            if packet_w > self.detection_width:
-                scaled_w = self.detection_width
-                scaled_h = max(1, int(round(packet_h * self.detection_width / packet_w)))
-                detect_image = cv2.resize(frame.image, (scaled_w, scaled_h))
+        
+        if tensor_input is not None:
+            # Optimized tensor path (e.g. CUDA)
+            if self._is_coreml:
+                # COREML STABILITY FIX: Sequential inference for batch tensors.
+                # Ultralytics CoreML predictor is unstable with batch_size > 1.
+                results = []
+                for i in range(tensor_input.shape[0]):
+                    res = model(tensor_input[i : i + 1], conf=confidence_threshold, verbose=False)
+                    if res:
+                        results.append(res[0])
             else:
-                detect_image = frame.image
-                scaled_w = packet_w
-                scaled_h = packet_h
-                
-            scale_x = frame.width / scaled_w
-            scale_y = frame.height / scaled_h
-            
-            detect_images.append(detect_image)
-            scale_factors.append((scale_x, scale_y, frame.width, frame.height))
+                results = model(tensor_input, conf=confidence_threshold, verbose=False)
 
-        results = model(detect_images, conf=confidence_threshold, half=getattr(self, "_half", False), verbose=False)
+            for frame in frames:
+                sx = frame.width / tensor_input.shape[3]
+                sy = frame.height / tensor_input.shape[2]
+                scale_factors.append((sx, sy, frame.width, frame.height))
+        else:
+            # Standard path: feed numpy images to YOLO.
+            detect_images = [f.image for f in frames]
+            
+            for f in frames:
+                # sx/sy scale from the fed image to the original resolution
+                sx = f.width / f.image.shape[1]
+                sy = f.height / f.image.shape[0]
+                scale_factors.append((sx, sy, f.width, f.height))
+            
+            if self._is_coreml:
+                results = []
+                for img in detect_images:
+                    # FEED IMAGE AS IS. Ultralytics handles padding/resizing internally.
+                    # We ensure sx/sy calculation above matches this image's resolution.
+                    res = model(img, conf=confidence_threshold, imgsz=self.detection_width, verbose=False)
+                    if res:
+                        results.append(res[0])
+            else:
+                results = model(detect_images, conf=confidence_threshold, imgsz=self.detection_width, 
+                                half=getattr(self, "_half", False), verbose=False)
+        
         detections: List[DetectionPacket] = []
-        for frame, result, (scale_x, scale_y, frame_width, frame_height) in zip(frames, results, scale_factors):
+        for frame, result, (sx, sy, orig_w, orig_h) in zip(frames, results, scale_factors):
             obb = getattr(result, "obb", None)
             if obb is None or obb.conf is None:
                 continue
+            
+            # Use xyxyxyxy (coordinates relative to the input image resolution)
             polygons = obb.xyxyxyxy.cpu().numpy()
             confidences = obb.conf.cpu().numpy()
             labels = (
@@ -267,53 +187,53 @@ class CardcaptorUltralyticsDetector:
                 if obb.cls is not None
                 else [0] * len(confidences)
             )
+
+            frame_area = orig_w * orig_h
+
             for polygon_array, confidence, label in zip(polygons, confidences, labels):
                 confidence_float = float(confidence)
                 if confidence_float < confidence_threshold:
                     continue
-                polygon = tuple(
-                    (float(point[0]) * scale_x, float(point[1]) * scale_y)
-                    for point in polygon_array
-                )
-                if len(polygon) != 4:
+                
+                # Apply scale factors to map back to original resolution
+                scaled_polygon = []
+                for pt in polygon_array:
+                    scaled_polygon.append((float(pt[0]) * sx, float(pt[1]) * sy))
+                
+                # Area gate: ignore tiny specks or giant background blobs
+                poly_area = cv2.contourArea(np.array(scaled_polygon, dtype=np.float32))
+                if not (0.01 * frame_area <= poly_area <= 0.95 * frame_area):
                     continue
 
-                poly_arr = np.array(polygon, dtype=np.float32)
-                poly_area = cv2.contourArea(poly_arr)
-                frame_area = frame.width * frame.height
-                if not (0.1 * frame_area <= poly_area <= 0.8 * frame_area):
-                    continue
-
-                # Check aspect ratio (short_side / long_side should be ~0.714)
-                # Relaxed gate (0.50 - 0.95) to allow for hand-held cards with perspective.
-                width_top = np.linalg.norm(poly_arr[1] - poly_arr[0])
-                width_bottom = np.linalg.norm(poly_arr[2] - poly_arr[3])
-                height_right = np.linalg.norm(poly_arr[2] - poly_arr[1])
-                height_left = np.linalg.norm(poly_arr[3] - poly_arr[0])
-                w = max(width_top, width_bottom)
-                h = max(height_right, height_left)
-                ratio = min(w, h) / max(w, h) if max(w, h) > 0 else 0
-                if not (0.50 <= ratio <= 0.95):
+                if len(scaled_polygon) != 4:
                     continue
 
                 detections.append(
                     DetectionPacket(
                         frame_index=frame.frame_index,
                         timestamp_ms=frame.timestamp_ms,
-                        width=frame.width,
-                        height=frame.height,
+                        width=orig_w,
+                        height=orig_h,
                         corner_detection=CornerDetection(
-                            corners=polygon,  # type: ignore[arg-type]
+                            corners=tuple(scaled_polygon),  # type: ignore[arg-type]
                             confidence=confidence_float,
                             metadata={
                                 "runtime": self.runtime,
-                                "model": self.model_name,
-                                "class_id": int(label),
+                                "label_index": int(label),
+                                "area_fraction": float(poly_area / frame_area),
                             },
                         ),
                     )
                 )
         return detections
+
+    @property
+    def confidence_threshold(self) -> float:
+        return self._conf_thresh
+
+    @property
+    def runtime(self) -> str:
+        return "coreml" if self._is_coreml else self._device
 
     def _load_model(self):
         if self._model is not None:
@@ -329,29 +249,45 @@ class CardcaptorUltralyticsDetector:
         self._device = self._resolve_device()
         model_path = _resolve_model_path(self.repo_id, self.filename)
 
-        # TensorRT fast path (CUDA only). Engines are GPU/TRT-version specific and
-        # cannot be prebuilt in the image, so we build-once-cache on the worker.
-        # Ladder: cached .engine → export .engine → FP16 .pt → FP32 .pt.
+        # TensorRT fast path (CUDA only)
         if self._device == "cuda":
             import os
             engine_path = os.path.splitext(model_path)[0] + ".engine"
             try:
                 if not os.path.exists(engine_path):
-                    exporter = YOLO(model_path)
-                    # dynamic batch so the final short batch still runs; half=FP16.
+                    exporter = YOLO(model_path, task="obb")
                     out = exporter.export(format="engine", half=True, dynamic=True,
-                                          imgsz=self.detection_width, device=0, verbose=False)
+                                          imgsz=self.detection_width, device=0, verbose=False,
+                                          task="obb")
                     engine_path = str(out) if out else engine_path
-                self._model = YOLO(engine_path)
+                self._model = YOLO(engine_path, task="obb")
                 print(f"[detector] backend=tensorrt engine={engine_path}", flush=True)
                 self._half = True
                 return self._model
             except Exception as e:
                 print(f"[detector] TensorRT unavailable ({e}); falling back to .pt FP16", flush=True)
 
-        self._model = YOLO(model_path)
+        # CoreML fast path (Apple Silicon only)
+        if self._device == "mps" and platform.system() == "Darwin" and platform.machine() == "arm64":
+            import os
+            mlpackage_path = os.path.splitext(model_path)[0] + ".mlpackage"
+            try:
+                if not os.path.exists(mlpackage_path):
+                    exporter = YOLO(model_path, task="obb")
+                    out = exporter.export(format="coreml", half=True,
+                                          imgsz=self.detection_width, verbose=False,
+                                          task="obb")
+                    mlpackage_path = str(out) if out else mlpackage_path
+                self._model = YOLO(mlpackage_path, task="obb")
+                print(f"[detector] backend=coreml engine={mlpackage_path}", flush=True)
+                self._half = True
+                self._is_coreml = True
+                return self._model
+            except Exception as e:
+                print(f"[detector] CoreML unavailable ({e}); falling back to .pt MPS", flush=True)
+
+        self._model = YOLO(model_path, task="obb")
         self._model.to(self._device)
-        # FP16 on CUDA even without TRT — the cheap ~2x win and our safety net.
         self._half = False
         if self._device == "cuda":
             try:
@@ -364,3 +300,41 @@ class CardcaptorUltralyticsDetector:
 
     def _resolve_device(self) -> str:
         return probe_torch_device_status(self.device).resolved
+
+
+def _resolve_model_path(repo_id: str, filename: str) -> str:
+    """Download and return the local path to the YOLO model."""
+    try:
+        from huggingface_hub import hf_hub_download
+    except ImportError as exc:
+        raise RuntimeError(
+            "huggingface_hub is required. Install with: pip install '.[model]'"
+        ) from exc
+
+    return hf_hub_download(repo_id=repo_id, filename=f"weights/{filename}")
+
+
+@dataclass(frozen=True)
+class TorchDeviceStatus:
+    requested: str
+    resolved: str
+    is_available: bool
+
+
+def probe_torch_device_status(requested: str = "auto") -> TorchDeviceStatus:
+    """Determine the best available PyTorch device."""
+    import torch
+    
+    if requested == "cuda":
+        avail = torch.cuda.is_available()
+        return TorchDeviceStatus(requested, "cuda" if avail else "cpu", avail)
+    if requested == "mps":
+        avail = torch.backends.mps.is_available()
+        return TorchDeviceStatus(requested, "mps" if avail else "cpu", avail)
+    
+    if torch.cuda.is_available():
+        return TorchDeviceStatus(requested, "cuda", True)
+    if torch.backends.mps.is_available():
+        return TorchDeviceStatus(requested, "mps", True)
+        
+    return TorchDeviceStatus(requested, "cpu", True)

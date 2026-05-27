@@ -24,8 +24,21 @@ _NOISE_SUBSTRINGS = (
 )
 
 
+import re
+
 def _is_noise(line: str) -> bool:
     return any(s in line for s in _NOISE_SUBSTRINGS)
+
+def _parse_progress(line: str) -> Optional[dict]:
+    # Expected format: [progress] detect.decoder 42% detail: Processing frame 600/1420
+    match = re.search(r"\[progress\]\s+([\w.]+)\s+(\d+)%\s+detail:\s+(.*)", line)
+    if match:
+        return {
+            "stage_id": match.group(1),
+            "pct": int(match.group(2)),
+            "detail": match.group(3)
+        }
+    return None
 
 from app.services.event_bus import Event, EventBus
 from app.services import _event_bus_registry
@@ -131,6 +144,10 @@ class PipelineRunner:
                             self.bus.emit(run_id, Event(name="log", payload={"line": line}))
                             self._persist_log(run_id, line)
                             
+                            progress = _parse_progress(line)
+                            if progress:
+                                self.bus.emit(run_id, Event(name="stage_progress", payload=progress))
+
                             if sampler is not None:
                                 stage = parse_metaflow_start_stage(line)
                                 if stage:

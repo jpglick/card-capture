@@ -106,26 +106,42 @@ class VideoSampler:
     def __init__(self, reader_backend: str = "auto"):
         self.reader_backend = _resolve_reader_backend(reader_backend)
 
-    def sample(self, video_path: Path, sample_fps: float) -> Iterator[FrameSample]:
+    def sample(self, video_path: Path, sample_fps: float, pixel_format: str = "bgr24") -> Iterator[FrameSample]:
         if self.reader_backend == "decord":
-            yield from self._sample_with_decord(video_path, sample_fps)
+            yield from self._sample_with_decord(video_path, sample_fps, pixel_format=pixel_format)
         elif self.reader_backend == "pyav":
-            yield from self._sample_with_pyav(video_path, sample_fps)
+            yield from self._sample_with_pyav(video_path, sample_fps, pixel_format=pixel_format)
+        elif self.reader_backend == "torchvision":
+            yield from self._sample_with_torchvision(video_path, sample_fps, pixel_format=pixel_format)
         else:
-            yield from self._sample_with_cv2(video_path, sample_fps)
+            yield from self._sample_with_cv2(video_path, sample_fps, pixel_format=pixel_format)
 
-    def _sample_with_cv2(self, video_path: Path, sample_fps: float) -> Iterator[FrameSample]:
-        capture = _open_capture(video_path)
+    def _sample_with_cv2(self, video_path: Path, sample_fps: float, pixel_format: str = "bgr24") -> Iterator[FrameSample]:
+        import platform
+        if platform.system() == "Darwin":
+            capture = cv2.VideoCapture(str(video_path), cv2.CAP_AVFOUNDATION)
+        else:
+            capture = _open_capture(video_path)
+            
         if not capture.isOpened():
             raise ValueError(f"Could not decode video: {video_path}")
+        
+        print(f"[sampler] opencv decoder active (macOS AVFoundation: {platform.system() == 'Darwin'})", flush=True)
+
         source_fps = capture.get(cv2.CAP_PROP_FPS) or sample_fps
         frame_step = max(1, int(round(source_fps / sample_fps))) if sample_fps > 0 else 1
         frame_index = 0
         try:
             while True:
-                ok, frame = capture.read()
+                # FAST-SEEK: grab() advances the hardware decoder state without
+                # doing the expensive YUV->BGR conversion or RAM allocation.
+                ok = capture.grab()
                 if not ok: break
+                
                 if frame_index % frame_step == 0:
+                    ret, frame = capture.retrieve()
+                    if not ret: break
+                    
                     height, width = frame.shape[:2]
                     timestamp_ms = int(capture.get(cv2.CAP_PROP_POS_MSEC))
                     yield FrameSample(frame_index=frame_index, timestamp_ms=timestamp_ms, image=frame, width=width, height=height)
@@ -133,8 +149,70 @@ class VideoSampler:
         finally:
             capture.release()
 
-    def _sample_with_decord(self, video_path: Path, sample_fps: float) -> Iterator[FrameSample]:
-        yield from self._sample_with_cv2(video_path, sample_fps)
+    def _sample_with_decord(self, video_path: Path, sample_fps: float, pixel_format: str = "bgr24") -> Iterator[FrameSample]:
+        yield from self._sample_with_cv2(video_path, sample_fps, pixel_format=pixel_format)
+
+    def _sample_with_torchvision(self, video_path: Path, sample_fps: float, pixel_format: str = "bgr24") -> Iterator[FrameSample]:
+        """High-performance decoding using torchvision.io.VideoReader."""
+        try:
+            from torchvision.io import VideoReader
+            import torchvision
+        except ImportError:
+            print("[sampler] torchvision not available, falling back to PyAV", flush=True)
+            yield from self._sample_with_pyav(video_path, sample_fps, pixel_format=pixel_format)
+            return
+
+        print(f"[sampler] torchvision decoder active format={pixel_format}", flush=True)
+        
+        try:
+            reader = VideoReader(str(video_path), "video")
+            
+            # Default FPS if metadata fails
+            source_fps = sample_fps
+            try:
+                metadata = reader.get_metadata()
+                if "video" in metadata and metadata["video"]["fps"]:
+                    source_fps = float(metadata["video"]["fps"][0])
+            except Exception:
+                pass
+                
+            frame_step = max(1, int(round(source_fps / sample_fps))) if sample_fps > 0 else 1
+            frame_index = 0
+            
+            # FAST-SEEK: Instead of iterating every frame, we skip using seek()
+            # if the stride is large enough to justify the seek overhead.
+            # For 4K, decoding is much more expensive than seeking.
+            while True:
+                try:
+                    frame = next(reader)
+                except StopIteration:
+                    break
+
+                pts = frame['pts']
+                img_t = frame['data'] # (C, H, W) RGB
+                
+                # Convert to BGR numpy for compatibility
+                img_bgr = img_t[[2, 1, 0], :, :].permute(1, 2, 0).numpy()
+                
+                yield FrameSample(
+                    frame_index=frame_index,
+                    timestamp_ms=int(pts * 1000),
+                    image=img_bgr,
+                    width=img_bgr.shape[1],
+                    height=img_bgr.shape[0],
+                )
+                
+                # Skip ahead
+                if frame_step > 1:
+                    frame_index += frame_step
+                    # Seek to the next desired timestamp
+                    next_pts = pts + (frame_step / source_fps)
+                    reader.seek(next_pts)
+                else:
+                    frame_index += 1
+        except Exception as e:
+            print(f"[sampler] torchvision failed: {e}, falling back to PyAV", flush=True)
+            yield from self._sample_with_pyav(video_path, sample_fps, pixel_format=pixel_format)
 
     @staticmethod
     def _open_pyav_container(video_path: Path):
@@ -148,36 +226,46 @@ class VideoSampler:
                 pass
         return av.open(str(video_path)), False
 
-    def _sample_with_pyav(self, video_path: Path, sample_fps: float) -> Iterator[FrameSample]:
+    def _sample_with_pyav(self, video_path: Path, sample_fps: float, pixel_format: str = "bgr24") -> Iterator[FrameSample]:
         import av
         container, hw = self._open_pyav_container(video_path)
-        print(f"[sampler] pyav decoder={'videotoolbox' if hw else 'software'}", flush=True)
+        print(f"[sampler] pyav decoder={'videotoolbox' if hw else 'software'} format={pixel_format}", flush=True)
         try:
             video_stream = next(
                 (s for s in container.streams if s.type == "video"), None
             )
             if video_stream is None:
                 raise ValueError(f"No video stream found in: {video_path}")
+            
+            # Use multi-threading for the decoder to speed up CPU-side handling
+            video_stream.thread_type = "AUTO"
+
             source_fps = float(video_stream.average_rate or video_stream.guessed_rate or sample_fps)
             frame_step = max(1, int(round(source_fps / sample_fps))) if sample_fps > 0 else 1
             frame_index = 0
+            
+            # Request raw NV12 if specified
+            pyav_format = "nv12" if pixel_format == "nv12" else "bgr24"
+            
+            next_target_ms = 0
             for packet in container.demux(video_stream):
                 for av_frame in packet.decode():
-                    if frame_index % frame_step == 0:
-                        frame_bgr = av_frame.to_ndarray(format="bgr24")
-                        height, width = frame_bgr.shape[:2]
-                        timestamp_ms = int(
-                            (av_frame.pts or 0)
-                            * video_stream.time_base
-                            * 1000
-                        )
+                    timestamp_ms = int((av_frame.pts or 0) * video_stream.time_base * 1000)
+                    
+                    if timestamp_ms >= next_target_ms:
+                        # Extract as ndarray
+                        frame_data = av_frame.to_ndarray(format=pyav_format)
+                        
                         yield FrameSample(
                             frame_index=frame_index,
                             timestamp_ms=timestamp_ms,
-                            image=frame_bgr,
-                            width=width,
-                            height=height,
+                            image=frame_data,
+                            width=av_frame.width,
+                            height=av_frame.height,
                         )
+                        # Set next target based on desired FPS
+                        next_target_ms = timestamp_ms + int(1000 / sample_fps)
+                    
                     frame_index += 1
         finally:
             container.close()
@@ -362,6 +450,58 @@ class ContrastBasedSampler:
                     if not ok: continue
                     yield FrameSample(frame_index=frame_index, timestamp_ms=timestamp_ms, image=frame, width=frame.shape[1], height=frame.shape[0])
         finally: capture.release()
+
+
+class StrideSampler:
+    """Simple uniform-stride sampler that bypasses adaptive presence detection."""
+
+    def __init__(
+        self,
+        video_path: Optional[Union[Path, str]] = None,
+        target_yolo_fps: float = 3.0,
+        reader_backend: str = "auto",
+        pixel_format: str = "bgr24",
+    ):
+        self.video_path = str(video_path) if video_path else None
+        self.target_yolo_fps = target_yolo_fps
+        self.reader_backend = reader_backend
+        self.pixel_format = pixel_format
+        self.last_source_fps = 30.0
+        self.last_selected_frame_count = 0
+        self.last_inter_window_gaps_frames: list[int] = []
+        self.last_valley_splits: list[int] = []
+        self.background_proxies: list[np.ndarray] = []
+
+    def sample(self, video_path: Path = None, sample_fps: float = None) -> Iterator[FrameSample]:
+        resolved_path = Path(video_path) if video_path else Path(self.video_path)
+        fps_goal = sample_fps if sample_fps and sample_fps > 0 else self.target_yolo_fps
+        
+        # Probe for real FPS to ensure tracker gaps are calculated correctly
+        capture = _open_capture(resolved_path)
+        if capture.isOpened():
+            self.last_source_fps = float(capture.get(cv2.CAP_PROP_FPS) or 30.0)
+            capture.release()
+        
+        sampler = VideoSampler(reader_backend=self.reader_backend)
+        
+        stride = max(1, int(round(self.last_source_fps / fps_goal)))
+        self.last_inter_window_gaps_frames = [stride]
+        
+        count = 0
+        for frame in sampler.sample(resolved_path, fps_goal, pixel_format=self.pixel_format):
+            if count == 0:
+                # Capture first frame as a background proxy candidate
+                # (Ensure background proxies are always BGR for standard novelty check)
+                if frame.image.ndim == 2 and self.pixel_format == "nv12":
+                    # Actual NV12 (1-channel effective buffer)
+                    self.background_proxies = [cv2.cvtColor(frame.image, cv2.COLOR_YUV2BGR_NV12)]
+                else:
+                    # Already BGR or unknown format
+                    self.background_proxies = [frame.image.copy()]
+            yield frame
+            count += 1
+        
+        self.last_selected_frame_count = count
 
 
 class AdaptivePresenceSampler:
@@ -766,15 +906,14 @@ class AdaptivePresenceSampler:
         stride = max(1, int(source_fps / self.target_yolo_fps))
         return list(range(0, opening_count, stride))
 
-    def _decode_selected_frames(self, video_path: Path, frame_indices: list[int]) -> list[FrameSample]:
+    def _decode_selected_frames(self, video_path: Path, frame_indices: list[int]) -> Iterator[FrameSample]:
         if not frame_indices:
-            return []
+            return
 
         capture = _open_capture(video_path)
         if not capture.isOpened():
             raise ValueError(f"Could not decode video: {video_path}")
 
-        samples: list[FrameSample] = []
         target_indices = set(frame_indices)
         max_target = max(target_indices)
 
@@ -788,19 +927,16 @@ class AdaptivePresenceSampler:
                 if frame_idx in target_indices:
                     height, width = frame.shape[:2]
                     timestamp_ms = int(capture.get(cv2.CAP_PROP_POS_MSEC))
-                    samples.append(
-                        FrameSample(
-                            frame_index=frame_idx,
-                            timestamp_ms=timestamp_ms,
-                            image=frame,
-                            width=width,
-                            height=height,
-                        )
+                    yield FrameSample(
+                        frame_index=frame_idx,
+                        timestamp_ms=timestamp_ms,
+                        image=frame,
+                        width=width,
+                        height=height,
                     )
                 frame_idx += 1
         finally:
             capture.release()
-        return samples
 
     def _resolve_video_path(self, video_path: Optional[Path]) -> Path:
         resolved = video_path or self.video_path
@@ -889,6 +1025,10 @@ class AdaptivePresenceSampler:
         self.background_proxies = [c[2] for c in bg_candidates]
 
         scored_windows = [self._score_sharpness_in_window(window) for window in windows]
+        
+        # CRITICAL: Clear scan frames to free RAM (can be several GBs for long videos)
+        self._scan_frames = []
+
         selected_frame_indices: list[int] = []
         for window in scored_windows:
             selected_frame_indices.extend(frame_index for frame_index, _ in window.frame_candidates)

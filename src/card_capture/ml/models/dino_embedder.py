@@ -63,6 +63,25 @@ class DinoEmbedder:
         return embedding / norm
 
     @torch.no_grad()
+    def embed_tensors_batch(self, tensors: torch.Tensor) -> torch.Tensor:
+        """Batch-compute embeddings from a (N,3,H,W) float32 [0,1] tensor.
+        Optimized for zero-download pipelines where frames are already on GPU.
+        Input must be RGB and already resized to 224x224.
+        """
+        if tensors.numel() == 0:
+            return torch.empty((0, self.dim), device=self.device)
+            
+        # Manually apply normalization (ImageNet stats)
+        # Note: input is [0,1], so mean/std are scaled accordingly
+        mean = torch.tensor([0.485, 0.456, 0.406], device=self.device).view(1, 3, 1, 1)
+        std = torch.tensor([0.229, 0.224, 0.225], device=self.device).view(1, 3, 1, 1)
+        normalized = (tensors - mean) / std
+        
+        embeddings = self.model(normalized)
+        norm = embeddings.norm(p=2, dim=1, keepdim=True)
+        return embeddings / norm
+
+    @torch.no_grad()
     def embed_batch(self, images: list[Image.Image]) -> torch.Tensor:
         """Batch-compute L2-normalized embeddings."""
         if not images:

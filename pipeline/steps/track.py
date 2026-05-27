@@ -14,6 +14,23 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from pipeline.steps.start import RunContext
 from pipeline.steps.novelty import NoveltyOutput
 
+# Average-hash Hamming distance (of 64 bits) above which the primary detection's
+# appearance is considered to have *left* the currently-tracked card — a candidate
+# same-position swap that motion-only tracking and centroid-jump cannot see.
+# Tuned for 8x8 aHash. Note: frame-to-frame aHash noise for a *static* card is
+# mean ~9 / p90 ~18 bits, so this threshold alone cannot separate swaps from noise
+# — see _CARD_SWAP_PERSIST_FRAMES.
+_CARD_SWAP_AHASH_BITS = 18
+
+# A real same-position swap settles into a *new, stable* appearance; a one-frame
+# glare/hand/ROI-jitter spike reverts immediately. We therefore require the new
+# appearance to persist across this many consecutive single-card frames before
+# committing a session reset. This is the actual noise rejector: without it, the
+# threshold sits at the p90 of normal noise and fires ~171×/video (5x track
+# over-fragmentation). With persistence the reference also drifts on consistent
+# frames so slow rotation/lighting changes don't trip it.
+_CARD_SWAP_PERSIST_FRAMES = 3
+
 
 @dataclass
 class TrackOutput:
@@ -76,7 +93,7 @@ def run(ctx: RunContext, novelty_out: NoveltyOutput) -> TrackOutput:
         raw_rows.append(
             _DetectionEnvelope(
                 detection_packet=dp,
-                source_frame_path=row["source_frame_path"],
+                source_frame_path=row.get("source_frame_path", ""),
                 triage_metrics=row.get("triage_metrics", {}),
             )
         )
@@ -123,11 +140,36 @@ def run(ctx: RunContext, novelty_out: NoveltyOutput) -> TrackOutput:
         key = -1 if candidate.frame_index is None else int(candidate.frame_index)
         by_frame.setdefault(key, []).append(candidate)
 
+    # Per-frame primary appearance hash: the highest-confidence detection's
+    # bbox aHash (computed during detect). Drives the card-swap reset below.
+    from card_capture.frame_quality import ahash_hamming
+    frame_primary_ahash: Dict[int, int] = {}
+    _best_conf: Dict[int, float] = {}
+    for row in detection_rows:
+        fi = row.get("frame_index")
+        ah = row.get("triage_metrics", {}).get("ahash")
+        if fi is None or ah is None:
+            continue
+        fi = int(fi)
+        conf = float(row.get("confidence", 0.0))
+        if conf >= _best_conf.get(fi, -1.0):
+            _best_conf[fi] = conf
+            frame_primary_ahash[fi] = int(ah)
+
+    # Corners are full-res pixel coords, so centroid-jump must scale by the real
+    # frame width (was hard-coded to 1280, mis-scaling the 0.30x jump threshold).
+    _frame_width_px = int(detection_rows[0]["width"]) if detection_rows else 3840
+
     storage = Storage(Path(ctx.db_path))
 
     current_session_id = 0
     frame_to_session: Dict[int, int] = {}
     last_frame_idx = -1
+    # Card-swap appearance state: a trailing reference hash for the card currently
+    # being tracked, plus a buffer of consecutive frames whose appearance has left
+    # that reference (a *candidate* swap awaiting persistence confirmation).
+    swap_ref_ahash: Optional[int] = None
+    swap_pending: List[int] = []
     tracker_events: List[Dict[str, Any]] = []
     tracked_instance_ids: Set[str] = set()
     session_manager_active: Optional[str] = None
@@ -151,14 +193,61 @@ def run(ctx: RunContext, novelty_out: NoveltyOutput) -> TrackOutput:
                 tracked_instance_ids.clear()
         last_frame_idx = frame_index
 
+        # Card-swap split (appearance): a new card placed in the same spot keeps
+        # the same centroid and produces no frame gap, so neither the gap nor the
+        # centroid-jump signal fires. A sharp change in the primary detection's
+        # appearance hash is the only tell — split so each card gets its own track.
+        frame_candidates = by_frame.get(frame_index, [])
+        cur_ahash = frame_primary_ahash.get(frame_index)
+        
+        # Only perform the global card_swap reset if we are tracking a single clear primary object.
+        # If there are multiple candidates, the 'primary' confidence can alternate between them, 
+        # causing false-positive card_swaps on every frame.
+        if cur_ahash is not None and len(frame_candidates) <= 1:
+            if swap_ref_ahash is None:
+                swap_ref_ahash = cur_ahash
+            elif ahash_hamming(cur_ahash, swap_ref_ahash) < _CARD_SWAP_AHASH_BITS:
+                # Appearance still matches the tracked card. Drift the reference so
+                # gradual rotation/lighting changes don't accumulate into a swap.
+                swap_ref_ahash = cur_ahash
+                swap_pending = []
+            else:
+                # Appearance left the reference — a *candidate* swap. A one-frame
+                # glare/jitter spike reverts (the next frame matches the reference
+                # again and clears the buffer); a real swap settles into a stable
+                # new appearance and stays. Require the new appearance to persist,
+                # and to be internally stable, before committing the reset.
+                if swap_pending and ahash_hamming(cur_ahash, swap_pending[0]) >= _CARD_SWAP_AHASH_BITS:
+                    swap_pending = [cur_ahash]   # not yet a stable new card; restart
+                else:
+                    swap_pending.append(cur_ahash)
+                if len(swap_pending) >= _CARD_SWAP_PERSIST_FRAMES:
+                    storage.add_pipeline_event(
+                        video_id=video_id, frame_index=frame_index,
+                        timestamp_ms=timestamp_ms, event_type="session_reset",
+                        data={"reason": "card_swap"},
+                    )
+                    print(f"[Stage: Tracking] | Session: {current_session_id} | Action: Session Reset (card_swap)")
+                    tracker.reset()
+                    centroid_detector.reset()
+                    tracked_instance_ids.clear()
+                    session_manager_active = None
+                    swap_ref_ahash = cur_ahash
+                    swap_pending = []
+        elif cur_ahash is not None and len(frame_candidates) > 1:
+            # Multiple candidates: the 'primary' can alternate between them, so we
+            # can't trust the appearance signal. Refresh the reference for when it
+            # returns to a single card, but never reset on a multi-candidate frame.
+            swap_ref_ahash = cur_ahash
+            swap_pending = []
+
         # Centroid jump split
-        frame_candidates_for_centroid = by_frame.get(frame_index, [])
         primary_obb_corners = None
-        if frame_candidates_for_centroid:
-            best = max(frame_candidates_for_centroid, key=lambda c: c.score.total)
+        if frame_candidates:
+            best = max(frame_candidates, key=lambda c: c.score.total)
             if best.corners:
                 primary_obb_corners = np.array(best.corners, dtype=np.float32)
-        frame_width = 1280
+        frame_width = _frame_width_px
         if centroid_detector.update(primary_obb_corners, frame_width):
             storage.add_pipeline_event(
                 video_id=video_id, frame_index=frame_index,

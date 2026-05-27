@@ -100,26 +100,68 @@ class KorniaNormalizer:
 
     def warp_canonical_batch_gpu(
         self,
-        batch_data: List[Tuple["torch.Tensor", List[Point]]],
+        batch_data: List[Tuple[Union["torch.Tensor", np.ndarray], List[Point]]],
         rotate_180: bool = True,
         return_gpu: bool = False,
     ) -> Union[List[np.ndarray], "torch.Tensor"]:
-        """Warp from GPU-resident uint8 (H,W,3) BGR tensors — no host→device upload.
-
-        Each item's image is a torch tensor already on the GPU (a slice of the
-        decoded decord batch). Skips the np.stack/from_numpy/.to() upload.
-
-        Contract: all input tensors must be uint8 (H,W,3) and reside on the same device.
-        Mixed-device inputs will raise at torch.stack(); no additional runtime check is added.
+        """Warp from GPU-resident uint8 (H,W,3) BGR tensors or numpy arrays.
+        Highly optimized for zero-download 4K pipelines: groups crops by source 
+        frame and uses tensor.expand() to avoid massive VRAM copies.
         """
-        tensors: List["torch.Tensor"] = []
-        mats: List[np.ndarray] = []
-        for img_t, corners in batch_data:
-            if img_t is None:
-                continue
-            tensors.append(img_t)
-            mats.append(self._perspective_matrix(corners))
-        if not tensors:
+        if not batch_data:
             return [] if not return_gpu else torch.empty(0).to(self.device)
-        batch_u8 = torch.stack(tensors, dim=0).to(self.device, non_blocking=True)
-        return self._warp_from_stacked(batch_u8, mats, rotate_180, return_gpu=return_gpu)
+
+        # Group corners by tensor to avoid duplicate float conversions
+        # Use object data_ptr() for tensors, or id() for numpy arrays
+        grouped = {}
+        order_map = []  # To reconstruct the original output order
+        for idx, (img, corners) in enumerate(batch_data):
+            if img is None:
+                continue
+            if isinstance(img, np.ndarray):
+                t = torch.from_numpy(img).to(self.device, non_blocking=True)
+                key = t.data_ptr()
+                grouped[key] = {'tensor': t, 'indices': [], 'mats': []}
+            else:
+                key = img.data_ptr()
+                if key not in grouped:
+                    grouped[key] = {'tensor': img, 'indices': [], 'mats': []}
+            
+            grouped[key]['indices'].append(idx)
+            grouped[key]['mats'].append(self._perspective_matrix(corners))
+
+        results = [None] * len(batch_data)
+        for group in grouped.values():
+            t_u8 = group['tensor'] # (H, W, 3) uint8 BGR
+            # Convert to (1, 3, H, W) float RGB
+            t_float = t_u8.permute(2, 0, 1)[[2, 1, 0], :, :].unsqueeze(0).float() / 255.0
+            
+            n_crops = len(group['mats'])
+            # Expand to (N, 3, H, W) without allocating memory!
+            t_expanded = t_float.expand(n_crops, -1, -1, -1)
+            
+            mats = torch.from_numpy(np.stack(group['mats'], axis=0).astype(np.float32)).to(
+                self.device, non_blocking=True
+            )
+            
+            warped = kornia.geometry.transform.warp_perspective(
+                t_expanded, mats, (self.height, self.width)
+            )
+            
+            # Back to (N, H, W, 3) uint8 BGR
+            out = (warped[:, [2, 1, 0], :, :] * 255.0).clamp_(0, 255).to(torch.uint8)
+            out = out.permute(0, 2, 3, 1).contiguous()
+            
+            if rotate_180:
+                out = torch.rot90(out, 2, dims=[1, 2])
+                
+            if not return_gpu:
+                out = out.cpu().numpy()
+                
+            for i, orig_idx in enumerate(group['indices']):
+                results[orig_idx] = out[i]
+
+        valid_results = [r for r in results if r is not None]
+        if return_gpu:
+            return torch.stack(valid_results) if valid_results else torch.empty(0).to(self.device)
+        return valid_results

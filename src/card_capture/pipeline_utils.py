@@ -13,6 +13,7 @@ from typing import Any, List
 
 import cv2
 import numpy as np
+import torch
 
 # _open_capture is imported at module level so it can be monkeypatched in tests.
 # _laplacian_select_frames references this name.
@@ -58,46 +59,58 @@ def _glare_mask(image: np.ndarray) -> np.ndarray:
     return mask.astype(np.uint8)
 
 
-def _laplacian_variance_batch(images: List[np.ndarray]) -> List[float]:
+def _laplacian_variance_batch(images: List[Union[np.ndarray, "torch.Tensor"]]) -> List[float]:
     """GPU-batched Laplacian variance, one float per image.
-
-    Uploads all images in a single H2D transfer and computes Laplacian variance
-    as a batch on GPU. Falls back to per-image cv2.Laplacian if CUDA is unavailable
-    or if the GPU path raises any exception (OOM, missing driver, etc.).
+    Supports numpy (uploads) and direct torch tensors.
     """
     if not images:
         return []
 
     try:
-        import torch
-        import kornia.filters as kf
-        if not torch.cuda.is_available():
-            raise RuntimeError("no CUDA")
+        from .detectors import probe_torch_device_status
+        resolved_device = probe_torch_device_status("auto").resolved
+        if resolved_device == "cpu":
+            raise RuntimeError("no GPU")
 
-        grays = [
-            cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
-            for img in images
-        ]
+        grays = []
+        for img in images:
+            if torch.is_tensor(img):
+                # GPU Tensor
+                if img.ndim == 3 and img.shape[2] >= 3:
+                    # BGR -> Gray (cv2 weights)
+                    g = 0.114 * img[..., 0] + 0.587 * img[..., 1] + 0.299 * img[..., 2]
+                else:
+                    g = img
+                grays.append(g.float())
+            else:
+                # Numpy
+                g_np = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+                grays.append(torch.from_numpy(g_np).to(resolved_device).float())
+
+        # All same shape?
         shape = grays[0].shape
         if all(g.shape == shape for g in grays):
-            stacked = np.stack(grays, axis=0)               # (N, H, W) uint8
-            batch = torch.from_numpy(stacked).cuda(non_blocking=True)
-            batch = batch.unsqueeze(1).float()               # (N, 1, H, W)
-            lap = kf.laplacian(batch, kernel_size=3)         # (N, 1, H, W)
-            variances = lap.var(dim=[2, 3]).squeeze(1)       # (N,)
+            batch = torch.stack(grays, dim=0).unsqueeze(1)    # (N, 1, H, W)
+            # 3x3 Laplacian kernel
+            k = torch.tensor([[0., 1., 0.], [1., -4., 1.], [0., 1., 0.]],
+                             device=resolved_device).view(1, 1, 3, 3)
+            lap = F.conv2d(batch, k, padding=1)
+            variances = lap.reshape(len(images), -1).var(dim=1, unbiased=False)
             return [float(v) for v in variances.cpu()]
         else:
-            # Mixed shapes (rare) — per-image on GPU to avoid stacking
+            # Mixed shapes
             results = []
+            k = torch.tensor([[0., 1., 0.], [1., -4., 1.], [0., 1., 0.]],
+                             device=resolved_device).view(1, 1, 3, 3)
             for g in grays:
-                t = torch.from_numpy(g).cuda(non_blocking=True).float()
-                t = t.unsqueeze(0).unsqueeze(0)              # (1, 1, H, W)
-                lap = kf.laplacian(t, kernel_size=3)
+                lap = F.conv2d(g.unsqueeze(0).unsqueeze(0), k, padding=1)
                 results.append(float(lap.var().item()))
             return results
     except Exception:
         results = []
         for img in images:
+            if torch.is_tensor(img):
+                img = img.cpu().numpy()
             g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
             results.append(float(cv2.Laplacian(g, cv2.CV_64F).var()))
         return results
@@ -340,11 +353,29 @@ def _laplacian_select_frames(
             frame = decoded_frames.get(curr)
             if frame is None:
                 continue
-            h, w = frame.shape[:2]
-            scale = 640 / w if w > 640 else 1.0
-            small = cv2.resize(frame, (int(w * scale), int(h * scale))) if scale < 1.0 else frame
+            
+            if torch.is_tensor(frame):
+                # GPU-Side Resizing for zero-download path
+                h, w = frame.shape[0], frame.shape[1]
+                if w > 640:
+                    scale = 640 / w
+                    # (H,W,C) -> (1,C,H,W)
+                    t = frame.permute(2, 0, 1).unsqueeze(0).float()
+                    small_t = F.interpolate(t, size=(int(h * scale), 640), mode="bilinear", align_corners=False)
+                    # (1,C,h',w') -> (h',w',C) uint8
+                    small = small_t.squeeze(0).permute(1, 2, 0).clamp(0, 255).to(torch.uint8)
+                else:
+                    small = frame
+            else:
+                # Numpy path
+                h, w = frame.shape[:2]
+                scale = 640 / w if w > 640 else 1.0
+                small = cv2.resize(frame, (int(w * scale), int(h * scale))) if scale < 1.0 else frame
+            
             frame_list.append(small)
             index_list.append(curr)
+        
+        # _laplacian_variance_batch handles both numpy (uploads) and tensors (direct)
         variances = _laplacian_variance_batch(frame_list)
         for curr, lap_var in zip(index_list, variances):
             for ti in track_info.values():
@@ -435,8 +466,8 @@ except Exception as _e:
     _decord_import_error = f"{type(_e).__name__}: {_e}"
 
 
-def decode_frames_gpu(video_path, indices: list) -> dict:
-    """Decode specific frames via NVDEC; return {frame_index: np.ndarray}.
+def decode_frames_gpu(video_path, indices: list, return_tensors: bool = False) -> dict:
+    """Decode specific frames via NVDEC; return {frame_index: np.ndarray | torch.Tensor}.
 
     Hard-fails if GPU context unavailable and CC_CUDA_ALLOW_CPU_FALLBACK is not set.
     """
@@ -445,12 +476,29 @@ def decode_frames_gpu(video_path, indices: list) -> dict:
         return {}
 
     allow_fallback = os.environ.get("CC_CUDA_ALLOW_CPU_FALLBACK", "0") == "1"
+    if not allow_fallback and not torch.cuda.is_available():
+        # Automatically allow fallback in non-CUDA environments (dev/MPS)
+        # to avoid requiring environment variables for local runs.
+        allow_fallback = True
 
     # decord is None when the library couldn't be imported (e.g. missing NVIDIA driver
-    # on a dev machine). Fall back to OpenCV sequential decode if allowed.
+    # on a dev machine). Fall back to PyAV (faster on Mac) or OpenCV if allowed.
     if decord is None:
         if allow_fallback:
-            return _decode_frames_opencv(video_path, indices)
+            # OpenCV over AVFoundation with grab()/retrieve() is the fastest path
+            # for extracting scattered 4K HEVC frames on this footage — benchmarked
+            # at 49s vs 85s (PyAV) vs 154s (naive cap.read() of every frame) for the
+            # ~526 canonical frames spanning the whole video. grab() advances the
+            # hardware decoder without paying the BGR conversion on skipped frames.
+            # PyAV remains a fallback only if OpenCV's backend can't open the file.
+            result = _decode_frames_opencv(video_path, indices)
+            if result:
+                return result
+            try:
+                import av  # noqa: F401
+                return _decode_frames_pyav(video_path, indices)
+            except ImportError:
+                return result
         raise RuntimeError(
             "decode_frames_gpu requires decord with NVDEC support. "
             f"import decord failed: {_decord_import_error}. "
@@ -485,18 +533,27 @@ def decode_frames_gpu(video_path, indices: list) -> dict:
             ) from e
     frames = vr.get_batch(sorted_indices)
     # With decord.bridge.set_bridge('torch'), get_batch returns a torch.Tensor
-    # on the same device as ctx (cuda if NVDEC, cpu if fallback). .cpu().numpy()
-    # is a no-op when ctx is cpu and a single GPU→host copy when ctx is cuda —
-    # same total work as the old NDArray.asnumpy(), but via a shared CUDA
-    # context that doesn't deadlock against torch.
-    frames_np = frames.cpu().numpy()  # (N, H, W, 3) uint8
-    result = {idx: frames_np[i] for i, idx in enumerate(sorted_indices)}
-    del frames, frames_np
+    # on the same device as ctx (cuda if NVDEC, cpu if fallback). 
+    
+    if return_tensors:
+        result = {idx: frames[i] for i, idx in enumerate(sorted_indices)}
+    else:
+        frames_np = frames.cpu().numpy()  # (N, H, W, 3) uint8
+        result = {idx: frames_np[i] for i, idx in enumerate(sorted_indices)}
+        del frames_np
+        
+    del frames
     return result
 
 
 def _decode_frames_opencv(video_path, indices: list) -> dict:
-    """Sequential CPU fallback for decode_frames_gpu when decord is unavailable."""
+    """Decode specific frames via OpenCV (AVFoundation on macOS).
+
+    Uses grab()/retrieve() rather than read(): grab() advances the decoder for
+    frames we don't want without running the BGR color conversion, so we only pay
+    full decode cost for the requested frames. For ~526 frames scattered across an
+    8.6k-frame 4K HEVC video this is ~3x faster than read()-ing every frame.
+    """
     import cv2
     sorted_indices = sorted(set(indices))
     if not sorted_indices:
@@ -507,13 +564,52 @@ def _decode_frames_opencv(video_path, indices: list) -> dict:
     max_idx = sorted_indices[-1]
     idx_set = set(sorted_indices)
     while curr <= max_idx:
-        ok, frame = cap.read()
-        if not ok:
-            break
         if curr in idx_set:
+            ok, frame = cap.read()
+            if not ok:
+                break
             result[curr] = frame
+        else:
+            # Advance the decoder without decoding to BGR — much cheaper than read().
+            if not cap.grab():
+                break
         curr += 1
     cap.release()
+    return result
+
+
+def _decode_frames_pyav(video_path, indices: list) -> dict:
+    """Faster macOS fallback using PyAV with VideoToolbox hardware acceleration."""
+    import av
+    import platform
+    
+    sorted_indices = sorted(set(indices))
+    if not sorted_indices:
+        return {}
+    
+    options = {}
+    if platform.system() == "Darwin":
+        options["hwaccel"] = "videotoolbox"
+    
+    container = av.open(str(video_path), options=options)
+    result: dict = {}
+    idx_set = set(sorted_indices)
+    max_idx = sorted_indices[-1]
+    
+    try:
+        video_stream = next(s for s in container.streams if s.type == "video")
+        curr = 0
+        for packet in container.demux(video_stream):
+            for av_frame in packet.decode():
+                if curr in idx_set:
+                    # Convert to BGR for consistency with OpenCV/decord
+                    result[curr] = av_frame.to_ndarray(format="bgr24")
+                if curr >= max_idx:
+                    return result
+                curr += 1
+    finally:
+        container.close()
+    
     return result
 
 

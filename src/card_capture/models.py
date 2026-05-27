@@ -10,7 +10,7 @@ Point = Tuple[float, float]
 Polygon = Tuple[Point, Point, Point, Point]
 
 
-@dataclass(frozen=True)
+@dataclass
 class FrameSample:
     frame_index: int
     timestamp_ms: int
@@ -54,7 +54,7 @@ class ProcessingResult:
     telemetry: Dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass(frozen=True)
+@dataclass
 class FramePacket:
     frame_index: int
     timestamp_ms: int

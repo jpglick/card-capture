@@ -1,4 +1,4 @@
-"""_run_cuda_inference warps from the GPU-resident tensor and fills the crop cache."""
+"""_run_fused_inference warps from the GPU-resident tensor and fills the crop cache."""
 import numpy as np
 import pytest
 from unittest.mock import MagicMock
@@ -22,7 +22,7 @@ def _make_ctx(tmp_path):
     )
 
 
-def test_run_cuda_inference_warps_from_gpu_tensor(tmp_path, monkeypatch):
+def test_run_fused_inference_warps_from_gpu_tensor(tmp_path, monkeypatch):
     from pipeline.steps import detect
     from card_capture.models import FrameSample, CornerDetection
 
@@ -65,7 +65,7 @@ def test_run_cuda_inference_warps_from_gpu_tensor(tmp_path, monkeypatch):
 
     ctx = _make_ctx(tmp_path)
     crop_cache: dict = {}
-    out = detect._run_cuda_inference(ctx, sampler, detector, tmp_path, tmp_path, crop_cache=crop_cache)
+    out = detect._run_fused_inference(ctx, sampler, detector, tmp_path, tmp_path, crop_cache=crop_cache)
 
     assert len(out.detection_rows) == 1
     det_id = out.detection_rows[0]["detection_id"]
