@@ -16,6 +16,8 @@ dependencies = [
   "httpx>=0.27.0",
   "python-dotenv>=1.0.0",
   "boto3>=1.34.0",
+  "opentelemetry-api>=1.25.0",
+  "opentelemetry-sdk>=1.25.0",
 ]
 
 [project.optional-dependencies]
@@ -71,8 +73,9 @@ markers = [
   "mps: requires Apple Silicon MPS",
   "provider: requires external provider credentials",
   "benchmark: real-video performance benchmark",
-  "slow: takes > 10s to run",
+  "slow: takes >5s; excluded from fast PR lane",
 ]
+addopts = "-m 'not quarantine and not benchmark'"
 
 [tool.setuptools.packages.find]
 where = ["src"]
