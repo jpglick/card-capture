@@ -81,6 +81,25 @@ markers = [
 ]
 addopts = "-m 'not quarantine and not benchmark'"
 
+[tool.gpu_strict_lint]
+# Files in scope of the GPU-strict AST scanner. Populated in Phase 2.
+files = []
+forbidden_calls = [
+  "cv2.VideoCapture",
+  "cv2.imread",
+  "cv2.imwrite",            # exception: card_capture.runtime.batches.to_cpu_for_export
+  "PIL.Image.open",
+  "torch.Tensor.cpu",
+  "torch.Tensor.numpy",
+]
+allowed_export_helpers = [
+  "card_capture.runtime.batches.to_cpu_for_score",
+  "card_capture.runtime.batches.to_cpu_for_phash",
+  "card_capture.runtime.batches.to_cpu_for_export",
+  "card_capture.runtime.batches.to_cpu_for_fuse",
+  "card_capture.runtime.batches.to_cpu_for_dedup",
+]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
