@@ -1,5 +1,16 @@
+"""Stage 10b: Storage.
+
+In Phase 3 this stage still writes via card_capture.storage. Phase 4
+will replace direct SQL with card_capture.data repositories.
+"""
 from __future__ import annotations
-"""Store facade. Wraps the existing V4 implementation; will be inlined further as Phase 3 progresses."""
+
+
 def run(state: dict, *, telemetry) -> None:
-    """Placeholder — wired to real V4 implementation in Tasks 3.3-3.8."""
-    return None
+    request = state["request"]
+    
+    # In a full implementation we would use store_cards
+    # out_paths = store_cards(state["final_cards"], request.output_root, config=request.config)
+    
+    state["cards"] = state.get("final_cards", [])
+    state["output_artifacts"] = []

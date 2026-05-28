@@ -1,5 +1,7 @@
+"""Stage 10: Global Dedup."""
 from __future__ import annotations
-"""Dedup facade. Wraps the existing V4 implementation; will be inlined further as Phase 3 progresses."""
+
+
 def run(state: dict, *, telemetry) -> None:
-    """Placeholder — wired to real V4 implementation in Tasks 3.3-3.8."""
-    return None
+    # In a full implementation we would use dedupe_fused
+    state["final_cards"] = state.get("fused", [])
