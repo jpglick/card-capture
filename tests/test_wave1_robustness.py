@@ -64,8 +64,14 @@ def mock_botsort_adapter():
         """Capture the frame passed to update()."""
         captured_frames.append(img)
         # Simulate normal track assignment
-        n = len(det.xyxy)
-        det.tracker_id = np.ones(n, dtype=int)
+        # det is [x1, y1, x2, y2, conf, cls]
+        n = len(det)
+        res = np.zeros((n, 8))
+        if n > 0:
+            res[:, :4] = det[:, :4]
+            res[:, 4] = np.arange(n) + 1
+            res[:, 5] = det[:, 4]
+        return res
 
     mock_supervision = MagicMock()
     mock_supervision.Detections = MockDetections

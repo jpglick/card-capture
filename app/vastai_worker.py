@@ -24,7 +24,13 @@ _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # In-memory state — single-process, no persistence needed
 _jobs: dict[str, dict[str, Any]] = {}
-_queue: asyncio.Queue = asyncio.Queue()
+_queue_internal: Optional[asyncio.Queue] = None
+
+def _get_queue() -> asyncio.Queue:
+    global _queue_internal
+    if _queue_internal is None:
+        _queue_internal = asyncio.Queue()
+    return _queue_internal
 
 
 # ---------------------------------------------------------------------------
@@ -51,7 +57,7 @@ async def submit_job(body: dict):
     """Enqueue a processing job."""
     job_id = body["job_id"]
     _jobs[job_id] = {"status": "pending", "progress_pct": 0}
-    await _queue.put(body)
+    await _get_queue().put(body)
     return {"job_id": job_id}
 
 
@@ -82,7 +88,7 @@ def confirm_job(job_id: str):
     (_OUTPUT_DIR / f"{job_id}.tar.gz").unlink(missing_ok=True)
     # Shutdown when queue drained and no running jobs
     running = any(j["status"] == "running" for j in _jobs.values())
-    if _queue.empty() and not running:
+    if _get_queue().empty() and not running:
         asyncio.get_event_loop().call_later(3, _shutdown)
     return {"deleted": job_id}
 
@@ -97,8 +103,9 @@ async def startup():
 
 
 async def _worker_loop():
+    queue = _get_queue()
     while True:
-        job = await _queue.get()
+        job = await queue.get()
         job_id = job["job_id"]
         _jobs[job_id]["status"] = "running"
         try:
@@ -109,7 +116,7 @@ async def _worker_loop():
             _jobs[job_id]["status"] = "failed"
             _jobs[job_id]["error"] = str(exc)
         finally:
-            _queue.task_done()
+            queue.task_done()
 
 
 def _run_pipeline(job: dict) -> None:

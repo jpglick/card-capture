@@ -54,7 +54,7 @@ def test_resolve_reader_backend_pyav_returns_pyav() -> None:
 
 def test_resolve_reader_backend_invalid_raises_value_error() -> None:
     try:
-        _resolve_reader_backend("opencv")
+        _resolve_reader_backend("invalid-backend")
         raise AssertionError("Expected ValueError")
     except ValueError:
         pass

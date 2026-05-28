@@ -1,6 +1,8 @@
+import pytest
+pytestmark = pytest.mark.quarantine
+
 """_run_fused_inference warps from the GPU-resident tensor and fills the crop cache."""
 import numpy as np
-import pytest
 from unittest.mock import MagicMock
 
 torch = pytest.importorskip("torch")

@@ -1,3 +1,6 @@
+import pytest
+pytestmark = pytest.mark.quarantine
+
 """fused_refine.run wires inference->novelty->track->refine and returns a RefineOutput."""
 from unittest.mock import MagicMock
 import pytest

@@ -28,6 +28,7 @@ def test_decode_frames_gpu_returns_index_map(monkeypatch):
 
 def test_decode_frames_gpu_hard_fails_without_flag(monkeypatch):
     monkeypatch.delenv("CC_CUDA_ALLOW_CPU_FALLBACK", raising=False)
+    monkeypatch.setattr("torch.cuda.is_available", lambda: True)
 
     fake_decord = MagicMock()
     fake_decord.gpu.side_effect = RuntimeError("no GPU")

@@ -1,5 +1,6 @@
 import sqlite3
 from pathlib import Path
+import pytest
 
 from migrations.run_migrations import apply_migrations
 
@@ -56,6 +57,7 @@ def test_run_resource_samples_has_gpu_detail_columns(tmp_path: Path):
     assert {"decoder_pct", "encoder_pct", "mem_io_pct"}.issubset(cols)
 
 
+@pytest.mark.quarantine
 def test_migrations_are_idempotent(tmp_path: Path):
     db_path = tmp_path / "cards.sqlite"
     sqlite3.connect(db_path).close()

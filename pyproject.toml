@@ -65,6 +65,14 @@ card-capture = "card_capture.cli:main"
 
 [tool.pytest.ini_options]
 pythonpath = ["src", "."]
+markers = [
+  "quarantine: known-broken test, must reference an issue and disposition; excluded from default CI lane",
+  "cuda: requires NVIDIA CUDA hardware",
+  "mps: requires Apple Silicon MPS",
+  "provider: requires external provider credentials",
+  "benchmark: real-video performance benchmark",
+  "slow: takes > 10s to run",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

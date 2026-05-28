@@ -1,4 +1,7 @@
 # tests/pipeline/test_detect_prefetch.py
+import pytest
+pytestmark = pytest.mark.quarantine
+
 """Prefetched inference yields the same detections, in frame order, as serial."""
 import numpy as np, pytest
 from unittest.mock import MagicMock

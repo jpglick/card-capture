@@ -107,7 +107,8 @@ class PipelineRunner:
                 )
             else:
                 env = os.environ.copy()
-                env["PYTHONPATH"] = _REPO_ROOT + (":" + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+                src_path = os.path.join(_REPO_ROOT, "src")
+                env["PYTHONPATH"] = src_path + ":" + _REPO_ROOT + (":" + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
                 # Use absolute db path so the subprocess always finds it
                 abs_db = str(Path(db).resolve())
                 abs_video = str(Path(video).resolve())

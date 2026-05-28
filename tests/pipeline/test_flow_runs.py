@@ -9,11 +9,11 @@ def test_flow_runs_to_completion_on_fixture(tmp_path):
     out.mkdir()
     db = tmp_path / "cards.sqlite"
     
-    # We need to make sure the pipeline package is importable
+    # We need to make sure the pipeline and card_capture packages are importable
     import sys
     import os
     env = os.environ.copy()
-    env["PYTHONPATH"] = f".:{env.get('PYTHONPATH', '')}"
+    env["PYTHONPATH"] = f"src:.:{env.get('PYTHONPATH', '')}"
     
     result = subprocess.run(
         [

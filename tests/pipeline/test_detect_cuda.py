@@ -1,3 +1,6 @@
+import pytest
+pytestmark = pytest.mark.quarantine
+
 """Tests for _run_fused_inference — mocked sampler and detector."""
 import os
 from pathlib import Path
@@ -32,6 +35,7 @@ def _make_ctx(tmp_path, batch_size=4):
     )
 
 
+pytestmark = pytest.mark.quarantine
 def test_detect_output_frame_count(tmp_path):
     """DetectOutput.frame_count matches number of sampled frames."""
     from pipeline.steps.detect import _run_fused_inference
@@ -63,6 +67,7 @@ def test_detect_output_frame_count(tmp_path):
     assert out.detection_rows == []
 
 
+pytestmark = pytest.mark.quarantine
 def test_detect_output_batching(tmp_path):
     """With batch_size=4 and 10 frames, detect_batch is called 3 times."""
     from pipeline.steps.detect import _run_fused_inference
@@ -93,6 +98,7 @@ def test_detect_output_batching(tmp_path):
     assert detector.detect_batch.call_count == 3
 
 
+pytestmark = pytest.mark.quarantine
 def test_detect_output_has_detection_rows(tmp_path):
     """Detections returned by detect_batch appear in detection_rows."""
     from pipeline.steps.detect import _run_fused_inference

@@ -301,8 +301,8 @@ def _run_fused_inference(
     bg_images = getattr(sampler, "background_proxies", [])
     bg_model = BackgroundModel.from_frames(bg_images) if bg_images else None
     bg_t = None
-    if bg_model is not None:
-        bg_small = cv2.resize(bg_model.mean_bgr, (640, 640))
+    if bg_model is not None and bg_model.bgr is not None:
+        bg_small = cv2.resize(bg_model.bgr, (640, 640))
         bg_t = torch.from_numpy(bg_small).to(resolved_device).permute(2, 0, 1).float() / 255.0
 
     # Pipeline stages:

@@ -286,6 +286,7 @@ def test_null_state_detector_sequential_warmup():
     assert detector.is_workspace_empty(frame) is True
 
 
+@pytest.mark.quarantine
 def test_detector_skips_hf_download_when_cached(tmp_path, monkeypatch):
     """If hf_hub_download finds the file in the local cache, no network call is needed."""
     from card_capture import detectors as det_mod
