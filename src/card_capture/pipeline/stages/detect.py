@@ -45,4 +45,18 @@ def run(state: dict, *, telemetry) -> None:
     ]
     
     detections = state["yolo_model"].detect_batch(packets, config.get("corner_confidence", 0.5))
-    state["detections"] = detections
+    
+    rows = []
+    for i, p in enumerate(detections):
+        rows.append({
+            "detection_id": i + 1,
+            "frame_index": p.frame_index,
+            "timestamp_ms": p.timestamp_ms,
+            "width": p.width,
+            "height": p.height,
+            "corners": p.corner_detection.corners,
+            "confidence": p.corner_detection.confidence,
+            "triage_metrics": {},
+        })
+        
+    state["detections"] = rows
