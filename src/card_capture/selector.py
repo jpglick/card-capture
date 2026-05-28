@@ -6,29 +6,7 @@ from typing import Iterable, List, Tuple, Optional
 
 import numpy as np
 
-from .models import QualityScore
-
-
-@dataclass(frozen=True)
-class ScoredCandidate:
-    detection_id: int
-    timestamp_ms: int
-    image_path: str
-    score: QualityScore
-    corners: List[Tuple[float, float]] | None = None
-    frame_index: Optional[int] = None
-
-
-@dataclass
-class TrackState:
-    instance_id: str
-    candidates: List[ScoredCandidate] = field(default_factory=list)
-    last_centroid: Optional[Tuple[float, float]] = None
-    last_frame_index: Optional[int] = None
-    missed_frames: int = 0
-    active: bool = True
-    angle: str = "Front"
-    reid_embedding: Optional[np.ndarray] = None
+from .models import QualityScore, ScoredCandidate, TrackState
 
 
 @dataclass

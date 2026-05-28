@@ -461,7 +461,7 @@ class TestAdaptiveThresholds:
             _PreparedTrack,
         )
         from card_capture.presence.background_novelty import BackgroundModel
-        from card_capture.selector import ScoredCandidate
+        from card_capture.models import ScoredCandidate
         from card_capture.models import QualityScore
         import cv2
 

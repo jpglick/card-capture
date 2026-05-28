@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 import torch
 
+from .interfaces import CardDetector
 from .models import (
     CardDetection,
     CornerDetection,
@@ -17,24 +18,8 @@ from .models import (
     FramePacket,
     FrameSample,
     Point,
+    TorchDeviceStatus,
 )
-
-
-class CardDetector(Protocol):
-    """Protocol for card detection backends."""
-
-    def detect(self, frame: FrameSample) -> List[CardDetection]:
-        """Detect cards in a single frame."""
-        ...
-
-    def detect_batch(
-        self,
-        frames: list[FramePacket],
-        confidence_threshold: float,
-        tensor_input: Optional["torch.Tensor"] = None,
-    ) -> list[DetectionPacket]:
-        """Detect cards in a batch of frames."""
-        ...
 
 
 class FakeCornerDetector:
@@ -371,17 +356,6 @@ def _resolve_model_path(repo_id: str, filename: str) -> str:
         ) from exc
 
     return hf_hub_download(repo_id=repo_id, filename=f"weights/{filename}")
-
-
-@dataclass(frozen=True)
-class TorchDeviceStatus:
-    requested: str
-    resolved: str
-    is_available: bool = False
-    mps_built: bool = False
-    mps_available: bool = False
-    cuda_available: bool = False
-    reason: Optional[str] = None
 
 
 def probe_torch_device_status(requested: str = "auto") -> TorchDeviceStatus:

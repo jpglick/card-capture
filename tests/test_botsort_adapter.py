@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from unittest.mock import MagicMock, patch
 
-from card_capture.selector import ScoredCandidate
+from card_capture.models import ScoredCandidate
 from card_capture.models import QualityScore
 
 

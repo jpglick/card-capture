@@ -6,7 +6,7 @@ from typing import List, Optional
 
 import numpy as np
 
-from ..selector import ScoredCandidate, TrackState
+from ..models import ScoredCandidate, TrackState
 
 
 def _xyxy_from_corners(corners) -> np.ndarray:

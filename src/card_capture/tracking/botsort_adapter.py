@@ -7,7 +7,7 @@ from typing import List, Optional, Tuple
 import numpy as np
 import torch
 
-from ..selector import ScoredCandidate, TrackState
+from ..models import ScoredCandidate, TrackState
 from .bytetrack_adapter import _AdaptedDetection, _xyxy_from_corners
 
 

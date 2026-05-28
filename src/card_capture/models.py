@@ -39,8 +39,45 @@ class CropResult:
 
 @dataclass(frozen=True)
 class QualityScore:
+    """Consolidated quality metrics for a single detection."""
     total: float
     components: Dict[str, float]
+
+
+@dataclass(frozen=True)
+class ScoredCandidate:
+    """A detection with an associated quality score and metadata."""
+    detection_id: int
+    timestamp_ms: int
+    image_path: str
+    score: QualityScore
+    corners: Optional[Polygon] = None
+    frame_index: Optional[int] = None
+
+
+@dataclass
+class TrackState:
+    """Mutable state for a temporal track of card presentations."""
+    instance_id: str
+    candidates: List[ScoredCandidate] = field(default_factory=list)
+    last_centroid: Optional[Point] = None
+    last_frame_index: Optional[int] = None
+    missed_frames: int = 0
+    active: bool = True
+    angle: str = "Front"
+    reid_embedding: Optional[np.ndarray] = None
+
+
+@dataclass(frozen=True)
+class TorchDeviceStatus:
+    """Device capabilities and status for PyTorch execution."""
+    requested: str
+    resolved: str
+    is_available: bool = False
+    mps_built: bool = False
+    mps_available: bool = False
+    cuda_available: bool = False
+    reason: Optional[str] = None
 
 
 @dataclass(frozen=True)

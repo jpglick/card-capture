@@ -18,7 +18,7 @@ from card_capture.models import (
     FrameSample,
     QualityScore,
 )
-from card_capture.selector import ScoredCandidate
+from card_capture.models import ScoredCandidate
 from card_capture.tracking.botsort_adapter import BoTSORTAdapter
 
 
@@ -216,7 +216,7 @@ def test_front_back_assignment_uses_side_score(tmp_path):
     """
     import cv2
     from card_capture.pipeline_utils import _resolve_session_tracks, _PreparedTrack
-    from card_capture.selector import TrackState, ScoredCandidate
+    from card_capture.models import TrackState, ScoredCandidate
     from card_capture.models import QualityScore
     from card_capture.deduplicator import VisualDeduplicator
 
@@ -314,7 +314,7 @@ def test_quality_weighted_track_selection(tmp_path):
     """
     import cv2
     from card_capture.pipeline_utils import _resolve_session_tracks, _PreparedTrack
-    from card_capture.selector import TrackState, ScoredCandidate
+    from card_capture.models import TrackState, ScoredCandidate
     from card_capture.models import QualityScore
     from card_capture.deduplicator import VisualDeduplicator
 
