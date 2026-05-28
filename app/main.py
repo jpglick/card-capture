@@ -48,6 +48,34 @@ def create_app(db_path: Optional[Path] = None) -> FastAPI:
     apply_migrations(db_path)
     assert_migrations_complete(db_path)
 
+    from contextlib import asynccontextmanager
+    from card_capture.data.writer import Writer
+    from card_capture.data.repositories.runs import RunsRepository
+    from card_capture.data.repositories.events import EventsRepository
+    from card_capture.data.repositories.cards import CardsRepository
+    from card_capture.data.repositories.videos import VideosRepository
+    from card_capture.data.repositories.labeling import LabelingRepository
+    from card_capture.data.repositories.telemetry import TelemetryRepository
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        writer = Writer(db_path=app.state.db_path)
+        writer.start()
+        app.state.writer = writer
+        
+        # Instantiate repositories using the single writer
+        app.state.runs_repo = RunsRepository(writer, app.state.db_path)
+        app.state.events_repo = EventsRepository(writer, app.state.db_path)
+        app.state.cards_repo = CardsRepository(writer, app.state.db_path)
+        app.state.videos_repo = VideosRepository(writer, app.state.db_path)
+        app.state.labeling_repo = LabelingRepository(writer, app.state.db_path)
+        app.state.telemetry_repo = TelemetryRepository(writer, app.state.db_path)
+        
+        try:
+            yield
+        finally:
+            writer.stop()
+
     app = FastAPI(
         title="Card Capture v4",
         version="0.1.0",
@@ -55,6 +83,7 @@ def create_app(db_path: Optional[Path] = None) -> FastAPI:
             "REST + SSE service layer for the Card Capture trading-card "
             "extraction pipeline."
         ),
+        lifespan=lifespan,
     )
 
     # Initialize services
