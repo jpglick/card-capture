@@ -26,3 +26,16 @@
 | `tests/pipeline/test_detect_prefetch.py` | SKIP | stale-test | quarantined |
 | `tests/pipeline/test_fused_refine.py` | SKIP | stale-test | quarantined |
 
+## Architecture lane (advisory in Phase 1; blocking in later phases)
+
+```bash
+python3 -m pytest tests/architecture/ -q
+```
+
+To run in blocking mode (will fail on violations):
+
+```bash
+V55_IMPORT_LINT_BLOCKING=1 V55_GPU_STRICT_BLOCKING=1 V55_RAW_SQL_BLOCKING=1 \
+  python3 -m pytest tests/architecture/ -q
+```
+
