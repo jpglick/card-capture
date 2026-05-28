@@ -1,38 +1,75 @@
-# V5.5 Architectural Standards
+# Card Capture Architecture Standards
 
-This document defines the binding rules for the V5.5 refactoring. Violations
-are caught by the `tests/architecture/` AST scanners and Import Linter.
+> **Status:** Phase-marked. Each rule indicates the phase in which it becomes blocking.
+> **Source:** `docs/superpowers/specs/2026-05-24-v5-5-refactoring-design.md`
+> **For AI agents:** Read this file before changing any module listed under "Agent Triggers" below. If a requested change violates a rule, stop and surface the conflict.
 
-## 1. Package Boundaries
+## Agent Triggers
 
-- **`card_capture.pipeline`**: Pure domain logic and protocols.
-  - MUST NOT import `sqlite3`.
-  - MUST NOT import provider SDKs (`runpod`, `beam`, `vastai`).
-  - MUST NOT import `app.*`.
-- **`card_capture.runtime`**: In-process execution and GPU resource management.
-  - `runtime.strict_gpu` MUST NOT import `cv2.imread`, `cv2.imwrite`, or `PIL`.
-  - MUST NOT reach into `app.*`.
-- **`card_capture.data`**: The ONLY place for raw SQL and `sqlite3` calls.
-- **`card_capture.platforms`**: The ONLY place for provider-specific SDKs.
+Read this document before editing any of:
+- `pipeline/`
+- `src/card_capture/pipeline/`
+- `src/card_capture/runtime/`
+- `src/card_capture/platforms/`
+- `src/card_capture/data/`
+- `src/card_capture/storage.py`
+- `app/services/`
+- `app/api/`
+- CI workflow files
+- `tests/architecture/`
 
-## 2. GPU Resident Operations (Strict GPU Boundary)
+## Rule Schema
 
-To achieve the 100ms/frame target, the GPU must not be blocked by CPU I/O.
+Each rule carries:
+- **Phase marker** — `advisory:phase-N` or `blocking:phase-N`.
+- **Enforcement marker** — `static` (import lint / AST scan) / `runtime` (guard / assertion) / `review` (human only).
 
-- **Forbidden in GPU code**:
-  - File I/O (`cv2.imread`, `imwrite`, `open()`).
-  - Video decoding (`cv2.VideoCapture`).
-  - Synchronous CPU transfers (`tensor.cpu()`, `tensor.numpy()`).
-- **Exceptions**:
-  - `card_capture.runtime.batches` export helpers are the ONLY allowed path for `tensor.cpu()`.
+## Rules
 
-## 3. Data Integrity (Single Writer)
+### Pipeline Orchestration
 
-- SQLite MUST be operated in WAL mode.
-- All pipeline writes MUST go through the `card_capture.data.writer` queue to
-  prevent "database is locked" errors in the unified runtime.
+- **R-ORCH-1** `blocking:phase-3` (static): No module imports `metaflow`.
+- **R-ORCH-2** `blocking:phase-3` (static): No `@step` decorators or `FlowSpec` subclasses in production code.
+- **R-ORCH-3** `blocking:phase-3` (runtime): A local run executes all stages in one process; the runtime opens the input video at most once except for explicit, telemetered fallback.
+- **R-ORCH-4** `blocking:phase-3` (runtime): Each model is instantiated at most once per `PipelineRuntime.run()` call.
 
-## 4. Telemetry
+### Runtime Backends
 
-- Every stage MUST report `elapsed_ms` to the `PipelineTelemetry` sink.
-- All resource-intensive stages MUST report `resource_sample` (e.g., peak VRAM).
+- **R-RT-1** `blocking:phase-2` (static): GPU hot-path modules (per `pyproject.toml [tool.gpu_strict_lint] files`) must not call `cv2.VideoCapture`, `cv2.imread`, `PIL.Image.open`, `torch.Tensor.cpu`, or `torch.Tensor.numpy` except through the approved export helpers. (Enforced as of Phase 2).
+- **R-RT-2** `blocking:phase-2` (runtime): `StrictGpuRuntime` raises `ContractViolation` on missing CUDA/MPS, missing decode backend, or tensor host transfer outside an approved export boundary.
+- **R-RT-3** `blocking:phase-2` (review): Production must not silently fall back to CPU. `runtime_mode` is explicit.
+- **R-RT-4** `advisory:phase-2` → `blocking:phase-3` (review): Backend duplication is preferred over `if cuda` / `if mps` / `if cpu_debug` conditionals in hot paths.
+
+### Data Access
+
+- **R-DATA-1** `blocking:phase-4` (static, Import Linter): No module outside `card_capture.data`, `migrations/`, or `tests/` imports `sqlite3`.
+- **R-DATA-2** `blocking:phase-4` (static, raw-SQL scanner): No raw SQL strings outside the allowed roots.
+- **R-DATA-3** `blocking:phase-4` (review): Pipeline, app service, and platform code use repository methods, not direct connections.
+- **R-DATA-4** `blocking:phase-4` (runtime): SQLite writes are serialized through `card_capture.data.writer`. Both pipeline runtime and FastAPI handlers route writes through it.
+
+### Telemetry
+
+- **R-TEL-1** `blocking:phase-1` (review): Timing data is emitted through `PipelineTelemetry`. No new code parses stdout for timings.
+- **R-TEL-2** `advisory:phase-1` (review): The OpenTelemetry Metrics adapter is the default sink. Distributed tracing and span sampling are out of scope for V5.5.
+- **R-TEL-3** `blocking:phase-1` (review): Telemetry adapters write SQLite events; pipeline stages must not write events directly.
+
+### Platforms
+
+- **R-PLAT-1** `blocking:phase-5` (static, Import Linter): Provider SDKs (`runpod`, `beam`, vast.ai clients) are imported only inside `card_capture.platforms`.
+- **R-PLAT-2** `blocking:phase-5` (review): Every platform returns a `RunManifest` of the same shape.
+- **R-PLAT-3** `blocking:phase-5` (review): Provider failures are mapped to stable categories (`preflight_failed`, `submission_failed`, ...) before app-facing status.
+
+### Testing
+
+- **R-TEST-1** `blocking:phase-0` (static, skip-audit): Every skipped test names its capability or quarantine reason.
+- **R-TEST-2** `blocking:phase-2` (runtime): Strict-guard tests use `monkeypatch.context()` and do not patch outside the context block.
+- **R-TEST-3** `blocking:phase-2` (review): `strict_gpu` and `cpu_debug` runs satisfy the equivalence contract on a fixture.
+
+### CI
+
+- **R-CI-1** `blocking:phase-0` (review): Default PR lane is green before refactor work starts.
+- **R-CI-2** `blocking:phase-1` (review): PR lane runs Import Linter, GPU-strict AST scanner, and raw-SQL scanner (advisory in Phase 1).
+
+## When Unsure
+
+If a proposed change appears to violate a rule whose phase has been reached, stop and surface the conflict. If the rule is still advisory, document the violation in the commit message but proceed. If a new requirement is incompatible with a rule, propose a spec amendment before code changes.

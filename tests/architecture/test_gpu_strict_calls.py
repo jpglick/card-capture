@@ -50,11 +50,7 @@ def _scan_file(path: Path, forbidden: set[str]) -> list[str]:
     return violations
 
 
-@pytest.mark.skipif(
-    os.environ.get("V55_GPU_STRICT_BLOCKING") != "1",
-    reason="Phase 1 advisory mode: set V55_GPU_STRICT_BLOCKING=1 to fail on violations",
-)
-def test_no_forbidden_calls_in_gpu_files_blocking():
+def test_no_forbidden_calls_in_gpu_files():
     cfg = _load_config()
     forbidden = set(cfg.get("forbidden_calls", []))
     files = []
@@ -64,15 +60,3 @@ def test_no_forbidden_calls_in_gpu_files_blocking():
     for p in files:
         violations.extend(_scan_file(p, forbidden))
     assert not violations, "\n".join(violations)
-
-
-def test_gpu_strict_calls_advisory():
-    cfg = _load_config()
-    forbidden = set(cfg.get("forbidden_calls", []))
-    files = []
-    for glob in cfg.get("files", []):
-        files.extend(REPO_ROOT.glob(glob))
-    print(f"=== GPU-strict AST scan (advisory): {len(files)} files in scope ===")
-    for p in files:
-        for v in _scan_file(p, forbidden):
-            print(v)
