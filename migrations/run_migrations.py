@@ -177,3 +177,11 @@ def _split_statements(sql: str) -> list:
         statements.append(stmt)
 
     return statements
+
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--db", type=Path, required=True)
+    args = parser.parse_args()
+    apply_migrations(args.db)
