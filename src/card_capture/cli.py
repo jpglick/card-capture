@@ -175,33 +175,30 @@ def _run_process(args: argparse.Namespace) -> int:
     )
 
     if getattr(args, "pipeline", "unified") == "unified":
-        from .runtime import UnifiedRuntime, PipelineRunRequest
+        from card_capture.pipeline.request import PipelineRunRequest
+        from card_capture.pipeline.runtime_local import LocalPipelineRuntime
+        from card_capture.pipeline.telemetry import InMemoryTelemetry
         
-        runtime = UnifiedRuntime(sampler, detector)
-        request = PipelineRunRequest(
-            video_path=args.video_path,
-            output_dir=args.output_dir,
-            db_path=args.db,
-            video_id=video_id,
-            detector_backend=config.detector,
-            config_preset=config.config_preset,
+        telemetry = InMemoryTelemetry()
+        runtime = LocalPipelineRuntime(telemetry=telemetry)
+        req = PipelineRunRequest(
+            run_id=args.run_id or uuid.uuid4().hex[:12],
+            input_video=f"artifact://local/{args.video_path}",
+            output_root=f"artifact://local/{args.output_dir}/",
             runtime_mode="strict_gpu" if config.device != "cpu" else "cpu_debug",
-            fusion_target_frames=config.fusion_target_frames,
-            corner_refinement=config.corner_refinement,
-            presence_threshold=presence_threshold,
-            min_track_length=config.min_track_length,
-            rotate_180=config.rotate_180,
+            config={"corner_confidence": config.corner_confidence} if config.corner_confidence else {},
         )
         
         print(f"Starting unified runtime process for video {video_id}...")
-        result = runtime.run(request)
+        result = runtime.run(req)
         
-        if result.success:
-            print(f"Pipeline completed successfully. Results in {args.output_dir}")
-            return 0
-        else:
-            print(f"Pipeline failed: {result.error}")
+        if result.manifest.contract_violations:
+            print(f"Pipeline failed: {result.manifest.contract_violations}")
             return 1
+        else:
+            print(f"Pipeline completed successfully. Results in {args.output_dir}")
+            print(result.manifest.to_json())
+            return 0
 
     if getattr(args, "pipeline", "unified") == "metaflow":
         import os
