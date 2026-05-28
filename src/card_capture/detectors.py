@@ -69,6 +69,9 @@ class FakeCornerDetector:
 class FakeCardDetector(CardDetector):
     """Dummy detector that finds a card in the center of every frame."""
 
+    def __init__(self, confidence_threshold: float = 0.25):
+        self.confidence_threshold = confidence_threshold
+
     def detect(self, frame: FrameSample) -> List[CardDetection]:
         h, w = frame.image.shape[:2]
         return [

@@ -42,9 +42,9 @@ def build_parser() -> argparse.ArgumentParser:
     process.add_argument("--reid-distance-threshold", type=float, default=None, dest="reid_distance_threshold")
     process.add_argument(
         "--pipeline",
-        choices=["metaflow", "monolith"],
-        default="metaflow",
-        help="Which pipeline architecture to run. The 'monolith' path is deprecated and will be removed in Wave 5. Use --pipeline metaflow (the default).",
+        choices=["metaflow", "monolith", "unified"],
+        default="unified",
+        help="Which pipeline architecture to run. 'unified' is the new high-performance in-process runtime.",
     )
     process.add_argument(
         "--resume",
@@ -140,6 +140,7 @@ def _run_process(args: argparse.Namespace) -> int:
         if val is not None:
             setattr(config, attr, val)
 
+    presence_threshold = getattr(args, "presence_threshold", None) or config.presence_threshold
     if config.detector == "fake":
         detector = FakeCardDetector()
         sampler = SyntheticSampler()
@@ -154,7 +155,6 @@ def _run_process(args: argparse.Namespace) -> int:
             device=config.device,
         )
         weights = Path("models/presence_classifier.pt")
-        presence_threshold = getattr(args, "presence_threshold", None) or 0.5
         sampler = AdaptivePresenceSampler(
             video_path=args.video_path,
             reader_backend=config.reader_backend,
@@ -163,7 +163,47 @@ def _run_process(args: argparse.Namespace) -> int:
             presence_threshold=presence_threshold,
         )
 
-    if getattr(args, "pipeline", "metaflow") == "metaflow":
+    # Ensure video is registered in DB to get an ID for FK constraints
+    import hashlib
+    file_hash = hashlib.sha256(args.video_path.read_bytes()).hexdigest()[:12] if args.video_path.exists() else "fake-hash"
+    video_id = storage.add_video(
+        source_path=str(args.video_path),
+        file_hash=file_hash,
+        duration_ms=0, # TODO: probe duration
+        width=0,       # TODO: probe dimensions
+        height=0
+    )
+
+    if getattr(args, "pipeline", "unified") == "unified":
+        from .runtime import UnifiedRuntime, PipelineRunRequest
+        
+        runtime = UnifiedRuntime(sampler, detector)
+        request = PipelineRunRequest(
+            video_path=args.video_path,
+            output_dir=args.output_dir,
+            db_path=args.db,
+            video_id=video_id,
+            detector_backend=config.detector,
+            config_preset=config.config_preset,
+            runtime_mode="strict_gpu" if config.device != "cpu" else "cpu_debug",
+            fusion_target_frames=config.fusion_target_frames,
+            corner_refinement=config.corner_refinement,
+            presence_threshold=presence_threshold,
+            min_track_length=config.min_track_length,
+            rotate_180=config.rotate_180,
+        )
+        
+        print(f"Starting unified runtime process for video {video_id}...")
+        result = runtime.run(request)
+        
+        if result.success:
+            print(f"Pipeline completed successfully. Results in {args.output_dir}")
+            return 0
+        else:
+            print(f"Pipeline failed: {result.error}")
+            return 1
+
+    if getattr(args, "pipeline", "unified") == "metaflow":
         import os
         import subprocess
         # Metaflow spawns a subprocess per step; those subprocesses won't find

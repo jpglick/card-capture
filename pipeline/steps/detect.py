@@ -467,8 +467,8 @@ def _run_fused_inference(
                         pad = 10
                         c_x0 = max(0, int(min(xs_full)) - pad)
                         c_y0 = max(0, int(min(ys_full)) - pad)
-                        c_x1 = min(w, int(max(xs_full)) + pad)
-                        c_y1 = min(h, int(max(ys_full)) + pad)
+                        c_x1 = min(pkt.width, int(max(xs_full)) + pad)
+                        c_y1 = min(pkt.height, int(max(ys_full)) + pad)
 
                         frame_crop = frame_full[c_y0:c_y1, c_x0:c_x1]
                         corners_crop = [(p[0] - c_x0, p[1] - c_y0) for p in cd.corners]
