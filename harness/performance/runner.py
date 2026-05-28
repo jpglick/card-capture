@@ -73,8 +73,38 @@ def run(profile: str, video: str, out_dir: Path) -> PerfReport:
             counters["model_loads"] = 0
             counters["video_reopens"] = 0
             cards = 0
+        elif profile == "local_v55":
+            from card_capture.pipeline.request import PipelineRunRequest
+            from card_capture.pipeline.runtime_local import LocalPipelineRuntime
+            from card_capture.pipeline.telemetry import InMemoryTelemetry
+
+            telemetry = InMemoryTelemetry()
+            runtime = LocalPipelineRuntime(telemetry=telemetry)
+            req = PipelineRunRequest(
+                run_id=run_id,
+                input_video=f"artifact://local/{video}",
+                output_root=f"artifact://local/{out_dir / run_id}/",
+                runtime_mode="cpu_debug",  # use strict_gpu when running on GPU
+            )
+            pipeline_start = time.perf_counter()
+            result = runtime.run(req)
+            timings["__pipeline__"] = (time.perf_counter() - pipeline_start) * 1000.0
+
+            for st in result.manifest.stage_timings:
+                timings[st.stage] = float(st.elapsed_ms)
+
+            counters["frames_decoded"] = sum(
+                1 for e in telemetry.events if e.payload.get("event") == "frame_decoded"
+            )
+            counters["model_loads"] = sum(
+                1 for e in telemetry.events if e.payload.get("event") == "model_load"
+            )
+            counters["video_reopens"] = sum(
+                1 for e in telemetry.events if e.payload.get("event") == "decode_open"
+            ) - 1  # one is expected
+            cards = len(result.manifest.cards)
         else:
-            raise ValueError(f"unknown perf profile in phase 0: {profile!r}")
+            raise ValueError(f"unknown perf profile: {profile!r}")
     except Exception as exc:  # noqa: BLE001
         error = repr(exc)
     timings["__total__"] = (time.perf_counter() - start) * 1000.0
