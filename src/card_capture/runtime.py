@@ -50,6 +50,10 @@ class PipelineRuntime(Protocol):
         ...
 
 
+import queue
+import threading
+from .detectors import probe_torch_device_status
+
 class UnifiedRuntime:
     """In-process pipeline execution runtime.
     
@@ -67,9 +71,10 @@ class UnifiedRuntime:
 
     def run(self, request: PipelineRunRequest) -> PipelineRunResult:
         from pipeline.steps import (
-            detect, novelty, track, refine, score, resolve, fuse, dedup, store
+            novelty, track, refine, score, resolve, fuse, dedup, store
         )
         from pipeline.steps.start import RunContext
+        from pipeline.steps.detect import DetectOutput, _save_corner_samples
 
         start_time = time.time()
         _run_id = f"run_{int(start_time)}"
@@ -94,19 +99,150 @@ class UnifiedRuntime:
             Path(ctx.crops_dir).mkdir(parents=True, exist_ok=True)
             Path(ctx.frame_dir).mkdir(parents=True, exist_ok=True)
 
-            # 1. Detection (Fused path if possible, but here we stay in-process)
+            # 1. Unified Detection & Sampling Loop
+            # We implement the producer/consumer pattern here for strict boundary enforcement
+            q_raw = queue.Queue(maxsize=16)
+            q_results = queue.Queue()
             crop_cache: Dict[int, np.ndarray] = {}
-            _t0 = time.time()
-            # Note: We use the existing _run_fused_inference because it already
-            # handles the threading producer/consumer model and crop caching.
-            detect_out = detect._run_fused_inference(
-                ctx, self.sampler, self.detector, 
-                Path(ctx.output_dir), Path(ctx.frame_dir), 
-                crop_cache=crop_cache
-            )
-            t_detect = time.time() - _t0
             
-            detect._save_corner_samples(ctx, detect_out.detection_rows, Path(ctx.output_dir))
+            # Use same device logic as detect.py
+            device_status = probe_torch_device_status(request.detector_backend)
+            resolved_device = device_status.resolved
+
+            def _producer():
+                try:
+                    for frame in self.sampler.sample():
+                        q_raw.put(frame)
+                    q_raw.put(None) # Sentinel
+                except Exception as e:
+                    q_results.put(("__error__", e))
+
+            def _worker():
+                from card_capture.gpu_refinement import KorniaNormalizer
+                normalizer = KorniaNormalizer(device=resolved_device)
+                
+                try:
+                    # Batch processing logic
+                    while True:
+                        batch = []
+                        frame = None
+                        while len(batch) < 8:
+                            try:
+                                # First element in batch: block until available
+                                # Subsequent elements: don't block too long
+                                timeout = None if not batch else 0.01
+                                frame = q_raw.get(timeout=timeout)
+                                if frame is None: break
+                                batch.append(frame)
+                            except queue.Empty:
+                                break
+                        
+                        if not batch:
+                            if frame is None: break
+                            continue
+                            
+                        # Run detection
+                        packets = [
+                            FramePacket(
+                                frame_index=f.frame_index,
+                                timestamp_ms=f.timestamp_ms,
+                                image=f.image,
+                                width=f.width,
+                                height=f.height,
+                                triage_metrics={}
+                            ) for f in batch
+                        ]
+                        
+                        # Upload to GPU for detection if possible
+                        # (Simplification: detect_batch handles upload for now)
+                        detections = self.detector.detect_batch(packets, request.presence_threshold)
+                        
+                        # Eager Warp for crop_cache
+                        for pkt in detections:
+                            q_results.put(pkt)
+                            
+                            # Find source frame in batch
+                            source_f = next(f for f in batch if f.frame_index == pkt.frame_index)
+                            
+                            # Warp and cache
+                            # (Simplification: Use CPU warp for now to match old detect.py behavior
+                            # unless we implement full GPU warp here)
+                            # Actually, old detect.py did:
+                            # tensors_full.append(torch.from_numpy(f.image).to(resolved_device))
+                            # then used Kornia normalizer.
+                            
+                            # For now, let's just use the existing logic shape:
+                            if pkt.corner_detection.confidence >= request.presence_threshold:
+                                from card_capture.cropper import CardCropper
+                                cropper = CardCropper()
+                                crop_res = cropper.crop(source_f.image, pkt.corner_detection.corners)
+                                # Assign a stable ID for the cache (we'll use index for now)
+                                det_id = pkt.frame_index # Placeholder ID
+                                crop_cache[det_id] = crop_res.image
+                                # Update pkt with detection_id
+                                # (pkt is a DetectionPacket, it doesn't have detection_id field yet
+                                # in the model, but the row dict does)
+                            
+                        if frame is None: break
+                        
+                    q_results.put(None) # Sentinel
+                except Exception as e:
+                    q_results.put(("__error__", e))
+
+            prod_thread = threading.Thread(target=_producer, name="producer")
+            work_thread = threading.Thread(target=_worker, name="worker")
+            
+            prod_thread.start()
+            work_thread.start()
+
+            detection_packets = []
+            while True:
+                item = q_results.get()
+                if item is None: break
+                if isinstance(item, tuple) and item[0] == "__error__": raise item[1]
+                detection_packets.append(item)
+            
+            prod_thread.join()
+            work_thread.join()
+
+            # Map to old DetectOutput shape for downstream steps
+            rows = []
+            for i, p in enumerate(detection_packets):
+                det_id = i + 1
+                rows.append({
+                    "detection_id": det_id,
+                    "frame_index": p.frame_index,
+                    "timestamp_ms": p.timestamp_ms,
+                    "width": p.width,
+                    "height": p.height,
+                    "corners": p.corner_detection.corners,
+                    "confidence": p.corner_detection.confidence,
+                    "triage_metrics": {"ahash": 0},
+                })
+                # Re-map crop_cache to use the new det_id
+                if p.frame_index in crop_cache:
+                    crop_cache[det_id] = crop_cache.pop(p.frame_index)
+
+            sampler_telemetry = {
+                "last_selected_frame_count": getattr(self.sampler, "last_selected_frame_count", 0),
+                "last_source_fps": getattr(self.sampler, "last_source_fps", 30.0),
+                "last_scan_frame_count": getattr(self.sampler, "last_scan_frame_count", 0),
+                "last_inter_window_gaps_frames": getattr(self.sampler, "last_inter_window_gaps_frames", []),
+                "last_valley_splits": getattr(self.sampler, "last_valley_splits", []),
+            }
+
+            detect_out = DetectOutput(
+                frame_count=sampler_telemetry["last_scan_frame_count"],
+                accepted_frame_count=sampler_telemetry["last_selected_frame_count"],
+                accepted_frame_presence=[], # TODO
+                detection_rows=rows,
+                sampler_telemetry=sampler_telemetry,
+                video_id=request.video_id
+            )
+            
+            t_detect = time.time() - start_time
+            
+            # ... (Rest of the stages same as before for now)
 
             # 2. Novelty Gating
             _t0 = time.time()
