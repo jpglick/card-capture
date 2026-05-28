@@ -19,6 +19,15 @@ FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "tiny_synthetic.MOV
 
 @pytest.mark.skipif(not FIXTURE.exists(), reason="tiny_synthetic.MOV fixture not present")
 def test_local_runtime_single_process(tmp_path):
+    from card_capture.data.connection import open_connection
+    db_path = tmp_path / "cards.sqlite"
+    # Basic schema for smoke test
+    conn = open_connection(db_path)
+    conn.execute("CREATE TABLE IF NOT EXISTS pipeline_runs(run_id TEXT PRIMARY KEY, video_id TEXT NOT NULL, state TEXT NOT NULL, started_at_ms INTEGER, completed_at_ms INTEGER, cards_extracted INTEGER, error TEXT)")
+    conn.execute("CREATE TABLE IF NOT EXISTS card_instances(card_instance_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, front_crop TEXT NOT NULL, back_crop TEXT)")
+    conn.execute("CREATE TABLE IF NOT EXISTS card_views(card_instance_id TEXT NOT NULL, metric TEXT NOT NULL, value REAL NOT NULL, PRIMARY KEY (card_instance_id, metric))")
+    conn.close()
+
     telemetry = InMemoryTelemetry()
     runtime = LocalPipelineRuntime(telemetry=telemetry)
     req = PipelineRunRequest(

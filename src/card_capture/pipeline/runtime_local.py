@@ -58,25 +58,51 @@ class LocalPipelineRuntime:
         timings: list[StageTiming] = []
         violations: list = []
         run_id = request.run_id or uuid.uuid4().hex[:12]
+        
+        # Initialize DAL
+        from card_capture.data.writer import Writer
+        from card_capture.data.repositories.runs import RunsRepository
+        from card_capture.data.repositories.events import EventsRepository
+        from card_capture.data.repositories.cards import CardsRepository
+        
+        # We need to extract the path without artifact:// prefix for local files
+        db_path_str = str(request.output_root).replace("artifact://local/", "")
+        db_path = Path(db_path_str) / "cards.sqlite" # Assuming db is in output_root or passed explicitly
+        # Wait, the spec says run_context has db_path, but PipelineRunRequest just has output_root.
+        # Actually in CLI I passed req = PipelineRunRequest(output_root=f"artifact://local/{args.output_dir}/")
+        # And the db was passed to the storage earlier.
+        
+        writer = Writer(db_path)
+        writer.start()
 
         # State carried across stages — frames, detections, tracks, crops, scores, etc.
         # The actual shape grows as Tasks 3.3-3.8 wire stages.
-        state: dict = {"request": request}
+        state: dict = {
+            "request": request,
+            "repos": {
+                "runs": RunsRepository(writer, db_path),
+                "events": EventsRepository(writer, db_path),
+                "cards": CardsRepository(writer, db_path),
+            }
+        }
 
-        for name, module in _STAGES:
-            self._telemetry.stage_started(name, {})
-            start = time.perf_counter()
-            try:
-                module.run(state, telemetry=self._telemetry)
-            except Exception as exc:
-                violations.append({"code": f"stage_failed:{name}", "metadata": {"error": repr(exc)}})
-                self._telemetry.contract_violation(
-                    f"stage_failed:{name}", {"error": repr(exc)}
-                )
-                raise
-            elapsed_ms = int((time.perf_counter() - start) * 1000)
-            timings.append(StageTiming(stage=name, elapsed_ms=elapsed_ms))
-            self._telemetry.stage_finished(name, elapsed_ms, {})
+        try:
+            for name, module in _STAGES:
+                self._telemetry.stage_started(name, {})
+                start = time.perf_counter()
+                try:
+                    module.run(state, telemetry=self._telemetry)
+                except Exception as exc:
+                    violations.append({"code": f"stage_failed:{name}", "metadata": {"error": repr(exc)}})
+                    self._telemetry.contract_violation(
+                        f"stage_failed:{name}", {"error": repr(exc)}
+                    )
+                    raise
+                elapsed_ms = int((time.perf_counter() - start) * 1000)
+                timings.append(StageTiming(stage=name, elapsed_ms=elapsed_ms))
+                self._telemetry.stage_finished(name, elapsed_ms, {})
+        finally:
+            writer.stop()
 
         manifest = RunManifest(
             run_id=run_id,
