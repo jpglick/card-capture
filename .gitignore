@@ -60,7 +60,7 @@ Video_Codec_SDK*.zip
 golden_set/**/reference_frames/
 
 # Training data
-data/
+/data/
 
 models/*
 !models/.gitkeep
