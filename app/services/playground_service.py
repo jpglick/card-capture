@@ -8,8 +8,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from metaflow import Run
-from pipeline.steps import novelty, track, score, resolve, fuse
+from card_capture.pipeline.stages import novelty, track, score, resolve, fuse
 
 
 class PlaygroundService:
@@ -17,21 +16,8 @@ class PlaygroundService:
         self.db_path = db_path
 
     def get_run_artifacts(self, run_id: str) -> Dict[str, Any]:
-        """Load artifacts from a completed Metaflow run."""
-        try:
-            run = Run(f"CardCaptureFlow/{run_id}")
-            if not run.successful:
-                # Return partial data if possible, or raise
-                pass
-            
-            # We specifically need detect_out to re-run from novelty onwards
-            return {
-                "run_id": run_id,
-                "run_context": run.data.run_context,
-                "detect_out": run.data.detect_out,
-            }
-        except Exception as e:
-            raise ValueError(f"Could not load artifacts for run {run_id}: {e}")
+        """Load artifacts from a completed run."""
+        raise NotImplementedError("Metaflow artifacts are no longer supported in V5.5.")
 
     def recompute(self, run_id: str, overrides: Dict[str, Any]) -> Dict[str, Any]:
         """Recompute novelty -> score stages with new thresholds."""

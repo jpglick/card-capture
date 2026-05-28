@@ -48,3 +48,12 @@ layers =
     pipeline
     runtime
     data
+
+[importlinter:contract:no-metaflow]
+name = metaflow must not be imported anywhere
+type = forbidden
+source_modules =
+    card_capture
+    app
+forbidden_modules =
+    metaflow
