@@ -1,5 +1,48 @@
+"""Stage 3: YOLO Corner Detection.
+
+Reuses `state["sampled_frames"]` produced by the sample stage. Loads the
+YOLO model once on first call and stashes it in state for any later stage
+that needs it (none currently; refine uses its own model).
+"""
 from __future__ import annotations
-"""Detect facade. Wraps the existing V4 implementation; will be inlined further as Phase 3 progresses."""
+
+from card_capture.detectors import FakeCardDetector, CardcaptorUltralyticsDetector, probe_torch_device_status
+from card_capture.models import FramePacket
+
+
 def run(state: dict, *, telemetry) -> None:
-    """Placeholder — wired to real V4 implementation in Tasks 3.3-3.8."""
-    return None
+    request = state["request"]
+    config = request.config
+    
+    if "yolo_model" not in state:
+        telemetry.resource_sample({"event": "model_load", "model": "yolo_obb"})
+        # In a real implementation we would select the detector based on config
+        detector_name = config.get("detector", "fake")
+        if detector_name == "fake":
+            detector = FakeCardDetector()
+        else:
+            device = config.get("device", "auto")
+            device_status = probe_torch_device_status(device)
+            detector = CardcaptorUltralyticsDetector(
+                confidence_threshold=config.get("corner_confidence", 0.5),
+                detection_width=config.get("detection_width", 640),
+                device=device_status.resolved,
+            )
+        state["yolo_model"] = detector
+
+    frames = state["sampled_frames"]
+    # Convert FrameSamples to FramePackets for detection
+    packets = [
+        FramePacket(
+            frame_index=f.frame_index,
+            timestamp_ms=f.timestamp_ms,
+            image=f.image,
+            width=f.width,
+            height=f.height,
+            triage_metrics={},
+        )
+        for f in frames
+    ]
+    
+    detections = state["yolo_model"].detect_batch(packets, config.get("corner_confidence", 0.5))
+    state["detections"] = detections
