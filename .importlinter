@@ -1,0 +1,50 @@
+[importlinter]
+root_packages =
+    card_capture
+    app
+    pipeline
+
+[importlinter:contract:no-sqlite3-outside-data]
+name = sqlite3 only inside card_capture.data and migrations
+type = forbidden
+source_modules =
+    card_capture.pipeline
+    card_capture.runtime
+    card_capture.platforms
+    app
+forbidden_modules =
+    sqlite3
+
+[importlinter:contract:no-provider-sdk-outside-platforms]
+name = provider SDKs only inside card_capture.platforms
+type = forbidden
+source_modules =
+    card_capture.pipeline
+    card_capture.runtime
+    app.api
+    app.services.cards_service
+    app.services.runs_service
+forbidden_modules =
+    runpod
+    beam
+    vastai
+
+[importlinter:contract:strict-gpu-no-image-io]
+name = strict GPU code must not import OpenCV/PIL file IO
+type = forbidden
+source_modules =
+    card_capture.runtime.strict_gpu
+forbidden_modules =
+    PIL
+    PIL.Image
+    cv2.imgcodecs
+
+[importlinter:contract:layered]
+name = layered architecture
+type = layers
+containers =
+    card_capture
+layers =
+    pipeline
+    runtime
+    data
