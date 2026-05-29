@@ -14,6 +14,17 @@ from pathlib import Path
 from typing import Any, Optional
 
 from card_capture.data.connection import read_connection
+from card_capture.data.sql_queries import (
+    TRAINING_FB_DIST,
+    TRAINING_FB_LAST,
+    TRAINING_HISTORY,
+    TRAINING_LATEST_METRICS,
+    TRAINING_PENDING_CORNERS,
+    TRAINING_PENDING_FB,
+    TRAINING_PENDING_PRESENCE,
+    TRAINING_RECENT_RUNS,
+    TRAINING_VIDEOS_ALL,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,12 +66,12 @@ class TrainingService:
         from datetime import datetime
 
         with read_connection(self.db_path) as conn:
-            fb_rows = conn.execute("SELECT side, COUNT(*) as count FROM fb_labels GROUP BY side").fetchall()
+            fb_rows = conn.execute(TRAINING_FB_DIST).fetchall()
             fb_dist = {row[0]: row[1] for row in fb_rows}
             fb_total = sum(fb_dist.values())
             
             # last_updated for fb
-            fb_last = conn.execute("SELECT MAX(created_at) FROM fb_labels").fetchone()[0] or datetime.now().isoformat()
+            fb_last = conn.execute(TRAINING_FB_LAST).fetchone()[0] or datetime.now().isoformat()
 
         return [
             {
@@ -161,23 +172,19 @@ class TrainingService:
     def get_stats(self) -> dict:
         with read_connection(self.db_path) as conn:
             presence_pending = conn.execute(
-                "SELECT COUNT(*) FROM presence_samples WHERE label IS NULL"
+                TRAINING_PENDING_PRESENCE
             ).fetchone()[0]
             fb_pending = conn.execute(
-                """SELECT COUNT(*) FROM card_instances ci
-                   WHERE NOT EXISTS (
-                       SELECT 1 FROM fb_labels fl WHERE fl.instance_id = ci.track_id
-                   )"""
+                TRAINING_PENDING_FB
             ).fetchone()[0]
             corner_pending = conn.execute(
-                "SELECT COUNT(*) FROM corner_samples WHERE label IS NULL"
+                TRAINING_PENDING_CORNERS
             ).fetchone()[0]
 
             accuracies = {}
             for model in ("presence", "fb_classifier"):
                 row = conn.execute(
-                    "SELECT eval_metrics_json FROM model_versions "
-                    "WHERE model_name=? ORDER BY created_at DESC LIMIT 1",
+                    TRAINING_LATEST_METRICS,
                     (model,),
                 ).fetchone()
                 if row and row[0]:
@@ -185,10 +192,7 @@ class TrainingService:
                     m = json.loads(row[0])
                     accuracies[model] = m.get("accuracy")
 
-            history_rows = conn.execute(
-                "SELECT model_name, eval_metrics_json, created_at FROM model_versions "
-                "ORDER BY created_at ASC"
-            ).fetchall()
+            history_rows = conn.execute(TRAINING_HISTORY).fetchall()
             history = []
             for r in history_rows:
                 if r[1]:
@@ -247,13 +251,12 @@ class TrainingService:
 
             with read_connection(self.db_path) as conn:
                 runs = conn.execute(
-                    "SELECT run_id, video_id, cards_extracted FROM pipeline_runs "
-                    "WHERE status='completed' ORDER BY started_at DESC LIMIT ?",
+                    TRAINING_RECENT_RUNS,
                     (n,),
                 ).fetchall()
                 videos = {
                     r[0]: r[1]
-                    for r in conn.execute("SELECT id, source_path FROM videos").fetchall()
+                    for r in conn.execute(TRAINING_VIDEOS_ALL).fetchall()
                 }
 
             rows = []

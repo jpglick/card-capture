@@ -67,3 +67,37 @@ LABELS_COUNT = "SELECT COUNT(*) FROM fb_labels"
 CLUSTERS_LIST_BASE = (
     "SELECT cluster_id, predicted_member_ids_json, confirmed_member_ids_json, status, updated_at FROM dedup_clusters"
 )
+
+# Training service
+TRAINING_FB_DIST = "SELECT side, COUNT(*) as count FROM fb_labels GROUP BY side"
+TRAINING_FB_LAST = "SELECT MAX(created_at) FROM fb_labels"
+TRAINING_PENDING_PRESENCE = "SELECT COUNT(*) FROM presence_samples WHERE label IS NULL"
+TRAINING_PENDING_FB = (
+    "SELECT COUNT(*) FROM card_instances ci "
+    "WHERE NOT EXISTS (SELECT 1 FROM fb_labels fl WHERE fl.instance_id = ci.track_id)"
+)
+TRAINING_PENDING_CORNERS = "SELECT COUNT(*) FROM corner_samples WHERE label IS NULL"
+TRAINING_LATEST_METRICS = (
+    "SELECT eval_metrics_json FROM model_versions "
+    "WHERE model_name=? ORDER BY created_at DESC LIMIT 1"
+)
+TRAINING_HISTORY = (
+    "SELECT model_name, eval_metrics_json, created_at FROM model_versions "
+    "ORDER BY created_at ASC"
+)
+TRAINING_RECENT_RUNS = (
+    "SELECT run_id, video_id, cards_extracted FROM pipeline_runs "
+    "WHERE status='completed' ORDER BY started_at DESC LIMIT ?"
+)
+TRAINING_VIDEOS_ALL = "SELECT id, source_path FROM videos"
+
+# Pipeline runner
+PIPELINE_RUN_INSERT_START = (
+    "INSERT OR IGNORE INTO pipeline_runs (run_id, video_id, status) VALUES (?, ?, 'running')"
+)
+PIPELINE_RUN_UPDATE_HOST_INFO = "UPDATE pipeline_runs SET host_info_json = ? WHERE run_id = ?"
+PIPELINE_RUN_COUNT_CARDS = "SELECT COUNT(*) FROM card_instances WHERE run_id = ?"
+PIPELINE_RUN_FINISH = (
+    "UPDATE pipeline_runs SET status=?, cards_extracted=?, finished_at=datetime('now') WHERE run_id=?"
+)
+PIPELINE_RUN_LOG_INSERT = "INSERT INTO pipeline_run_logs (run_id, line) VALUES (?, ?)"

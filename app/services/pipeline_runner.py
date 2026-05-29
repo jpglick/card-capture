@@ -11,6 +11,13 @@ from typing import Optional, Type
 
 from app.worker_core import parse_metaflow_start_stage
 from card_capture.data.connection import open_connection
+from card_capture.data.sql_queries import (
+    PIPELINE_RUN_COUNT_CARDS,
+    PIPELINE_RUN_FINISH,
+    PIPELINE_RUN_INSERT_START,
+    PIPELINE_RUN_LOG_INSERT,
+    PIPELINE_RUN_UPDATE_HOST_INFO,
+)
 
 _REPO_ROOT = str(Path(__file__).parent.parent.parent)
 logger = logging.getLogger(__name__)
@@ -184,10 +191,7 @@ class PipelineRunner:
             return
         try:
             with open_connection(self.db_path) as conn:
-                conn.execute(
-                    "INSERT OR IGNORE INTO pipeline_runs (run_id, video_id, status) VALUES (?, ?, 'running')",
-                    (run_id, video_id),
-                )
+                conn.execute(PIPELINE_RUN_INSERT_START, (run_id, video_id))
         except Exception as exc:
             print(f"[{run_id}] could not record run start: {exc}", flush=True)
         try:
@@ -195,10 +199,7 @@ class PipelineRunner:
             from app.services.resource_sampler import get_host_info
             host_info = get_host_info()
             with open_connection(self.db_path) as conn:
-                conn.execute(
-                    "UPDATE pipeline_runs SET host_info_json = ? WHERE run_id = ?",
-                    (_json.dumps(host_info), run_id),
-                )
+                conn.execute(PIPELINE_RUN_UPDATE_HOST_INFO, (_json.dumps(host_info), run_id))
         except Exception as exc:
             print(f"[{run_id}] could not record host info: {exc}", flush=True)
 
@@ -208,12 +209,9 @@ class PipelineRunner:
         try:
             with open_connection(self.db_path) as conn:
                 cards = conn.execute(
-                    "SELECT COUNT(*) FROM card_instances WHERE run_id = ?", (run_id,)
+                    PIPELINE_RUN_COUNT_CARDS, (run_id,)
                 ).fetchone()[0]
-                conn.execute(
-                    "UPDATE pipeline_runs SET status=?, cards_extracted=?, finished_at=datetime('now') WHERE run_id=?",
-                    (status, cards, run_id),
-                )
+                conn.execute(PIPELINE_RUN_FINISH, (status, cards, run_id))
         except Exception as exc:
             print(f"[{run_id}] could not record run finish: {exc}", flush=True)
 
@@ -241,7 +239,7 @@ class PipelineRunner:
         try:
             with open_connection(self.db_path) as conn:
                 conn.execute(
-                    "INSERT INTO pipeline_run_logs (run_id, line) VALUES (?, ?)",
+                    PIPELINE_RUN_LOG_INSERT,
                     (run_id, line),
                 )
         except Exception:
