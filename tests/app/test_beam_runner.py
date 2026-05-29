@@ -104,9 +104,10 @@ async def test_run_async_raises_on_beam_task_failure(tmp_path):
         )
 
 
-def test_destroy_instance_is_noop(tmp_path):
+@pytest.mark.asyncio
+async def test_destroy_instance_is_noop(tmp_path):
     runner = _make_runner(tmp_path)
-    asyncio.get_event_loop().run_until_complete(runner.destroy_instance())
+    await runner.destroy_instance()
 
 
 def test_satisfies_gpu_runner_protocol(tmp_path):
