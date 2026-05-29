@@ -1,4 +1,11 @@
-"""PipelineRunner: handles local or remote submission."""
+"""PipelineRunner: uniform submit/wait/cancel surface for local and remote backends.
+
+Concrete implementations live in `card_capture.platforms.*`. The handle is
+opaque to callers; each backend stores its provider-specific job_id in
+`PipelineRunHandle.opaque`. This module replaces the earlier `RemoteRuntime`
+Protocol (collapsed in Phase D); legacy callers should migrate to
+`PipelineRunner`.
+"""
 from __future__ import annotations
 
 import dataclasses
