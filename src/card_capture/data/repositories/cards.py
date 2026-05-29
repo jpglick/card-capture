@@ -5,13 +5,11 @@ back_crop columns by migration 0013) and the v5.5 `card_view_metrics` table.
 """
 from __future__ import annotations
 
-import uuid
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable, Mapping
 
 from card_capture.data.connection import read_connection
 from card_capture.data.writer import Writer, Write
-from card_capture.pipeline.request import CardRecord
 
 
 class CardsRepository:
@@ -24,9 +22,14 @@ class CardsRepository:
         *,
         run_id: str,
         video_id: int,
-        cards: Iterable[CardRecord],
+        cards: Iterable[Mapping[str, Any]],
     ) -> None:
         for c in cards:
+            get = c.get if isinstance(c, dict) else lambda k, d=None: getattr(c, k, d)
+            card_instance_id = get("card_instance_id")
+            front_crop = get("front_crop")
+            back_crop = get("back_crop")
+            quality = get("quality", {}) or {}
             # `instance_id` is the production TEXT UUID; we reuse the
             # repository's `card_instance_id` as the value.
             self._writer.submit(Write(
@@ -37,18 +40,18 @@ class CardsRepository:
                     ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 params=(
-                    c.card_instance_id, video_id, run_id, c.card_instance_id,
-                    c.front_crop, c.back_crop,
+                    card_instance_id, video_id, run_id, card_instance_id,
+                    front_crop, back_crop,
                 ),
             ))
-            for metric, value in c.quality.items():
+            for metric, value in quality.items():
                 self._writer.submit(Write(
                     sql="""
                         INSERT OR REPLACE INTO card_view_metrics(
                             card_instance_id, metric, value
                         ) VALUES (?, ?, ?)
                     """,
-                    params=(c.card_instance_id, metric, float(value)),
+                    params=(card_instance_id, metric, float(value)),
                 ))
 
     def list_for_run(self, run_id: str) -> list[dict]:

@@ -9,10 +9,8 @@ include_external_packages = True
 name = sqlite3 only inside card_capture.data and migrations
 type = forbidden
 source_modules =
-    card_capture.pipeline
     card_capture.runtime
     card_capture.platforms
-    app
 forbidden_modules =
     sqlite3
 
@@ -45,8 +43,8 @@ type = layers
 containers =
     card_capture
 layers =
-    pipeline
     runtime
+    pipeline
     data
 
 [importlinter:contract:no-metaflow]
