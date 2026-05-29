@@ -1,6 +1,6 @@
-# Contract 1 — Storage Schema Additions
+# Contract 1 — Storage Schema
 
-**Status:** Frozen (Wave 1 sign-off)  
+**Status:** Updated for Wave 3 + v5.5  
 **Owner:** Surface A (Orchestration / Pipeline)  
 **Consumers:** Surface B (reads cards, runs, clusters via API), Surface C (reads/writes `fb_labels`, `model_versions`, `dedup_clusters`), Surface D (writes/reads `truth_files`, `regression_baselines`, `regression_runs`, `hard_cases`)
 
@@ -10,160 +10,319 @@
 
 ## Overview
 
-All data lives in a single SQLite database (`cards.sqlite`). Seven new tables are added in `migrations/0001_v4_schema.sql`. Two columns are added to the existing `pipeline_events` table.
-
-Surface A runs all migrations via `migrations/run_migrations.py` at startup. Migrations are idempotent (safe to run repeatedly).
+All data lives in a single SQLite database (`cards.sqlite`). Surface A runs all migrations via `migrations/run_migrations.py` at startup. Migrations are idempotent (safe to run repeatedly).
 
 ---
 
 ## DDL
 
 ```sql
--- migrations/0001_v4_schema.sql
--- All statements wrapped in IF NOT EXISTS / try-except for idempotency.
+-- 0. videos (Base table)
+CREATE TABLE IF NOT EXISTS videos (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_path   TEXT    NOT NULL,
+    file_hash     TEXT    NOT NULL,
+    duration_ms   INTEGER NOT NULL,
+    width         INTEGER NOT NULL,
+    height        INTEGER NOT NULL,
+    status        TEXT    NOT NULL DEFAULT 'processing',
+    created_at    TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 
--- 1. truth_files
+-- 1. pipeline_events
+CREATE TABLE IF NOT EXISTS pipeline_events (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    video_id      INTEGER REFERENCES videos(id),
+    run_id        TEXT,
+    stage_id      TEXT,
+    frame_index   INTEGER NOT NULL,
+    timestamp_ms  INTEGER NOT NULL,
+    event_type    TEXT    NOT NULL,
+    data_json     TEXT,
+    artifact_ref  TEXT,
+    created_at    TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 2. card_instances
+CREATE TABLE IF NOT EXISTS card_instances (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    instance_id   TEXT    UNIQUE, -- Logical UUID
+    video_id      INTEGER NOT NULL REFERENCES videos(id),
+    run_id        TEXT,
+    track_id      TEXT    NOT NULL,
+    session_id    TEXT,
+    start_frame   INTEGER,
+    end_frame     INTEGER,
+    angle         TEXT,
+    visual_hash   TEXT,
+    fused_image_path TEXT,
+    reid_embedding BLOB,
+    is_hidden     INTEGER DEFAULT 0,
+    is_duplicate_of INTEGER REFERENCES card_instances(id),
+    hidden        INTEGER NOT NULL DEFAULT 0,
+    front_crop    TEXT,
+    back_crop     TEXT,
+    updated_at    TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at    TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(run_id, track_id)
+);
+
+-- 3. card_views
+CREATE TABLE IF NOT EXISTS card_views (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    card_instance_id INTEGER NOT NULL REFERENCES card_instances(id),
+    instance_id   TEXT    REFERENCES card_instances(instance_id),
+    frame_index   INTEGER NOT NULL,
+    timestamp_ms  INTEGER NOT NULL,
+    image_path    TEXT,
+    rectified_path TEXT,
+    corners_json  TEXT,
+    confidence    REAL,
+    quality_score FLOAT,
+    quality_score_json TEXT,
+    is_canonical  INTEGER NOT NULL DEFAULT 0,
+    side          TEXT,
+    phash         TEXT,
+    reid_embedding BLOB,
+    initial_confidence REAL,
+    glare_x       REAL,
+    glare_y       REAL,
+    sharpness     REAL,
+    glare_mask_b64 TEXT,
+    laplacian_heatmap_b64 TEXT,
+    metadata_json TEXT,
+    created_at    TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 4. saved_cards (Backward-compatibility)
+CREATE TABLE IF NOT EXISTS saved_cards (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    detection_id  INTEGER NOT NULL,
+    video_id      INTEGER NOT NULL REFERENCES videos(id),
+    image_path    TEXT    NOT NULL,
+    final_score   REAL    NOT NULL,
+    review_state  TEXT    NOT NULL DEFAULT 'pending',
+    source_path   TEXT    NOT NULL,
+    timestamp_ms  INTEGER NOT NULL,
+    score_components_json TEXT NOT NULL,
+    created_at    TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 5. truth_files
 -- Stores the ground-truth labeling payload for each video (one row per video).
--- Written by: Surface D (labeling endpoints). Read by: Surface D (harness), Surface B (labeling UX).
 -- JSON payload: truth.json schema (Contract 4).
 CREATE TABLE IF NOT EXISTS truth_files (
     video_id        TEXT    PRIMARY KEY,
     schema_version  INTEGER NOT NULL,
-    payload_json    TEXT    NOT NULL,            -- JSON blob: see Contract 4
-    updated_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+    payload_json    TEXT    NOT NULL,
+    updated_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    created_at      TEXT    NOT NULL DEFAULT '1970-01-01 00:00:00'
 );
 
--- 2. regression_baselines
+-- 6. regression_baselines
 -- Named snapshots of a frozen pipeline configuration used as comparison targets.
--- Written by: Surface D (promote-baseline endpoint). Read by: Surface D (harness), Surface B (Regression tab).
--- config_json: the full pipeline config at the time of baseline creation.
 CREATE TABLE IF NOT EXISTS regression_baselines (
     baseline_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name        TEXT    NOT NULL UNIQUE,         -- e.g. "baseline_v4.1"
-    code_sha    TEXT    NOT NULL,                -- git commit SHA
-    config_json TEXT    NOT NULL,                -- JSON blob: pipeline config snapshot
+    name        TEXT    NOT NULL UNIQUE,
+    code_sha    TEXT    NOT NULL,
+    config_json TEXT    NOT NULL,
     created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
--- 3. regression_runs
+-- 7. regression_runs
 -- One row per harness execution. Stores aggregate metrics and per-video breakdowns.
--- Written by: Surface D (harness). Read by: Surface D, Surface B (Regression tab).
--- metrics_json: {card_recall, card_precision, side_accuracy, dedup_ari, image_quality_ssim}
--- per_video_json: [{video_id, metrics: {...}, regressions: [...]}]
 CREATE TABLE IF NOT EXISTS regression_runs (
-    run_id        INTEGER PRIMARY KEY AUTOINCREMENT,
-    baseline_id   INTEGER REFERENCES regression_baselines(baseline_id),
-    code_sha      TEXT    NOT NULL,
-    config_json   TEXT    NOT NULL,              -- JSON blob: pipeline config at run time
-    metrics_json  TEXT    NOT NULL,              -- JSON blob: aggregate metrics
-    per_video_json TEXT   NOT NULL,              -- JSON blob: per-video metric breakdowns
-    created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+    run_id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    baseline_id    INTEGER REFERENCES regression_baselines(baseline_id),
+    code_sha       TEXT    NOT NULL,
+    config_json    TEXT    NOT NULL,
+    metrics_json   TEXT    NOT NULL,
+    per_video_json TEXT    NOT NULL,
+    created_at     TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
--- 4. fb_labels
--- Single front/back/uncertain verdicts produced by the F/B trainer UX.
--- Written by: Surface D (POST /label/fb). Read by: Surface C (training pipeline).
--- labeler: "human" | "model:<model_name>"
+-- 8. fb_labels
+-- Single front/back/uncertain/no_card verdicts produced by the F/B trainer UX.
 CREATE TABLE IF NOT EXISTS fb_labels (
     label_id      INTEGER PRIMARY KEY AUTOINCREMENT,
-    source_run_id INTEGER,                       -- FK to pipeline run (loosely coupled; nullable)
-    instance_id   TEXT    NOT NULL,              -- UUID-4 track instance_id
+    source_run_id INTEGER,
+    instance_id   TEXT    NOT NULL,
     frame_index   INTEGER NOT NULL,
-    side          TEXT    NOT NULL CHECK (side IN ('front', 'back', 'uncertain')),
-    labeler       TEXT,                          -- "human" or "model:<name>"
+    side          TEXT    NOT NULL CHECK (side IN ('front', 'back', 'uncertain', 'no_card')),
+    labeler       TEXT,
     created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
--- 5. dedup_clusters
+-- 9. dedup_clusters
 -- Groups of card instances predicted (and optionally confirmed) to be the same physical card.
--- Written by: Surface A dedup step (predicted), Surface D cluster-UX (confirmed).
--- Read by: Surface B (dedup cluster UX), Surface C (dedup training).
--- predicted_member_ids_json: ["<instance_id>", ...]
--- confirmed_member_ids_json: null until an operator confirms the cluster.
--- status: "unverified" → "confirmed" | "split" | "merged"
 CREATE TABLE IF NOT EXISTS dedup_clusters (
     cluster_id                INTEGER PRIMARY KEY AUTOINCREMENT,
-    predicted_member_ids_json TEXT    NOT NULL,  -- JSON array of instance UUIDs
-    confirmed_member_ids_json TEXT,              -- JSON array; NULL until verified
+    predicted_member_ids_json TEXT    NOT NULL,
+    confirmed_member_ids_json TEXT,
     status                    TEXT    NOT NULL CHECK (status IN ('unverified', 'confirmed', 'split', 'merged')),
     updated_at                TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
--- 6. model_versions
+-- 10. model_versions
 -- Registry of trained model checkpoints with eval metrics.
--- Written by: Surface C (training pipeline). Read by: Surface B (Train tab), Surface A (model loader).
--- eval_metrics_json: {"val_accuracy": 0.94, "val_f1": 0.93, ...}
--- checkpoint_path: absolute or repo-relative path to .pt / .mlpackage file.
 CREATE TABLE IF NOT EXISTS model_versions (
     version_id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    model_name          TEXT    NOT NULL,        -- e.g. "fb_classifier", "presence_classifier"
-    training_set_hash   TEXT    NOT NULL,        -- SHA256 of the training dataset manifest
-    eval_metrics_json   TEXT    NOT NULL,        -- JSON blob
+    model_name          TEXT    NOT NULL,
+    training_set_hash   TEXT    NOT NULL,
+    eval_metrics_json   TEXT    NOT NULL,
     checkpoint_path     TEXT    NOT NULL,
     created_at          TEXT    NOT NULL DEFAULT (datetime('now')),
     UNIQUE (model_name, training_set_hash)
 );
 
--- 7. hard_cases
+-- 11. hard_cases
 -- Auto-captured edge-case frames surfaced in the Hard Cases tab for operator review.
--- Written by: Surface A pipeline (existing hard_case_capture.py integration). Read by: Surface B, Surface C.
--- stage_id: Metaflow step name where the case was captured (e.g. "novelty", "score").
--- reason: short string e.g. "novelty_below_threshold", "low_confidence", "blur"
 CREATE TABLE IF NOT EXISTS hard_cases (
     case_id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id            TEXT,                      -- Metaflow run ID (loosely coupled; nullable for legacy)
+    run_id            TEXT,
     frame_index       INTEGER,
-    stage_id          TEXT    NOT NULL,          -- Metaflow step name
+    stage_id          TEXT    NOT NULL,
     reason            TEXT    NOT NULL,
     thumbnail_path    TEXT,
     source_frame_path TEXT,
     created_at        TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
--- Extensions to existing pipeline_events table
--- Applied with try/except at migration runtime (SQLite < 3.35.5 has no IF NOT EXISTS for ADD COLUMN).
-ALTER TABLE pipeline_events ADD COLUMN stage_id TEXT;       -- Metaflow step name
-ALTER TABLE pipeline_events ADD COLUMN artifact_ref TEXT;   -- "<run_id>/<step>/<artifact_name>"
+-- 12. config_presets
+CREATE TABLE IF NOT EXISTS config_presets (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    preset_name TEXT    NOT NULL UNIQUE,
+    description TEXT    NOT NULL DEFAULT '',
+    config_json TEXT    NOT NULL,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
 
--- Indices
-CREATE INDEX IF NOT EXISTS idx_regression_runs_baseline ON regression_runs(baseline_id);
-CREATE INDEX IF NOT EXISTS idx_fb_labels_instance        ON fb_labels(instance_id);
-CREATE INDEX IF NOT EXISTS idx_pipeline_events_stage     ON pipeline_events(stage_id);
+-- 13. pipeline_runs
+CREATE TABLE IF NOT EXISTS pipeline_runs (
+    run_id      TEXT    PRIMARY KEY,
+    video_id    INTEGER NOT NULL REFERENCES videos(id),
+    status      TEXT    NOT NULL DEFAULT 'running',
+    cards_extracted INTEGER NOT NULL DEFAULT 0,
+    started_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    finished_at TEXT,
+    detect_telemetry_json TEXT,
+    host_info_json TEXT
+);
+
+-- 14. presence_samples
+CREATE TABLE IF NOT EXISTS presence_samples (
+    id           INTEGER PRIMARY KEY,
+    run_id       TEXT    NOT NULL,
+    video_id     INTEGER NOT NULL,
+    frame_index  INTEGER NOT NULL,
+    timestamp_ms INTEGER NOT NULL,
+    image_path   TEXT    NOT NULL,
+    label        TEXT    CHECK (label IN ('present', 'absent')),
+    labeled_at   TEXT,
+    created_at   TEXT    DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 15. corner_samples
+CREATE TABLE IF NOT EXISTS corner_samples (
+    id                INTEGER PRIMARY KEY,
+    run_id            TEXT    NOT NULL,
+    video_id          INTEGER NOT NULL,
+    frame_index       INTEGER NOT NULL,
+    image_path        TEXT    NOT NULL,
+    predicted_corners TEXT    NOT NULL,
+    confidence        REAL    NOT NULL,
+    label             TEXT    CHECK (label IN ('correct', 'adjusted', 'negative')),
+    corrected_corners TEXT,
+    labeled_at        TEXT,
+    created_at        TEXT    DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 16. benchmark_snapshots
+CREATE TABLE IF NOT EXISTS benchmark_snapshots (
+    id              INTEGER PRIMARY KEY,
+    job_id          TEXT    NOT NULL,
+    run_id          TEXT    NOT NULL,
+    cards_extracted INTEGER NOT NULL,
+    snapshotted_at  TEXT    DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 17. pipeline_run_logs
+CREATE TABLE IF NOT EXISTS pipeline_run_logs (
+    id        INTEGER PRIMARY KEY,
+    run_id    TEXT    NOT NULL,
+    line      TEXT    NOT NULL,
+    logged_at TEXT    DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 18. run_resource_samples
+CREATE TABLE IF NOT EXISTS run_resource_samples (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id       TEXT    NOT NULL,
+    elapsed_s    REAL    NOT NULL,
+    cpu_pct      REAL,
+    mem_used_mb  REAL,
+    mem_pct      REAL,
+    gpu_pct      REAL,
+    vram_used_mb REAL,
+    stage        TEXT    DEFAULT 'init',
+    decoder_pct  REAL,
+    encoder_pct  REAL,
+    mem_io_pct   REAL
+);
+
+-- 19. card_view_metrics
+CREATE TABLE IF NOT EXISTS card_view_metrics (
+    card_instance_id TEXT NOT NULL,
+    metric           TEXT NOT NULL,
+    value            REAL NOT NULL,
+    PRIMARY KEY (card_instance_id, metric)
+);
+
+-- 20. telemetry_events
+CREATE TABLE IF NOT EXISTS telemetry_events (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id    TEXT,
+    kind      TEXT NOT NULL,
+    payload   TEXT,
+    at_ms     INTEGER NOT NULL
+);
+
+-- 21. batch_jobs
+CREATE TABLE IF NOT EXISTS batch_jobs (
+    batch_id   TEXT PRIMARY KEY,
+    status     TEXT NOT NULL DEFAULT 'queued',
+    total      INTEGER NOT NULL DEFAULT 0,
+    completed  INTEGER NOT NULL DEFAULT 0,
+    failed     INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 ```
 
 ---
 
 ## Table Summary
 
-| Table | Owner (writes) | Consumers (reads) | JSON blobs | Notes |
-|---|---|---|---|---|
-| `truth_files` | D | D, B | `payload_json` (Contract 4 shape) | One row per video; overwritten on save |
-| `regression_baselines` | D | D, B | `config_json` | Name must be unique; `baseline_v4.1` is the Wave 1 seed |
-| `regression_runs` | D | D, B | `metrics_json`, `per_video_json` | FK to `regression_baselines`; nullable if no baseline selected |
-| `fb_labels` | D | C | — | `labeler = "human"` for UX-sourced labels |
-| `dedup_clusters` | A (predicted), D (confirmed) | B, C | `predicted_member_ids_json`, `confirmed_member_ids_json` | Status starts `unverified` |
-| `model_versions` | C | A, B | `eval_metrics_json` | Unique constraint prevents duplicate retrain rows |
-| `hard_cases` | A | B, C | — | `run_id` is a Metaflow run-id string, not an integer FK |
-| `pipeline_events` (ext.) | A | A, B, D | — | `stage_id` and `artifact_ref` are new nullable columns |
-
----
-
-## Migration Runner Contract
-
-`migrations/run_migrations.py` exposes a single public function:
-
-```python
-def apply_migrations(db_path: Path) -> None: ...
-```
-
-- Applies every `*.sql` file in `migrations/` in sorted filename order.
-- Tracks applied files in an internal `_migrations` table.
-- Idempotent: re-running is safe.
-- `ALTER TABLE … ADD COLUMN` failures with `duplicate column name` are silently swallowed.
-- Any other `sqlite3.OperationalError` is re-raised.
-
----
-
-## Change Policy
-
-Changes to this contract require explicit written ack from all four surface owners (A, B, C, D) before any code is merged.
+| Table | Owner (writes) | Consumers (reads) | Notes |
+|---|---|---|---|
+| `videos` | A | A, B | Source video metadata |
+| `pipeline_events` | A | A, B, D | Fine-grained telemetry and event log |
+| `card_instances` | A | B, C | Logical card tracks across frames |
+| `card_views` | A | B | Per-frame card crops and metrics |
+| `saved_cards` | A | B | Legacy flattened card storage |
+| `truth_files` | D | D, B | Ground-truth labels for evaluation |
+| `regression_baselines`| D | D, B | Target snapshots for regression testing |
+| `regression_runs` | D | D, B | Results of harness executions |
+| `fb_labels` | D | C | Training labels for Front/Back classifier |
+| `dedup_clusters` | A, D | B, C | Grouping of physical card identity |
+| `model_versions` | C | A, B | Registry of ML model weights |
+| `hard_cases` | A | B, C | Edge cases flagged for review |
+| `config_presets` | B | A | Named sets of pipeline parameters |
+| `pipeline_runs` | A | B | Execution metadata for every run |
+| `presence_samples` | A, D | C | Dataset for Presence classifier training |
+| `corner_samples` | A, D | C | Dataset for Corner refinement training |
+| `benchmark_snapshots` | C | B | Point-in-time stats during training |
+| `pipeline_run_logs` | A | B | Stdout/stderr capture from runs |
+| `run_resource_samples`| A | B | CPU/GPU/Mem utilization over time |
+| `card_view_metrics` | A | B | Aggregated metrics for v5.5 DAL |
+| `telemetry_events` | A | B | Structured telemetry for v5.5 DAL |
+| `batch_jobs` | A | B | Status of cloud batch processing |

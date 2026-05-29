@@ -75,7 +75,7 @@ def main():
     has_error = False
     
     for table, cols in sql_schema.items():
-        if table == "_migrations":
+        if table in ("_migrations", "fb_labels_new"):
             continue
         if table not in md_schema:
             print(f"ERROR: Table '{table}' found in SQL but missing from docs.")
