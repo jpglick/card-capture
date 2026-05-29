@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 import tarfile
 import tempfile
 from pathlib import Path
@@ -159,8 +158,6 @@ class ResultImporter:
 
     def _import_worker_db(self, worker_db: Path, run_id: str, crops_dir: Path) -> None:
         with open_connection(self.db_path) as local, open_connection(worker_db) as worker:
-            local.row_factory = sqlite3.Row
-            worker.row_factory = sqlite3.Row
             video_id = self._local_video_id(local, run_id)
 
             id_map: dict[int, int] = {}
@@ -348,14 +345,14 @@ class ResultImporter:
             [values[c] for c in insert_cols],
         )
 
-    def _local_video_id(self, conn: sqlite3.Connection, run_id: str) -> int:
+    def _local_video_id(self, conn: Any, run_id: str) -> int:
         if self._table_exists(conn, "pipeline_runs") and self._has_column(conn, "pipeline_runs", "video_id"):
             row = conn.execute(RESULT_RUN_VIDEO_ID, (run_id,)).fetchone()
             if row and row[0] is not None:
                 return int(row[0])
         return 0
 
-    def _count_cards(self, conn: sqlite3.Connection, run_id: str) -> int:
+    def _count_cards(self, conn: Any, run_id: str) -> int:
         if not self._table_exists(conn, "card_instances"):
             return 0
         return int(conn.execute(RESULT_COUNT_CARDS, (run_id,)).fetchone()[0])
@@ -365,13 +362,13 @@ class ResultImporter:
             return None
         return str(crops_dir / Path(str(source_path)).name)
 
-    def _table_exists(self, conn: sqlite3.Connection, table: str) -> bool:
+    def _table_exists(self, conn: Any, table: str) -> bool:
         return conn.execute(
             RESULT_TABLE_EXISTS, (table,)
         ).fetchone() is not None
 
-    def _columns(self, conn: sqlite3.Connection, table: str) -> set[str]:
+    def _columns(self, conn: Any, table: str) -> set[str]:
         return {row[1] for row in conn.execute(result_pragma_table_info(table)).fetchall()}
 
-    def _has_column(self, conn: sqlite3.Connection, table: str, column: str) -> bool:
+    def _has_column(self, conn: Any, table: str, column: str) -> bool:
         return column in self._columns(conn, table) if self._table_exists(conn, table) else False

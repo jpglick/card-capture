@@ -16,6 +16,7 @@ from typing import Iterator
 def open_connection(db_path: Path | str, *, read_only: bool = False) -> sqlite3.Connection:
     uri = f"file:{db_path}?mode={'ro' if read_only else 'rwc'}"
     conn = sqlite3.connect(uri, uri=True, timeout=5.0, isolation_level=None)
+    conn.row_factory = sqlite3.Row
     if not read_only:
         import time
         # Small retry loop for WAL mode setup which can race with other connections
