@@ -118,15 +118,21 @@ class VideoSampler:
 
     def _sample_with_cv2(self, video_path: Path, sample_fps: float, pixel_format: str = "bgr24") -> Iterator[FrameSample]:
         import platform
+        used_avfoundation = False
         if platform.system() == "Darwin":
             capture = cv2.VideoCapture(str(video_path), cv2.CAP_AVFOUNDATION)
+            used_avfoundation = True
+            if not capture.isOpened():
+                capture.release()
+                capture = _open_capture(video_path)
+                used_avfoundation = False
         else:
             capture = _open_capture(video_path)
             
         if not capture.isOpened():
             raise ValueError(f"Could not decode video: {video_path}")
         
-        print(f"[sampler] opencv decoder active (macOS AVFoundation: {platform.system() == 'Darwin'})", flush=True)
+        print(f"[sampler] opencv decoder active (macOS AVFoundation: {used_avfoundation})", flush=True)
 
         source_fps = capture.get(cv2.CAP_PROP_FPS) or sample_fps
         frame_step = max(1, int(round(source_fps / sample_fps))) if sample_fps > 0 else 1

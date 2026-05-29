@@ -7,6 +7,7 @@ rather than skipping silently.
 from __future__ import annotations
 
 import os
+import site
 import shutil
 import subprocess
 
@@ -22,9 +23,11 @@ _INSTALL_HINT = (
 
 
 def test_import_contracts() -> None:
-    if shutil.which("lint-imports") is None:
-        pytest.fail(_INSTALL_HINT)
     env = os.environ.copy()
+    user_bin = os.path.join(site.getuserbase(), "bin")
+    env["PATH"] = f"{user_bin}:{env.get('PATH', '')}"
+    if shutil.which("lint-imports", path=env["PATH"]) is None:
+        pytest.fail(_INSTALL_HINT)
     env["PYTHONPATH"] = f"src:.:{env.get('PYTHONPATH', '')}"
     result = subprocess.run(
         ["lint-imports"], capture_output=True, text=True, check=False, env=env
