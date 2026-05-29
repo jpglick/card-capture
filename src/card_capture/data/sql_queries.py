@@ -67,6 +67,99 @@ LABELS_COUNT = "SELECT COUNT(*) FROM fb_labels"
 CLUSTERS_LIST_BASE = (
     "SELECT cluster_id, predicted_member_ids_json, confirmed_member_ids_json, status, updated_at FROM dedup_clusters"
 )
+LABELING_PRAGMA_CARD_INSTANCES = "PRAGMA table_info(card_instances)"
+LABELING_FB_CANDIDATE_BY_INSTANCE = """
+SELECT
+    ci.instance_id AS instance_id,
+    cv.frame_index,
+    cv.rectified_path AS canonical_url,
+    v.source_path AS video_id,
+    ci.run_id
+FROM card_views cv
+JOIN card_instances ci ON ci.id = cv.card_instance_id
+JOIN videos v ON v.id = ci.video_id
+LEFT JOIN fb_labels fl ON fl.instance_id = ci.instance_id
+WHERE cv.is_canonical = 1
+  AND fl.label_id IS NULL
+ORDER BY cv.confidence DESC
+LIMIT 1
+"""
+LABELING_FB_CANDIDATE_BY_TRACK = """
+SELECT
+    ci.track_id AS instance_id,
+    cv.frame_index,
+    cv.rectified_path AS canonical_url,
+    v.source_path AS video_id,
+    ci.run_id
+FROM card_views cv
+JOIN card_instances ci ON ci.id = cv.card_instance_id
+JOIN videos v ON v.id = ci.video_id
+LEFT JOIN fb_labels fl ON fl.instance_id = ci.track_id
+WHERE cv.is_canonical = 1
+  AND fl.label_id IS NULL
+ORDER BY cv.confidence DESC
+LIMIT 1
+"""
+LABELING_FB_PENDING_BY_INSTANCE = """
+SELECT COUNT(DISTINCT ci.instance_id)
+FROM card_views cv
+JOIN card_instances ci ON ci.id = cv.card_instance_id
+LEFT JOIN fb_labels fl ON fl.instance_id = ci.instance_id
+WHERE cv.is_canonical = 1 AND fl.label_id IS NULL
+"""
+LABELING_FB_PENDING_BY_TRACK = """
+SELECT COUNT(DISTINCT ci.track_id)
+FROM card_views cv
+JOIN card_instances ci ON ci.id = cv.card_instance_id
+LEFT JOIN fb_labels fl ON fl.instance_id = ci.track_id
+WHERE cv.is_canonical = 1 AND fl.label_id IS NULL
+"""
+LABELING_CLUSTERS_ORDER = " ORDER BY updated_at DESC"
+
+REVIEW_CARD_JOIN_BY_DETECTION = """
+SELECT ci.id as instance_id, ci.fused_image_path, ci.angle, ci.session_id
+FROM card_views cv
+JOIN card_instances ci ON cv.card_instance_id = ci.id
+WHERE cv.id = ?
+"""
+REVIEW_CANONICAL_VIEWS = """
+SELECT id, rectified_path
+FROM card_views
+WHERE card_instance_id = ? AND is_canonical = 1 AND rectified_path IS NOT NULL
+ORDER BY id ASC
+"""
+REVIEW_TIMELINE_EVENTS_BASE = "SELECT frame_index, timestamp_ms, event_type, data_json FROM pipeline_events"
+REVIEW_TIMELINE_EVENTS_ORDER = " ORDER BY timestamp_ms ASC"
+REVIEW_TIMELINE_INSTANCES_BASE = """
+SELECT ci.id as instance_id, ci.session_id, ci.angle, ci.is_duplicate_of, ci.video_id, ci.fused_image_path,
+       MIN(cv.timestamp_ms) as start_time, MAX(cv.timestamp_ms) as end_time,
+       COUNT(cv.id) as detection_count,
+       MIN(cv.id) as first_view_id
+FROM card_instances ci
+LEFT JOIN card_views cv ON cv.card_instance_id = ci.id
+"""
+REVIEW_TIMELINE_INSTANCES_ORDER = " GROUP BY ci.id ORDER BY start_time ASC"
+REVIEW_VIDEO_BY_ID = "SELECT id, source_path FROM videos WHERE id = ?"
+REVIEW_LABEL_INSTANCES_BY_VIDEO = """
+SELECT ci.id AS instance_id, ci.angle, ci.session_id, ci.is_duplicate_of,
+       MIN(cv.timestamp_ms) AS start_time, MAX(cv.timestamp_ms) AS end_time,
+       ci.fused_image_path
+FROM card_instances ci
+LEFT JOIN card_views cv ON cv.card_instance_id = ci.id
+WHERE ci.video_id = ?
+GROUP BY ci.id
+ORDER BY start_time ASC
+"""
+REVIEW_VIDEO_SOURCE_BY_ID = "SELECT source_path FROM videos WHERE id = ?"
+REVIEW_VIDEO_COUNT = "SELECT COUNT(*) FROM videos"
+REVIEW_VIDEOS_LIST = "SELECT id, source_path FROM videos ORDER BY id"
+REVIEW_FUSED_IMAGE_BY_INSTANCE = "SELECT fused_image_path FROM card_instances WHERE id = ?"
+REVIEW_CARD_VIEW_BY_ID = """
+SELECT cv.rectified_path, cv.card_instance_id, ci.fused_image_path
+FROM card_views cv
+JOIN card_instances ci ON ci.id = cv.card_instance_id
+WHERE cv.id = ?
+"""
 
 # Training service
 TRAINING_FB_DIST = "SELECT side, COUNT(*) as count FROM fb_labels GROUP BY side"

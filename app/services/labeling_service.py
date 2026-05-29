@@ -10,6 +10,17 @@ from pathlib import Path
 from typing import Optional, Any
 
 from card_capture.data.connection import read_connection
+from card_capture.data.sql_queries import (
+    CLUSTERS_LIST_BASE,
+    LABELING_CLUSTERS_ORDER,
+    LABELING_FB_CANDIDATE_BY_INSTANCE,
+    LABELING_FB_CANDIDATE_BY_TRACK,
+    LABELING_FB_PENDING_BY_INSTANCE,
+    LABELING_FB_PENDING_BY_TRACK,
+    LABELING_PRAGMA_CARD_INSTANCES,
+    LABELS_COUNT,
+    TRUTH_GET,
+)
 from harness.schema import TruthFile
 
 
@@ -41,10 +52,7 @@ class LabelingService:
             return self._repo.get_truth_payload(video_id)
         
         with read_connection(self.db_path) as conn:
-            row = conn.execute(
-                "SELECT payload_json FROM truth_files WHERE video_id = ?",
-                (video_id,),
-            ).fetchone()
+            row = conn.execute(TRUTH_GET, (video_id,)).fetchone()
         return json.loads(row[0]) if row else None
 
     def put_truth(self, video_id: str, payload: dict) -> None:
@@ -93,42 +101,20 @@ class LabelingService:
             dict: The candidate data, or None if no unlabeled candidates remain.
         """
         with read_connection(self.db_path) as conn:
-            card_cols = {r[1] for r in conn.execute("PRAGMA table_info(card_instances)").fetchall()}
-            instance_expr = "ci.instance_id" if "instance_id" in card_cols else "ci.track_id"
-            # Join card_views with fb_labels to find unlabeled instances.
-            # We join card_views -> card_instances -> videos to get run_id/video_id.
+            card_cols = {r[1] for r in conn.execute(LABELING_PRAGMA_CARD_INSTANCES).fetchall()}
+            use_instance_id = "instance_id" in card_cols
             row = conn.execute(
-                f"""
-                SELECT
-                    {instance_expr} AS instance_id,
-                    cv.frame_index,
-                    cv.rectified_path AS canonical_url,
-                    v.source_path AS video_id,
-                    ci.run_id
-                FROM card_views cv
-                JOIN card_instances ci ON ci.id = cv.card_instance_id
-                JOIN videos v ON v.id = ci.video_id
-                LEFT JOIN fb_labels fl ON fl.instance_id = {instance_expr}
-                WHERE cv.is_canonical = 1 
-                  AND fl.label_id IS NULL
-                ORDER BY cv.confidence DESC
-                LIMIT 1
-                """
+                LABELING_FB_CANDIDATE_BY_INSTANCE if use_instance_id else LABELING_FB_CANDIDATE_BY_TRACK
             ).fetchone()
         
         if not row:
             return None
 
         with read_connection(self.db_path) as conn:
-            labels_collected = conn.execute("SELECT COUNT(*) FROM fb_labels").fetchone()[0]
-            # Count distinct unlabeled instances that have a canonical view
-            pending_count = conn.execute(f"""
-                SELECT COUNT(DISTINCT {instance_expr})
-                FROM card_views cv
-                JOIN card_instances ci ON ci.id = cv.card_instance_id
-                LEFT JOIN fb_labels fl ON fl.instance_id = {instance_expr}
-                WHERE cv.is_canonical = 1 AND fl.label_id IS NULL
-            """).fetchone()[0]
+            labels_collected = conn.execute(LABELS_COUNT).fetchone()[0]
+            pending_count = conn.execute(
+                LABELING_FB_PENDING_BY_INSTANCE if use_instance_id else LABELING_FB_PENDING_BY_TRACK
+            ).fetchone()[0]
 
         res = {
             "instance_id": row[0],
@@ -144,12 +130,12 @@ class LabelingService:
 
     def list_clusters(self, status: Optional[str] = None) -> list[dict[str, Any]]:
         """List dedup clusters, optionally filtered by status."""
-        query = "SELECT cluster_id, predicted_member_ids_json, confirmed_member_ids_json, status, updated_at FROM dedup_clusters"
+        query = CLUSTERS_LIST_BASE
         params = []
         if status:
             query += " WHERE status = ?"
             params.append(status)
-        query += " ORDER BY updated_at DESC"
+        query += LABELING_CLUSTERS_ORDER
         
         with read_connection(self.db_path) as conn:
             rows = conn.execute(query, params).fetchall()

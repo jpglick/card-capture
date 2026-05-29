@@ -2,6 +2,21 @@ import json
 from pathlib import Path
 from typing import Optional
 
+from card_capture.data.sql_queries import (
+    REVIEW_CANONICAL_VIEWS,
+    REVIEW_CARD_JOIN_BY_DETECTION,
+    REVIEW_CARD_VIEW_BY_ID,
+    REVIEW_FUSED_IMAGE_BY_INSTANCE,
+    REVIEW_LABEL_INSTANCES_BY_VIDEO,
+    REVIEW_TIMELINE_EVENTS_BASE,
+    REVIEW_TIMELINE_EVENTS_ORDER,
+    REVIEW_TIMELINE_INSTANCES_BASE,
+    REVIEW_TIMELINE_INSTANCES_ORDER,
+    REVIEW_VIDEO_BY_ID,
+    REVIEW_VIDEO_COUNT,
+    REVIEW_VIDEOS_LIST,
+    REVIEW_VIDEO_SOURCE_BY_ID,
+)
 from .storage import Storage
 
 def create_app(db_path: Path):
@@ -56,27 +71,14 @@ def create_app(db_path: Path):
         with storage._connect() as conn:
             for card in cards:
                 # Join to find the instance_id linked to the card_view (detection_id)
-                row = conn.execute("""
-                    SELECT ci.id as instance_id, ci.fused_image_path, ci.angle, ci.session_id
-                    FROM card_views cv
-                    JOIN card_instances ci ON cv.card_instance_id = ci.id
-                    WHERE cv.id = ?
-                """, (card["detection_id"],)).fetchone()
+                row = conn.execute(REVIEW_CARD_JOIN_BY_DETECTION, (card["detection_id"],)).fetchone()
                 
                 if row:
                     card["instance_id"] = row["instance_id"]
                     card["fused_image_path"] = row["fused_image_path"]
                     card["angle"] = row["angle"]
                     card["session_id"] = row["session_id"]
-                    canonical_rows = conn.execute(
-                        """
-                        SELECT id, rectified_path
-                        FROM card_views
-                        WHERE card_instance_id = ? AND is_canonical = 1 AND rectified_path IS NOT NULL
-                        ORDER BY id ASC
-                        """,
-                        (row["instance_id"],),
-                    ).fetchall()
+                    canonical_rows = conn.execute(REVIEW_CANONICAL_VIEWS, (row["instance_id"],)).fetchall()
                     card["canonical_views"] = [
                         {"view_id": int(view["id"]), "rectified_path": view["rectified_path"]}
                         for view in canonical_rows
@@ -89,11 +91,7 @@ def create_app(db_path: Path):
                     card["canonical_views"] = []
             
             # Fetch pipeline events (resets, flips)
-            events = conn.execute("""
-                SELECT frame_index, timestamp_ms, event_type, data_json
-                FROM pipeline_events
-                ORDER BY timestamp_ms ASC
-            """).fetchall()
+            events = conn.execute(REVIEW_TIMELINE_EVENTS_BASE + REVIEW_TIMELINE_EVENTS_ORDER).fetchall()
             
             # Map events to dicts
             pipeline_events = []
@@ -115,12 +113,12 @@ def create_app(db_path: Path):
     def timeline(request: Request, video: Optional[int] = None):
         with storage._connect() as conn:
             # Fetch pipeline events (resets, flips)
-            events_query = "SELECT frame_index, timestamp_ms, event_type, data_json FROM pipeline_events"
+            events_query = REVIEW_TIMELINE_EVENTS_BASE
             params = []
             if video is not None:
                 events_query += " WHERE video_id = ?"
                 params.append(video)
-            events_query += " ORDER BY timestamp_ms ASC"
+            events_query += REVIEW_TIMELINE_EVENTS_ORDER
             events = conn.execute(events_query, params).fetchall()
             
             pipeline_events = []
@@ -132,17 +130,10 @@ def create_app(db_path: Path):
                     "data": json.loads(e["data_json"]) if e["data_json"] else {}
                 })
 
-            instances_query = """
-                SELECT ci.id as instance_id, ci.session_id, ci.angle, ci.is_duplicate_of, ci.video_id, ci.fused_image_path,
-                       MIN(cv.timestamp_ms) as start_time, MAX(cv.timestamp_ms) as end_time,
-                       COUNT(cv.id) as detection_count,
-                       MIN(cv.id) as first_view_id
-                FROM card_instances ci
-                LEFT JOIN card_views cv ON cv.card_instance_id = ci.id
-            """
+            instances_query = REVIEW_TIMELINE_INSTANCES_BASE
             if video is not None:
                 instances_query += " WHERE ci.video_id = ?"
-            instances_query += " GROUP BY ci.id ORDER BY start_time ASC"
+            instances_query += REVIEW_TIMELINE_INSTANCES_ORDER
             
             instances = conn.execute(instances_query, params).fetchall()
             
@@ -170,25 +161,11 @@ def create_app(db_path: Path):
     @app.get("/label/{video_id}", response_class=HTMLResponse)
     def label_get(request: Request, video_id: int):
         with storage._connect() as conn:
-            video_row = conn.execute(
-                "SELECT id, source_path FROM videos WHERE id = ?", (video_id,),
-            ).fetchone()
+            video_row = conn.execute(REVIEW_VIDEO_BY_ID, (video_id,)).fetchone()
             if video_row is None:
                 return HTMLResponse(f"video {video_id} not found", status_code=404)
 
-            instances = conn.execute(
-                """
-                SELECT ci.id AS instance_id, ci.angle, ci.session_id, ci.is_duplicate_of,
-                       MIN(cv.timestamp_ms) AS start_time, MAX(cv.timestamp_ms) AS end_time,
-                       ci.fused_image_path
-                FROM card_instances ci
-                LEFT JOIN card_views cv ON cv.card_instance_id = ci.id
-                WHERE ci.video_id = ?
-                GROUP BY ci.id
-                ORDER BY start_time ASC
-                """,
-                (video_id,),
-            ).fetchall()
+            instances = conn.execute(REVIEW_LABEL_INSTANCES_BY_VIDEO, (video_id,)).fetchall()
 
         instance_data = [dict(r) for r in instances]
         truth_path = _truth_path_for_video(video_row["source_path"])
@@ -209,9 +186,7 @@ def create_app(db_path: Path):
     async def label_save(video_id: int, request: Request):
         payload = await request.json()
         with storage._connect() as conn:
-            video_row = conn.execute(
-                "SELECT source_path FROM videos WHERE id = ?", (video_id,),
-            ).fetchone()
+            video_row = conn.execute(REVIEW_VIDEO_SOURCE_BY_ID, (video_id,)).fetchone()
             if video_row is None:
                 return {"ok": False, "error": "video not found"}
 
@@ -223,8 +198,8 @@ def create_app(db_path: Path):
     @app.get("/setup", response_class=HTMLResponse)
     def setup(request: Request):
         with storage._connect() as conn:
-            video_count = conn.execute("SELECT COUNT(*) FROM videos").fetchone()[0]
-            videos = conn.execute("SELECT id, source_path FROM videos ORDER BY id").fetchall()
+            video_count = conn.execute(REVIEW_VIDEO_COUNT).fetchone()[0]
+            videos = conn.execute(REVIEW_VIDEOS_LIST).fetchall()
 
         corpus_root = Path("tests/fixtures/golden_corpus")
         truth_count = len(list(corpus_root.glob("*/*.truth.json"))) if corpus_root.exists() else 0
@@ -265,7 +240,7 @@ def create_app(db_path: Path):
     @app.get("/fused_images/{instance_id}")
     def get_fused_image(instance_id: int):
         with storage._connect() as conn:
-            row = conn.execute("SELECT fused_image_path FROM card_instances WHERE id = ?", (instance_id,)).fetchone()
+            row = conn.execute(REVIEW_FUSED_IMAGE_BY_INSTANCE, (instance_id,)).fetchone()
             if row and row["fused_image_path"]:
                 resolved = _resolve_existing_path(row["fused_image_path"])
                 if resolved is not None:
@@ -275,15 +250,7 @@ def create_app(db_path: Path):
     @app.get("/card_views/{view_id}")
     def get_card_view(view_id: int):
         with storage._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT cv.rectified_path, cv.card_instance_id, ci.fused_image_path
-                FROM card_views cv
-                JOIN card_instances ci ON ci.id = cv.card_instance_id
-                WHERE cv.id = ?
-                """,
-                (view_id,),
-            ).fetchone()
+            row = conn.execute(REVIEW_CARD_VIEW_BY_ID, (view_id,)).fetchone()
             if row:
                 resolved_rectified = _resolve_existing_path(row["rectified_path"])
                 if resolved_rectified is not None:
