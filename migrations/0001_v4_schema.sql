@@ -187,11 +187,6 @@ CREATE TABLE IF NOT EXISTS hard_cases (
     created_at        TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
--- Extensions to existing pipeline_events table
--- Applied with try/except at migration runtime (SQLite < 3.35.5 has no IF NOT EXISTS for ADD COLUMN).
-ALTER TABLE pipeline_events ADD COLUMN stage_id TEXT;
-ALTER TABLE pipeline_events ADD COLUMN artifact_ref TEXT;
-
 -- Indices
 CREATE INDEX IF NOT EXISTS idx_regression_runs_baseline ON regression_runs(baseline_id);
 CREATE INDEX IF NOT EXISTS idx_fb_labels_instance        ON fb_labels(instance_id);

@@ -1,91 +1,104 @@
-"""Service layer for video management.
-"""
+"""Service layer for managing video metadata and processing status."""
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Optional
+
+from card_capture.data.connection import read_connection
 
 
 class VideoService:
-    def __init__(self, db_path: Path) -> None:
+    def __init__(self, db_path: Path, videos_repo=None) -> None:
         self.db_path = db_path
+        self._repo = videos_repo
 
-    def list_videos(self) -> List[dict[str, Any]]:
-        """Return a list of all registered videos."""
-        with sqlite3.connect(str(self.db_path)) as conn:
-            conn.row_factory = sqlite3.Row
+    def list_videos(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Return a list of the most recent videos."""
+        if self._repo:
+            return self._repo.list_recent(limit=limit)
+            
+        with read_connection(self.db_path) as conn:
             rows = conn.execute(
-                "SELECT id, source_path, status, duration_ms, created_at FROM videos ORDER BY created_at DESC"
+                "SELECT * FROM videos ORDER BY created_at DESC LIMIT ?",
+                (limit,),
             ).fetchall()
-            return [
-                {
-                    "video_id": str(r["id"]),
-                    "filename": Path(r["source_path"]).name,
-                    "duration_ms": r["duration_ms"],
-                    "status": r["status"],
-                    "created_at": r["created_at"]
-                }
-                for r in rows
-            ]
+        # Fallback for when repo is not yet fully utilized or returns different shape
+        return [dict(zip(["id", "source_path", "file_hash", "duration_ms", "width", "height", "status", "created_at"], r)) for r in rows]
 
     def get_video(self, video_id: int) -> Optional[dict[str, Any]]:
-        """Retrieve a single video record by ID."""
-        with sqlite3.connect(str(self.db_path)) as conn:
-            conn.row_factory = sqlite3.Row
+        """Retrieve metadata for a specific video."""
+        if self._repo:
+            return self._repo.get(video_id)
+            
+        with read_connection(self.db_path) as conn:
             row = conn.execute(
-                "SELECT id, source_path, status, duration_ms, created_at FROM videos WHERE id = ?",
+                "SELECT * FROM videos WHERE id = ?",
                 (video_id,),
             ).fetchone()
-            if not row:
-                return None
-            return {
-                "video_id": str(row["id"]),
-                "filename": Path(row["source_path"]).name,
-                "source_path": row["source_path"],
-                "duration_ms": row["duration_ms"],
-                "status": row["status"],
-                "created_at": row["created_at"]
-            }
+        return dict(zip(["id", "source_path", "file_hash", "duration_ms", "width", "height", "status", "created_at"], row)) if row else None
 
-    def add_video(self, source_path: str) -> int:
+    def add_video(
+        self,
+        source_path: str,
+        file_hash: str = "unknown",
+        duration_ms: int = 0,
+        width: int = 0,
+        height: int = 0,
+    ) -> int:
         """Register a new video for processing."""
-        from card_capture.storage import Storage
-        from card_capture.ingestion import probe_video
-
-        path = Path(source_path)
-        if not path.exists():
-            # If relative, try to find it in data/videos or golden_set/videos
-            candidates = [
-                Path("data/videos") / source_path,
-                Path("golden_set/videos") / source_path,
-            ]
-            for cand in candidates:
-                if cand.exists():
-                    path = cand
-                    break
-
-        metadata = probe_video(path) if path.exists() else {}
-
-        storage = Storage(self.db_path)
-        video_id = storage.add_video(
-            source_path=str(path),
-            file_hash="pending",
-            duration_ms=metadata.get("duration_ms", 0),
-            width=metadata.get("width", 0),
-            height=metadata.get("height", 0),
-            status="pending",
-        )
-        return video_id
+        if self._repo:
+            return self._repo.register(
+                source_path=source_path,
+                file_hash=file_hash,
+                duration_ms=duration_ms,
+                width=width,
+                height=height,
+            )
+            
+        # Legacy fallback
+        from card_capture.data.connection import open_connection
+        conn = open_connection(self.db_path)
+        try:
+            cur = conn.execute(
+                """
+                INSERT INTO videos(source_path, file_hash, duration_ms, width, height)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (source_path, file_hash, duration_ms, width, height),
+            )
+            conn.commit()
+            return cur.lastrowid
+        finally:
+            conn.close()
 
     def update_status(self, video_id: int, status: str) -> None:
-        from card_capture.storage import Storage
-        Storage(self.db_path).update_video_status(video_id, status)
+        """Update the processing status of a video."""
+        if self._repo:
+            self._repo.update_status(video_id, status)
+            return
+
+        from card_capture.data.connection import open_connection
+        conn = open_connection(self.db_path)
+        try:
+            conn.execute("UPDATE videos SET status = ? WHERE id = ?", (status, video_id))
+            conn.commit()
+        finally:
+            conn.close()
 
     def delete_video(self, video_id: int) -> None:
-        """Remove a video and its associated runs/cards."""
-        with sqlite3.connect(str(self.db_path)) as conn:
-            # Cascading deletes should be handled by FKs if enabled
-            conn.execute("PRAGMA foreign_keys = ON")
-            conn.execute("DELETE FROM videos WHERE id = ?", (video_id,))
-            conn.commit()
+        """Remove a video and its associated data from the database."""
+        # This should probably be in the repository, but for now we do it here.
+        # It needs multiple writes, so it must go through the writer.
+        if self._repo and self._repo._writer:
+            from card_capture.data.writer import Write
+            self._repo._writer.submit(Write("DELETE FROM videos WHERE id = ?", (video_id,)))
+            self._repo._writer.submit(Write("DELETE FROM pipeline_events WHERE video_id = ?", (video_id,)))
+            self._repo._writer.submit(Write("DELETE FROM card_instances WHERE video_id = ?", (video_id,)))
+        else:
+            from card_capture.data.connection import open_connection
+            conn = open_connection(self.db_path)
+            try:
+                conn.execute("DELETE FROM videos WHERE id = ?", (video_id,))
+                conn.commit()
+            finally:
+                conn.close()

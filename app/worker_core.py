@@ -5,7 +5,6 @@ import io
 import json
 import os
 import re
-import sqlite3
 import subprocess
 import sys
 import tarfile
@@ -163,15 +162,16 @@ def package_results(job_id: str, output_dir: Path, db_path: Path) -> bytes:
     """Bundle crops, export.json, and worker SQLite into a gzipped tarball."""
     cards: list[dict] = []
     if db_path.exists():
+        from card_capture.data.connection import read_connection
         try:
-            with sqlite3.connect(db_path) as conn:
-                conn.row_factory = sqlite3.Row
+            with read_connection(db_path) as conn:
                 rows = conn.execute(
                     "SELECT track_id, session_id, fused_image_path, angle"
                     " FROM card_instances WHERE run_id=?",
                     (job_id,),
                 ).fetchall()
-                cards = [dict(r) for r in rows]
+                cards = [{"track_id": r[0], "session_id": r[1],
+                          "fused_image_path": r[2], "angle": r[3]} for r in rows]
         except Exception:
             pass
 

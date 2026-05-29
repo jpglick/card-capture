@@ -1,10 +1,10 @@
-"""Service layer for card management.
-"""
+"""Service layer for card management."""
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
 from typing import Any, List, Optional
+
+from card_capture.data.connection import read_connection
 
 
 def _to_file_url(path: Optional[str]) -> Optional[str]:
@@ -35,8 +35,9 @@ def _to_file_url(path: Optional[str]) -> Optional[str]:
 
 
 class CardService:
-    def __init__(self, db_path: Path) -> None:
+    def __init__(self, db_path: Path, cards_repo=None) -> None:
         self.db_path = db_path
+        self._repo = cards_repo
 
     def list_cards(
         self,
@@ -46,7 +47,7 @@ class CardService:
         page_size: int = 50,
     ) -> dict[str, Any]:
         """Return a paginated list of extracted card instances."""
-        query = "SELECT * FROM card_instances"
+        query = "SELECT id, track_id, video_id, run_id, angle, fused_image_path, created_at FROM card_instances"
         count_query = "SELECT COUNT(*) FROM card_instances"
         params = []
         where_clauses = ["hidden = 0"]
@@ -65,8 +66,7 @@ class CardService:
             
         query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
         
-        with sqlite3.connect(str(self.db_path)) as conn:
-            conn.row_factory = sqlite3.Row
+        with read_connection(str(self.db_path)) as conn:
             total = conn.execute(count_query, params).fetchone()[0]
             
             # Add limit and offset
@@ -76,28 +76,29 @@ class CardService:
             
             items = []
             for r in rows:
+                c_id, track_id, vid, r_id, angle, fused, created = r
+                
                 # Get the canonical view to get confidence
                 view = conn.execute(
                     "SELECT confidence, rectified_path FROM card_views WHERE card_instance_id = ? AND is_canonical = 1",
-                    (r["id"],)
+                    (c_id,)
                 ).fetchone()
                 
-                vid = r["video_id"]
                 video_row = conn.execute("SELECT source_path FROM videos WHERE id = ?", (vid,)).fetchone()
-                video_id_str = Path(video_row["source_path"]).stem if video_row else str(vid)
+                video_id_str = Path(video_row[0]).stem if video_row else str(vid)
 
                 items.append({
-                    "card_id": r["track_id"],
-                    "instance_id": str(r["id"]),
+                    "card_id": track_id,
+                    "instance_id": str(c_id),
                     "video_id": video_id_str,
-                    "run_id": r["run_id"] or f"legacy-{vid}",
-                    "side": r["angle"] or "Front",
+                    "run_id": r_id or f"legacy-{vid}",
+                    "side": angle or "Front",
                     "is_foil": False,
-                    "confidence": view["confidence"] if view else 0.0,
+                    "confidence": view[0] if view else 0.0,
                     "review_state": "pending",
-                    "canonical_url": _to_file_url(view["rectified_path"] if view else None),
-                    "fused_url": _to_file_url(r["fused_image_path"]),
-                    "created_at": r["created_at"],
+                    "canonical_url": _to_file_url(view[1] if view else None),
+                    "fused_url": _to_file_url(fused),
+                    "created_at": created,
                 })
             
             return {
@@ -109,43 +110,43 @@ class CardService:
 
     def get_card(self, card_instance_id: int) -> Optional[dict[str, Any]]:
         """Retrieve a single card record by internal database ID."""
-        with sqlite3.connect(str(self.db_path)) as conn:
-            conn.row_factory = sqlite3.Row
+        with read_connection(str(self.db_path)) as conn:
             row = conn.execute(
-                "SELECT * FROM card_instances WHERE id = ? AND hidden = 0",
+                "SELECT id, track_id, video_id, run_id, angle, fused_image_path, created_at FROM card_instances WHERE id = ? AND hidden = 0",
                 (card_instance_id,),
             ).fetchone()
             if not row:
                 return None
             
+            c_id, track_id, vid, r_id, angle, fused, created = row
+            
             view = conn.execute(
                 "SELECT confidence, rectified_path, frame_index FROM card_views WHERE card_instance_id = ? AND is_canonical = 1",
-                (row["id"],)
+                (c_id,)
             ).fetchone()
 
             source_frames = conn.execute(
                 "SELECT frame_index FROM card_views WHERE card_instance_id = ?",
-                (row["id"],)
+                (c_id,)
             ).fetchall()
             
-            vid = row["video_id"]
             video_row = conn.execute("SELECT source_path FROM videos WHERE id = ?", (vid,)).fetchone()
-            video_id_str = Path(video_row["source_path"]).stem if video_row else str(vid)
+            video_id_str = Path(video_row[0]).stem if video_row else str(vid)
 
             return {
-                "card_id": row["track_id"],
-                "instance_id": str(row["id"]),
+                "card_id": track_id,
+                "instance_id": str(c_id),
                 "video_id": video_id_str,
-                "run_id": row["run_id"] or f"legacy-{vid}",
-                "side": row["angle"] or "front",
+                "run_id": r_id or f"legacy-{vid}",
+                "side": angle or "front",
                 "is_foil": False,
-                "confidence": view["confidence"] if view else 0.0,
+                "confidence": view[0] if view else 0.0,
                 "review_state": "pending",
-                "canonical_url": _to_file_url(view["rectified_path"] if view else None),
-                "fused_url": _to_file_url(row["fused_image_path"]),
-                "created_at": row["created_at"],
-                "source_frame_indices": [f["frame_index"] for f in source_frames],
+                "canonical_url": _to_file_url(view[1] if view else None),
+                "fused_url": _to_file_url(fused),
+                "created_at": created,
+                "source_frame_indices": [f[0] for f in source_frames],
                 "quality_score": {
-                    "total": view["confidence"] if view else 0.0, # Placeholder
+                    "total": view[0] if view else 0.0, # Placeholder
                 }
             }

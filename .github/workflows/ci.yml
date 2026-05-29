@@ -17,18 +17,25 @@ jobs:
         python-version: "3.11"
     - name: Install system dependencies
       run: sudo apt-get update && sudo apt-get install -y ffmpeg libsm6 libxext6
-    - name: Install dependencies
+    - name: Install dependencies (with dev extras for Import Linter)
       run: |
         python -m pip install --upgrade pip
-        # Install regular requirements and test requirements. Assuming pip install -e .[test] works or requirements.txt
-        # If pyproject.toml is used:
-        pip install .
+        pip install -e ".[dev]"
         pip install pytest pytest-asyncio httpx pydantic anyio
-    - name: Test with pytest
-      run: |
-        pytest tests/ -q
-        pytest tests/architecture/ -q
     - name: Validate schema docs drift
       run: |
         python scripts/validate_schema_docs.py
-
+    - name: Default test suite
+      run: |
+        pytest tests/ -q
+    - name: Architecture lane (Import Linter + AST scanners)
+      run: |
+        pytest tests/architecture/ -q
+    - name: Performance harness smoke
+      run: |
+        pytest tests/performance/test_perf_harness_smoke.py -q
+    - name: Import Linter (blocking)
+      env:
+        PYTHONPATH: src:.
+      run: |
+        lint-imports

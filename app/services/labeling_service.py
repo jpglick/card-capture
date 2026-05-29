@@ -6,9 +6,14 @@ dedup cluster verification.
 from __future__ import annotations
 
 import json
-import sqlite3
 from pathlib import Path
-def _to_file_url(path: "Optional[str]") -> "Optional[str]":
+from typing import Optional, Any
+
+from card_capture.data.connection import read_connection
+from harness.schema import TruthFile
+
+
+def _to_file_url(path: Optional[str]) -> Optional[str]:
     if not path:
         return None
     p = Path(path)
@@ -23,43 +28,39 @@ def _to_file_url(path: "Optional[str]") -> "Optional[str]":
         return f"/files/{rel}" if rel else None
     except ValueError:
         return None
-from typing import Optional, Any
-
-from harness.schema import TruthFile
 
 
 class LabelingService:
-    def __init__(self, db_path: Path) -> None:
+    def __init__(self, db_path: Path, labeling_repo=None) -> None:
         self.db_path = db_path
+        self._repo = labeling_repo
 
     def get_truth(self, video_id: str) -> Optional[dict]:
         """Retrieve the truth.json payload for a video."""
-        with sqlite3.connect(str(self.db_path)) as conn:
-            conn.row_factory = sqlite3.Row
+        if self._repo:
+            return self._repo.get_truth_payload(video_id)
+        
+        with read_connection(self.db_path) as conn:
             row = conn.execute(
                 "SELECT payload_json FROM truth_files WHERE video_id = ?",
                 (video_id,),
             ).fetchone()
-        return json.loads(row["payload_json"]) if row else None
+        return json.loads(row[0]) if row else None
 
     def put_truth(self, video_id: str, payload: dict) -> None:
         """Store or update the truth.json payload for a video."""
         # Validate against schema before saving
         tf = TruthFile.model_validate(payload)
         
-        with sqlite3.connect(str(self.db_path)) as conn:
-            conn.execute(
-                """
-                INSERT INTO truth_files(video_id, schema_version, payload_json)
-                VALUES (?, ?, ?)
-                ON CONFLICT(video_id) DO UPDATE SET
-                    schema_version=excluded.schema_version,
-                    payload_json=excluded.payload_json,
-                    updated_at=datetime('now')
-                """,
-                (video_id, tf.schema_version, tf.model_dump_json()),
-            )
-            conn.commit()
+        if self._repo:
+            self._repo.store_truth_payload(video_id, tf.model_dump())
+            return
+
+        # Legacy fallback (to be removed once all callers use repo)
+        from card_capture.data.writer import Write
+        # We need a writer here... but service doesn't have one directly.
+        # This is why we must use the repository.
+        raise RuntimeError("LabelingService.put_truth requires labeling_repo")
 
     def post_fb_label(
         self,
@@ -68,26 +69,22 @@ class LabelingService:
         side: str,
         labeler: Optional[str] = None,
         source_run_id: Optional[int] = None,
-    ) -> int:
+    ) -> None:
         """Record a human (or model) front/back label."""
         if side not in ("front", "back", "uncertain", "no_card"):
             raise ValueError(f"Invalid side: {side}")
             
-        with sqlite3.connect(str(self.db_path)) as conn:
-            cur = conn.execute(
-                """
-                INSERT INTO fb_labels(source_run_id, instance_id, frame_index, side, labeler)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (source_run_id, instance_id, frame_index, side, labeler),
+        if self._repo:
+            self._repo.store_fb_label(
+                instance_id=instance_id,
+                frame_index=frame_index,
+                side=side,
+                labeler=labeler or "human",
+                source_run_id=source_run_id,
             )
-            if side == "no_card":
-                conn.execute(
-                    "UPDATE card_instances SET hidden=1 WHERE track_id=?",
-                    (instance_id,),
-                )
-            conn.commit()
-            return cur.lastrowid
+            return
+        
+        raise RuntimeError("LabelingService.post_fb_label requires labeling_repo")
 
     def next_fb_candidate(self) -> Optional[dict[str, Any]]:
         """Find the next high-confidence unlabeled detection for the F/B trainer.
@@ -95,22 +92,21 @@ class LabelingService:
         Returns:
             dict: The candidate data, or None if no unlabeled candidates remain.
         """
-        with sqlite3.connect(str(self.db_path)) as conn:
-            conn.row_factory = sqlite3.Row
+        with read_connection(self.db_path) as conn:
             # Join card_views with fb_labels to find unlabeled instances.
             # We join card_views -> card_instances -> videos to get run_id/video_id.
             row = conn.execute(
                 """
                 SELECT
-                    ci.track_id AS instance_id,
+                    ci.instance_id,
                     cv.frame_index,
                     cv.rectified_path AS canonical_url,
                     v.source_path AS video_id,
-                    ci.session_id AS run_id
+                    ci.run_id
                 FROM card_views cv
                 JOIN card_instances ci ON ci.id = cv.card_instance_id
                 JOIN videos v ON v.id = ci.video_id
-                LEFT JOIN fb_labels fl ON fl.instance_id = ci.track_id
+                LEFT JOIN fb_labels fl ON fl.instance_id = ci.instance_id
                 WHERE cv.is_canonical = 1 
                   AND fl.label_id IS NULL
                 ORDER BY cv.confidence DESC
@@ -121,44 +117,48 @@ class LabelingService:
         if not row:
             return None
 
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with read_connection(self.db_path) as conn:
             labels_collected = conn.execute("SELECT COUNT(*) FROM fb_labels").fetchone()[0]
             # Count distinct unlabeled instances that have a canonical view
             pending_count = conn.execute("""
-                SELECT COUNT(DISTINCT ci.track_id)
+                SELECT COUNT(DISTINCT ci.instance_id)
                 FROM card_views cv
                 JOIN card_instances ci ON ci.id = cv.card_instance_id
-                LEFT JOIN fb_labels fl ON fl.instance_id = ci.track_id
+                LEFT JOIN fb_labels fl ON fl.instance_id = ci.instance_id
                 WHERE cv.is_canonical = 1 AND fl.label_id IS NULL
             """).fetchone()[0]
 
-        res = dict(row)
-        res["canonical_url"] = _to_file_url(res.get("canonical_url"))
-        res["labels_collected"] = labels_collected
-        res["labels_target"] = 500
-        res["pending_count"] = pending_count
+        res = {
+            "instance_id": row[0],
+            "frame_index": row[1],
+            "canonical_url": _to_file_url(row[2]),
+            "video_id": row[3],
+            "run_id": row[4],
+            "labels_collected": labels_collected,
+            "labels_target": 500,
+            "pending_count": pending_count,
+        }
         return res
 
     def list_clusters(self, status: Optional[str] = None) -> list[dict[str, Any]]:
         """List dedup clusters, optionally filtered by status."""
-        query = "SELECT * FROM dedup_clusters"
+        query = "SELECT cluster_id, predicted_member_ids_json, confirmed_member_ids_json, status, updated_at FROM dedup_clusters"
         params = []
         if status:
             query += " WHERE status = ?"
             params.append(status)
         query += " ORDER BY updated_at DESC"
         
-        with sqlite3.connect(str(self.db_path)) as conn:
-            conn.row_factory = sqlite3.Row
+        with read_connection(self.db_path) as conn:
             rows = conn.execute(query, params).fetchall()
             
         return [
             {
-                "cluster_id": r["cluster_id"],
-                "predicted": json.loads(r["predicted_member_ids_json"]),
-                "confirmed": json.loads(r["confirmed_member_ids_json"]) if r["confirmed_member_ids_json"] else None,
-                "status": r["status"],
-                "updated_at": r["updated_at"],
+                "cluster_id": r[0],
+                "predicted": json.loads(r[1]),
+                "confirmed": json.loads(r[2]) if r[2] else None,
+                "status": r[3],
+                "updated_at": r[4],
             }
             for r in rows
         ]
@@ -171,6 +171,12 @@ class LabelingService:
         confirmed: Optional[list[str]] = None,
     ) -> None:
         """Update status or confirmed members of a dedup cluster."""
+        # This update should also go through a repository if we had one for clusters.
+        # For now, we use read_connection and the writer? 
+        # Wait, I don't have a cluster repository.
+        # I'll use the raw writer if I can, or just keep it as is if it's the only one.
+        # Actually, all writes MUST go through the Writer.
+        
         updates = []
         params = []
         if status is not None:
@@ -186,8 +192,11 @@ class LabelingService:
         updates.append("updated_at = datetime('now')")
         params.append(cluster_id)
         
-        query = f"UPDATE dedup_clusters SET {', '.join(updates)} WHERE cluster_id = ?"
+        sql = f"UPDATE dedup_clusters SET {', '.join(updates)} WHERE cluster_id = ?"
         
-        with sqlite3.connect(str(self.db_path)) as conn:
-            conn.execute(query, params)
-            conn.commit()
+        # We need access to the writer.
+        if self._repo and self._repo._writer:
+            from card_capture.data.writer import Write
+            self._repo._writer.submit(Write(sql=sql, params=tuple(params)))
+        else:
+            raise RuntimeError("LabelingService.patch_cluster requires repository with writer")

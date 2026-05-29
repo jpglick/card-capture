@@ -246,13 +246,13 @@ class _ResourceSampler:
 
 def _collect_db_diagnostics(run_id: str, db_path: Path, output_dir: Path) -> dict:
     """Collect card/frame counts from the pipeline DB and return as dict."""
-    import sqlite3 as _sqlite3
+    from card_capture.data.connection import read_connection
     result: dict = {}
     if not db_path.exists():
         result["error"] = "DB not found"
         return result
     try:
-        with _sqlite3.connect(db_path) as conn:
+        with read_connection(db_path) as conn:
             tables = {r[0] for r in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
 

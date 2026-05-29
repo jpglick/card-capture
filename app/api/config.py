@@ -7,7 +7,6 @@ the built-ins on GET.
 from __future__ import annotations
 
 import json
-import sqlite3
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
@@ -102,31 +101,23 @@ _BUILTIN_PRESETS: list[ConfigPreset] = [
 _BUILTIN_NAMES = {p.preset_name for p in _BUILTIN_PRESETS}
 
 
-def _get_user_presets(db_path) -> list[ConfigPreset]:
+def _get_user_presets(config_repo) -> list[ConfigPreset]:
     """Load user-defined presets from the database."""
-    try:
-        with sqlite3.connect(str(db_path)) as conn:
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                "SELECT preset_name, description, config_json FROM config_presets ORDER BY created_at"
-            ).fetchall()
-        return [
-            ConfigPreset(
-                preset_name=r["preset_name"],
-                description=r["description"],
-                config=json.loads(r["config_json"]),
-            )
-            for r in rows
-        ]
-    except sqlite3.OperationalError:
-        # Table may not exist yet if migration hasn't run.
-        return []
+    rows = config_repo.list_presets()
+    return [
+        ConfigPreset(
+            preset_name=r["preset_name"],
+            description=r["description"],
+            config=r["config"],
+        )
+        for r in rows
+    ]
 
 
 @router.get("/presets", response_model=list[ConfigPreset])
 def list_presets(request: Request):
     """Return all available config presets (built-in + user-defined)."""
-    user = _get_user_presets(request.app.state.db_path)
+    user = _get_user_presets(request.app.state.config_repo)
     return _BUILTIN_PRESETS + user
 
 
@@ -138,19 +129,13 @@ def create_preset(payload: ConfigPreset, request: Request):
             status_code=409,
             detail=f"Preset name '{payload.preset_name}' is reserved for built-in presets.",
         )
-    db_path = request.app.state.db_path
     try:
-        with sqlite3.connect(str(db_path)) as conn:
-            conn.execute(
-                "INSERT INTO config_presets (preset_name, description, config_json) VALUES (?, ?, ?)",
-                (payload.preset_name, payload.description, json.dumps(payload.config)),
-            )
-    except sqlite3.IntegrityError:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Preset '{payload.preset_name}' already exists.",
+        request.app.state.config_repo.upsert_preset(
+            name=payload.preset_name,
+            description=payload.description,
+            config=payload.config,
         )
-    except sqlite3.OperationalError as exc:
+    except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Database error: {exc}")
     return payload
 

@@ -20,6 +20,10 @@ from pathlib import Path
 from .connection import open_connection
 
 
+from contextlib import contextmanager
+from typing import Iterator, Optional
+
+
 @dataclasses.dataclass(frozen=True)
 class Write:
     sql: str
@@ -63,6 +67,22 @@ class Writer:
     def flush(self) -> None:
         """Block until the queue is empty (best-effort)."""
         self._q.join()
+
+    @contextmanager
+    def serialize(self) -> Iterator[None]:
+        """Acquire the writer lock for callers that must perform a direct
+        synchronous write (e.g., to read back an autoincrement id).
+
+        While the lock is held the worker thread keeps draining the queue,
+        so this only protects against concurrent direct writers, not against
+        the worker. Callers MUST close any connection they opened before
+        releasing the lock.
+        """
+        self._lock.acquire()
+        try:
+            yield
+        finally:
+            self._lock.release()
 
     def _loop(self) -> None:
         conn = open_connection(self._db_path)

@@ -16,7 +16,18 @@ from typing import Iterator
 def open_connection(db_path: Path | str, *, read_only: bool = False) -> sqlite3.Connection:
     uri = f"file:{db_path}?mode={'ro' if read_only else 'rwc'}"
     conn = sqlite3.connect(uri, uri=True, timeout=5.0, isolation_level=None)
-    conn.execute("PRAGMA journal_mode=WAL")
+    if not read_only:
+        import time
+        # Small retry loop for WAL mode setup which can race with other connections
+        for _ in range(5):
+            try:
+                conn.execute("PRAGMA journal_mode=WAL")
+                break
+            except sqlite3.OperationalError as exc:
+                if "locked" in str(exc):
+                    time.sleep(0.05)
+                    continue
+                raise
     conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn

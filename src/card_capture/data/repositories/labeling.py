@@ -9,17 +9,17 @@ from card_capture.data.writer import Writer, Write
 
 
 class LabelingRepository:
-    def __init__(self, writer: Writer, db_path: Path | str) -> None:
+    def __init__(self, writer: Writer | None, db_path: Path | str) -> None:
         self._writer = writer
         self._db_path = Path(db_path)
 
-    def store_fb_label(self, instance_id: str, frame_index: int, label: str, labeler: str = "human", source_run_id: int | None = None) -> None:
+    def store_fb_label(self, instance_id: str, frame_index: int, side: str, labeler: str = "human", source_run_id: int | None = None) -> None:
         self._writer.submit(Write(
             sql="""
                 INSERT INTO fb_labels(source_run_id, instance_id, frame_index, side, labeler)
                 VALUES (?, ?, ?, ?, ?)
             """,
-            params=(source_run_id, instance_id, frame_index, label, labeler),
+            params=(source_run_id, instance_id, frame_index, side, labeler),
         ))
 
     def list_for_instance(self, instance_id: str) -> list[dict]:

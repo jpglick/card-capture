@@ -10,7 +10,11 @@ def run(state: dict, *, telemetry) -> None:
     # For now we just pass an empty list or placeholders to satisfy the API
     final_cards = []
     
-    cards_repo.store_final_cards(state["request"].run_id, final_cards)
+    cards_repo.store_final_cards(
+        run_id=state["request"].run_id,
+        video_id=state.get("video_id", 0),  # fallback to 0 if not set
+        cards=final_cards
+    )
     runs_repo.mark_completed(state["request"].run_id, cards_extracted=len(final_cards))
     state["cards"] = final_cards
     state["output_artifacts"] = []  # populated by export-boundary helpers, not store

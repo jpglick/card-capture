@@ -75,28 +75,46 @@ class KorniaNormalizer:
         batch_data: List[Tuple[Union[str, np.ndarray], List[Point]]],
         rotate_180: bool = True,
         return_gpu: bool = False,
+        chunk_size: int = 8,
     ) -> Union[List[np.ndarray], "torch.Tensor"]:
         """Warp from numpy images (or image paths). Uploads to GPU, then warps.
 
-        Optimized 2026-05-24 — measured 1138 ms/batch in production, dominated
-        by per-candidate CPU float-conversion of 4K frames (~24MB uint8 each
-        → 95MB float32). Uploads uint8 to GPU and does float/scale/channel
-        reorder on the device. PCIe bandwidth per candidate drops ~4x; per-batch
-        CPU work drops from ~520 ms (8 candidates) to ~40 ms.
-        Shared warp core (_warp_from_stacked) also used by warp_canonical_batch_gpu.
+        Optimized 2026-05-24 — measured 1138 ms/batch in production.
+        Chunked processing added to prevent OOM on large 4K batches.
         """
-        imgs: List[np.ndarray] = []
-        mats: List[np.ndarray] = []
-        for image_or_path, corners in batch_data:
-            img = image_or_path if isinstance(image_or_path, np.ndarray) else cv2.imread(image_or_path)
-            if img is None:
-                continue
-            imgs.append(img)
-            mats.append(self._perspective_matrix(corners))
-        if not imgs:
+        if not batch_data:
             return [] if not return_gpu else torch.empty(0).to(self.device)
-        batch_u8 = torch.from_numpy(np.stack(imgs, axis=0)).to(self.device, non_blocking=True)
-        return self._warp_from_stacked(batch_u8, mats, rotate_180, return_gpu=return_gpu)
+
+        results: List[np.ndarray] = []
+        gpu_results: List["torch.Tensor"] = []
+
+        # Process in chunks to avoid massive memory allocation
+        for i in range(0, len(batch_data), chunk_size):
+            chunk = batch_data[i : i + chunk_size]
+            imgs: List[np.ndarray] = []
+            mats: List[np.ndarray] = []
+            
+            for image_or_path, corners in chunk:
+                img = image_or_path if isinstance(image_or_path, np.ndarray) else cv2.imread(image_or_path)
+                if img is None:
+                    continue
+                imgs.append(img)
+                mats.append(self._perspective_matrix(corners))
+            
+            if not imgs:
+                continue
+                
+            batch_u8 = torch.from_numpy(np.stack(imgs, axis=0)).to(self.device, non_blocking=True)
+            res = self._warp_from_stacked(batch_u8, mats, rotate_180, return_gpu=return_gpu)
+            
+            if return_gpu:
+                gpu_results.append(res)
+            else:
+                results.extend(res)
+
+        if return_gpu:
+            return torch.cat(gpu_results, dim=0) if gpu_results else torch.empty(0).to(self.device)
+        return results
 
     def warp_canonical_batch_gpu(
         self,

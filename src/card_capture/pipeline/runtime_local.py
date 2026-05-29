@@ -50,9 +50,31 @@ _STAGES = (
 )
 
 
+from card_capture.pipeline.runner import PipelineRunHandle
+
+
 class LocalPipelineRuntime:
     def __init__(self, telemetry: PipelineTelemetry | None = None) -> None:
         self._telemetry = telemetry or NoopTelemetry()
+
+    def submit(self, request: PipelineRunRequest) -> PipelineRunHandle:
+        """Synchronously execute the run."""
+        # For LocalPipelineRuntime, submit() just runs it and returns a handle
+        # that wait() can then use to return the result.
+        self._last_result = self.run(request)
+        return PipelineRunHandle(run_id=request.run_id, backend="local")
+
+    def wait(self, handle: PipelineRunHandle) -> PipelineRunResult:
+        """Return the result of the last run."""
+        # This implementation is toy-like because it's synchronous;
+        # the result is already there.
+        if not hasattr(self, "_last_result"):
+            raise RuntimeError("Must call submit() before wait() on LocalPipelineRuntime")
+        return self._last_result
+
+    def cancel(self, handle: PipelineRunHandle) -> None:
+        """No-op for synchronous local runtime."""
+        pass
 
     def run(self, request: PipelineRunRequest) -> PipelineRunResult:
         timings: list[StageTiming] = []

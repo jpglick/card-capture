@@ -10,7 +10,7 @@ from card_capture.data.writer import Writer, Write
 
 
 class TelemetryRepository:
-    def __init__(self, writer: Writer, db_path: Path | str) -> None:
+    def __init__(self, writer: Writer | None, db_path: Path | str) -> None:
         self._writer = writer
         self._db_path = Path(db_path)
 

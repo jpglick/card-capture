@@ -27,12 +27,26 @@ def test_v4_schema_creates_expected_tables(tmp_path: Path):
 
 def test_pipeline_events_has_v4_columns(tmp_path: Path):
     db_path = tmp_path / "cards.sqlite"
-    # seed with the existing pipeline_events table (matches current schema)
+    # seed with the existing pipeline_events table
     with sqlite3.connect(db_path) as conn:
         conn.execute(
-            "CREATE TABLE pipeline_events (id INTEGER PRIMARY KEY, event_type TEXT, payload TEXT)"
+            """
+            CREATE TABLE pipeline_events (
+                id INTEGER PRIMARY KEY,
+                video_id INTEGER,
+                run_id TEXT,
+                stage_id TEXT,
+                frame_index INTEGER,
+                timestamp_ms INTEGER,
+                event_type TEXT,
+                data_json TEXT,
+                artifact_ref TEXT,
+                created_at TEXT
+            )
+            """
         )
     apply_migrations(db_path)
+
     with sqlite3.connect(db_path) as conn:
         cols = {r[1] for r in conn.execute("PRAGMA table_info(pipeline_events)").fetchall()}
     assert "stage_id" in cols

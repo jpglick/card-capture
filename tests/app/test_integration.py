@@ -32,7 +32,8 @@ def client(tmp_db: Path) -> TestClient:
     """TestClient backed by a fresh DB."""
     from app.main import create_app
     app = create_app(db_path=tmp_db)
-    return TestClient(app, raise_server_exceptions=True)
+    with TestClient(app, raise_server_exceptions=True) as c:
+        yield c
 
 
 @pytest.fixture()
