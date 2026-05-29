@@ -1,4 +1,4 @@
-"""HTTP client for the instance-side vastai_worker FastAPI app."""
+"""HTTP client for provider-side worker HTTP APIs."""
 from __future__ import annotations
 
 from pathlib import Path
