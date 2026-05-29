@@ -96,8 +96,10 @@ def run(state: dict, *, telemetry) -> None:
 
     refined_tracks: List[Dict[str, Any]] = []
     tracks_data = state.get("tracks_data") or []
+    
+    total_tracks = len(tracks_data)
 
-    for track_dict in tracks_data:
+    for i, track_dict in enumerate(tracks_data):
         instance_id = track_dict["instance_id"]
         candidates_data = track_dict["candidates"]
 
@@ -238,5 +240,8 @@ def run(state: dict, *, telemetry) -> None:
             "best_canonical_image": best_canonical_img,
             "reid_embedding": reid_embedding,
         })
+        
+        pct = int(100 * (i + 1) / total_tracks)
+        telemetry.progress("refine", pct, f"track {i+1}/{total_tracks}")
 
     state["refined_tracks"] = refined_tracks
