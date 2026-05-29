@@ -86,14 +86,15 @@ class LocalPipelineRuntime:
         from card_capture.data.repositories.runs import RunsRepository
         from card_capture.data.repositories.events import EventsRepository
         from card_capture.data.repositories.cards import CardsRepository
-        
-        # We need to extract the path without artifact:// prefix for local files
-        db_path_str = str(request.output_root).replace("artifact://local/", "")
-        db_path = Path(db_path_str) / "cards.sqlite" # Assuming db is in output_root or passed explicitly
-        # Wait, the spec says run_context has db_path, but PipelineRunRequest just has output_root.
-        # Actually in CLI I passed req = PipelineRunRequest(output_root=f"artifact://local/{args.output_dir}/")
-        # And the db was passed to the storage earlier.
-        
+
+        # Prefer the explicit db_path callers pass in (UI, RunPod, training).
+        # Fall back to <output_root>/cards.sqlite for older test callers.
+        if request.db_path:
+            db_path = Path(request.db_path)
+        else:
+            output_dir_str = str(request.output_root).replace("artifact://local/", "")
+            db_path = Path(output_dir_str) / "cards.sqlite"
+
         writer = Writer(db_path)
         writer.start()
 
@@ -101,6 +102,9 @@ class LocalPipelineRuntime:
         # The actual shape grows as Tasks 3.3-3.8 wire stages.
         state: dict = {
             "request": request,
+            "video_id": request.video_id or 0,
+            "config_preset": request.config_preset,
+            "db_path": db_path,
             "repos": {
                 "runs": RunsRepository(writer, db_path),
                 "events": EventsRepository(writer, db_path),

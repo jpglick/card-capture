@@ -8,6 +8,7 @@ os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 
 import argparse
 import sys
+import uuid
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -42,18 +43,17 @@ def build_parser() -> argparse.ArgumentParser:
     process.add_argument("--reid-distance-threshold", type=float, default=None, dest="reid_distance_threshold")
     process.add_argument(
         "--pipeline",
-        choices=["metaflow", "monolith", "unified"],
+        choices=["unified"],
         default="unified",
-        help="Which pipeline architecture to run. 'unified' is the new high-performance in-process runtime.",
+        help="Pipeline architecture. Only 'unified' remains after the v5.5 refactor; "
+             "the option is kept for backwards-compatible scripts.",
     )
     process.add_argument(
-        "--resume",
-        metavar="RUN_ID",
+        "--run-id",
         default=None,
-        dest="resume_run_id",
-        help="Resume a previous Metaflow run from its first failed step. "
-             "Pass the run-id printed at the start of the failed run, e.g. 1778729424981206. "
-             "Omit to start a fresh run.",
+        dest="run_id",
+        help="Explicit run id (used by callers that want to correlate logs). "
+             "Defaults to a fresh 12-char hex id.",
     )
 
     review = subparsers.add_parser("review", help="Start the local review UI")
@@ -174,57 +174,39 @@ def _run_process(args: argparse.Namespace) -> int:
         height=0
     )
 
-    if getattr(args, "pipeline", "unified") == "unified":
-        from card_capture.pipeline.request import PipelineRunRequest
-        from card_capture.pipeline.runtime_local import LocalPipelineRuntime
-        from card_capture.pipeline.telemetry import InMemoryTelemetry
-        
-        telemetry = InMemoryTelemetry()
-        runtime = LocalPipelineRuntime(telemetry=telemetry)
-        req = PipelineRunRequest(
-            run_id=args.run_id or uuid.uuid4().hex[:12],
-            input_video=f"artifact://local/{args.video_path}",
-            output_root=f"artifact://local/{args.output_dir}/",
-            runtime_mode="strict_gpu" if config.device != "cpu" else "cpu_debug",
-            config={"corner_confidence": config.corner_confidence} if config.corner_confidence else {},
-        )
-        
-        print(f"Starting unified runtime process for video {video_id}...")
-        result = runtime.run(req)
-        
-        if result.manifest.contract_violations:
-            print(f"Pipeline failed: {result.manifest.contract_violations}")
-            return 1
-        else:
-            print(f"Pipeline completed successfully. Results in {args.output_dir}")
-            print(result.manifest.to_json())
-            return 0
+    # v5.5: Metaflow is gone; the unified in-process runtime is the only path.
+    from card_capture.pipeline.request import PipelineRunRequest
+    from card_capture.pipeline.runtime_local import LocalPipelineRuntime
+    from card_capture.pipeline.telemetry import InMemoryTelemetry
 
-    if getattr(args, "pipeline", "unified") == "metaflow":
-        import os
-        import subprocess
-        # Metaflow spawns a subprocess per step; those subprocesses won't find
-        # the `pipeline` package (repo root, not installed) unless we pass it
-        # through PYTHONPATH so Metaflow propagates it to each step worker.
-        repo_root = str(Path(__file__).parent.parent.parent)
-        env = os.environ.copy()
-        env["PYTHONPATH"] = repo_root + (":" + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
-        resume_run_id = getattr(args, "resume_run_id", None)
-        if resume_run_id:
-            cmd = [
-                sys.executable, "-m", "pipeline.card_capture_flow",
-                "resume", resume_run_id,
-            ]
-        else:
-            cmd = [
-                sys.executable, "-m", "pipeline.card_capture_flow", "run",
-                "--video", str(args.video_path),
-                "--output-dir", str(args.output_dir),
-                "--db", str(args.db),
-                "--detector", config.detector,
-            ]
-        res = subprocess.run(cmd, env=env)
-        return res.returncode
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    runtime_mode = "strict_gpu" if config.device != "cpu" else "cpu_debug"
+    telemetry = InMemoryTelemetry()
+    runtime = LocalPipelineRuntime(telemetry=telemetry)
+    req = PipelineRunRequest(
+        run_id=args.run_id or uuid.uuid4().hex[:12],
+        input_video=f"artifact://local/{args.video_path.resolve()}",
+        output_root=f"artifact://local/{args.output_dir.resolve()}/",
+        runtime_mode=runtime_mode,
+        config={
+            "detector": config.detector,
+            "corner_confidence": config.corner_confidence,
+            "device": config.device,
+        },
+        db_path=str(args.db.resolve()),
+        video_id=video_id,
+        config_preset=None,
+    )
+
+    print(f"Starting unified runtime for video {video_id} (run_id={req.run_id})…")
+    result = runtime.run(req)
+
+    if result.manifest.contract_violations:
+        print(f"Pipeline failed: {result.manifest.contract_violations}", file=sys.stderr)
+        return 1
+    print(f"Pipeline completed. Results in {args.output_dir}")
+    print(result.manifest.to_json())
+    return 0
 
 
 def _confirm_cpu_fallback(device_status) -> bool:

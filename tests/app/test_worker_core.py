@@ -108,13 +108,9 @@ def test_package_results_includes_worker_database(tmp_path):
         assert "cards.sqlite" in tar.getnames()
 
 
-def test_parse_metaflow_start_stage_accepts_pid_format():
+def test_parse_metaflow_start_stage_is_legacy_noop():
+    """v5.5 removed Metaflow; the parser is kept as an import-compat shim
+    that always returns ``None``. Stage transitions now flow through the
+    ``stage_cb`` callback wired into the unified runtime's telemetry."""
     line = "2026-05-24 22:13:27.434 [1779660806748398/detect/2 (pid 1254)] Task is starting."
-
-    assert parse_metaflow_start_stage(line) == "detect"
-
-
-def test_parse_metaflow_start_stage_accepts_legacy_format():
-    line = "2026-05-24 22:13:27.434 [1779660806748398/refine/5] Task is starting."
-
-    assert parse_metaflow_start_stage(line) == "refine"
+    assert parse_metaflow_start_stage(line) is None

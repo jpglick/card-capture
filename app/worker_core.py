@@ -3,10 +3,7 @@ from __future__ import annotations
 
 import io
 import json
-import os
-import re
-import subprocess
-import sys
+import time
 import tarfile
 import typing
 from pathlib import Path
@@ -22,15 +19,15 @@ CUDA_CONFIG_OVERRIDES: dict = {
 
 _CONFIG_PATH = Path(__file__).parent.parent / "card_capture_config.json"
 
-_METAFLOW_STAGE_START_RE = re.compile(
-    r"\[[^/\]]+/([a-zA-Z0-9_]+)/\d+(?:\s+\([^)]+\))?\]\s+Task is starting\.?"
-)
-
 
 def parse_metaflow_start_stage(line: str) -> str | None:
-    """Return the Metaflow step name from a task-start log line."""
-    match = _METAFLOW_STAGE_START_RE.search(line)
-    return match.group(1) if match else None
+    """Legacy shim — Metaflow log scraping is gone.
+
+    Kept so old imports still resolve; always returns ``None`` now that we
+    no longer subprocess Metaflow. Callers should switch to the per-stage
+    ``stage_cb`` plumbed through :func:`run_pipeline`.
+    """
+    return None
 
 
 def apply_cuda_config() -> dict:
@@ -59,104 +56,94 @@ def restore_config(original: dict) -> None:
         pass
 
 
-def run_pipeline(job_id: str, video_path: str, config_preset: str, output_dir: Path, stage_cb: typing.Optional[typing.Callable[[str], None]] = None) -> tuple:
-    """Run the Metaflow pipeline subprocess; return (db_path, stdout).
+class _WorkerCoreTelemetry:
+    """Minimal PipelineTelemetry that prints stage lines + drives stage_cb.
 
-    Streams the subprocess stdout/stderr live to our own stdout (prefixed with
-    [mf]) so the RunPod worker log shows pipeline progress in real time. The
-    same output is collected and returned for downstream parsing.
+    Mirrors what the metaflow stdout scraper used to do: tell RunPod workers
+    which stage we're in (so they can update status) and emit a timing table
+    at the end.
     """
+
+    def __init__(self, stage_cb: typing.Optional[typing.Callable[[str], None]]) -> None:
+        self._stage_cb = stage_cb
+        self.timings: dict[str, float] = {}
+
+    def stage_started(self, stage: str, metadata) -> None:
+        print(f"[unified] stage {stage} started", flush=True)
+        if self._stage_cb:
+            try:
+                self._stage_cb(stage)
+            except Exception as exc:
+                print(f"[unified] stage_cb failed for {stage}: {exc}", flush=True)
+
+    def stage_finished(self, stage: str, elapsed_ms: int, metadata) -> None:
+        self.timings[stage] = elapsed_ms / 1000.0
+        print(f"[unified] stage {stage} finished in {elapsed_ms}ms", flush=True)
+
+    def resource_sample(self, sample) -> None:
+        pass
+
+    def contract_violation(self, code: str, metadata) -> None:
+        print(f"[unified] contract violation: {code} {dict(metadata)}", flush=True)
+
+
+def run_pipeline(job_id: str, video_path: str, config_preset: str, output_dir: Path, stage_cb: typing.Optional[typing.Callable[[str], None]] = None) -> tuple:
+    """Run the unified in-process pipeline; return (db_path, stdout).
+
+    Post-v5.5 replacement for the Metaflow subprocess. Stages run in this
+    process via :class:`LocalPipelineRuntime`; ``stage_cb`` still fires once
+    per stage start so RunPod can publish status updates.
+
+    The returned ``stdout`` is a synthesized summary (manifest JSON +
+    per-stage timing table) so existing callers that pattern-match against
+    the legacy Metaflow output keep working at the surface level.
+    """
+    from card_capture.pipeline.request import PipelineRunRequest
+    from card_capture.pipeline.runtime_local import LocalPipelineRuntime
+
     output_dir.mkdir(parents=True, exist_ok=True)
     db_path = output_dir / "cards.sqlite"
-    repo_root = Path(__file__).parent.parent
-    cmd = [
-        sys.executable, "-m", "pipeline.card_capture_flow",
-        "--no-pylint", "run",
-        "--video", video_path,
-        "--output-dir", str(output_dir),
-        "--db", str(db_path),
-        "--config-preset", config_preset,
-        "--ui-run-id", job_id,
-        # Force the CUDA detect path. apply_cuda_config writes detector:"cuda"
-        # to card_capture_config.json, but the metaflow flow reads --detector
-        # from CLI args (default="docaligner"), so without this flag the
-        # pipeline silently uses AdaptivePresenceSampler (CPU cv2 decode) and
-        # bypasses CudaSampler entirely. Confirmed by stage_detect telemetry
-        # showing sampler_type=AdaptivePresenceSampler and 117s detect with
-        # only 4.7s actual YOLO time — the other 113s is CPU decode.
-        "--detector", "cuda",
-    ]
-    env = os.environ.copy()
-    # Force-set (not setdefault) so empty strings are also overridden
-    if not env.get("USERNAME"):
-        env["USERNAME"] = "root"
-    if not env.get("USER"):
-        env["USER"] = "root"
-    env.setdefault("METAFLOW_USER", "runner")
-    # Metaflow spawns step subprocesses that don't inherit cwd — ensure pipeline/ is importable
-    existing_pypath = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = f"{repo_root}:{existing_pypath}" if existing_pypath else str(repo_root)
-    env.pop("LD_PRELOAD", None)  # ensure no stale LD_PRELOAD from outer environment
-    # Force unbuffered output in every Python child so lines reach us as they're
-    # produced (without this, metaflow's nested subprocesses block-buffer when
-    # stdout is a pipe and we see nothing until process exit).
-    env["PYTHONUNBUFFERED"] = "1"
 
-    print(f"[diag] starting metaflow subprocess (output streamed below)", flush=True)
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,  # merge — we want one chronological stream
-        text=True,
-        bufsize=1,                  # line-buffered on our side
-        cwd=str(repo_root),
-        env=env,
+    telemetry = _WorkerCoreTelemetry(stage_cb)
+    runtime = LocalPipelineRuntime(telemetry=telemetry)
+    request = PipelineRunRequest(
+        run_id=job_id,
+        input_video=f"artifact://local/{video_path}",
+        output_root=f"artifact://local/{output_dir.resolve()}/",
+        # apply_cuda_config() flips detector/device in card_capture_config.json
+        # which the stages still read at construction time; this request stays
+        # strict_gpu so the runtime knows it's allowed to touch CUDA.
+        runtime_mode="strict_gpu",
+        config={"detector": "cuda", "device": "cuda"},
+        db_path=str(db_path.resolve()),
+        config_preset=config_preset,
     )
-    collected: list[str] = []
-    assert proc.stdout is not None
-    for line in proc.stdout:
-        # Echo live to RunPod worker log so we can watch pipeline progress;
-        # also collect for post-mortem timing parse and error detail.
-        sys.stdout.write(f"[mf] {line}")
-        sys.stdout.flush()
-        collected.append(line)
-        if stage_cb:
-            stage = parse_metaflow_start_stage(line)
-            if stage:
-                stage_cb(stage)
-    returncode = proc.wait()
-    full_stdout = "".join(collected)
 
-    _print_metaflow_timings(full_stdout)
-    if returncode != 0:
-        detail = f"STDOUT (last 4000 chars):\n{full_stdout[-4000:]}"
-        raise RuntimeError(detail)
+    print(f"[diag] starting in-process unified runtime", flush=True)
+    started = time.monotonic()
+    try:
+        result = runtime.run(request)
+    except Exception as exc:
+        raise RuntimeError(f"Unified pipeline failed: {exc!r}") from exc
+    elapsed_total = time.monotonic() - started
+
+    if result.manifest.contract_violations:
+        raise RuntimeError(
+            f"Pipeline contract violations: {result.manifest.contract_violations}"
+        )
+
+    # Build a faux-stdout for legacy callers + log the timing table.
+    print("[diag] === Unified runtime stage timings ===", flush=True)
+    for stage, secs in telemetry.timings.items():
+        print(f"[diag]   {stage:<20} {secs:6.1f}s", flush=True)
+    print(f"[diag]   total{'':<16}{elapsed_total:6.1f}s", flush=True)
+    print("[diag] ====================================", flush=True)
+
+    summary_lines = [f"manifest: {result.manifest.to_json()}"]
+    summary_lines += [f"timing {s}: {t:.2f}s" for s, t in telemetry.timings.items()]
+    summary_lines.append(f"timing total: {elapsed_total:.2f}s")
+    full_stdout = "\n".join(summary_lines) + "\n"
     return db_path, full_stdout
-
-
-def _print_metaflow_timings(stdout: str) -> None:
-    """Parse Metaflow log timestamps to produce a per-step timing table."""
-    import re
-    from datetime import datetime
-
-    pattern = re.compile(
-        r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+)"
-        r" \[\d+/(\w+)/\d+"
-        r".*?\] (Task is starting|Task finished successfully)"
-    )
-
-    starts: dict[str, datetime] = {}
-    fmt = "%Y-%m-%d %H:%M:%S.%f"
-
-    print("[diag] === Metaflow step timings ===", flush=True)
-    for ts_str, step, event in pattern.findall(stdout):
-        ts = datetime.strptime(ts_str, fmt)
-        if event == "Task is starting":
-            starts[step] = ts
-        elif event == "Task finished successfully" and step in starts:
-            elapsed = (ts - starts[step]).total_seconds()
-            print(f"[diag]   {step:<20} {elapsed:6.1f}s", flush=True)
-    print("[diag] =================================", flush=True)
 
 
 def package_results(job_id: str, output_dir: Path, db_path: Path) -> bytes:
