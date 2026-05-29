@@ -171,6 +171,9 @@ class CardsRepository:
         glare_y: float | None,
         sharpness: float | None,
         initial_confidence: float | None,
+        glare_mask_b64: str | None = None,
+        laplacian_heatmap_b64: str | None = None,
+        metadata_json: dict | None = None,
     ) -> int:
         from card_capture.data.sql_queries import CARDS_ADD_VIEW
         from card_capture.data.writer import Write
@@ -182,13 +185,24 @@ class CardsRepository:
                 card_instance_id, frame_index, timestamp_ms,
                 json.dumps(corners), float(confidence), rectified_path,
                 json.dumps(quality_score or {}), 1 if is_canonical else 0,
-                glare_x, glare_y, sharpness, initial_confidence,
+                glare_x, glare_y, sharpness,
+                glare_mask_b64, laplacian_heatmap_b64,
+                initial_confidence,
+                json.dumps(metadata_json or {}),
             ),
         ))
         return int(future.result())
 
     def add_saved_card(
-        self, *, detection_id: int, image_path: str, final_score: float
+        self,
+        *,
+        detection_id: int,
+        image_path: str,
+        final_score: float,
+        video_id: int = 0,
+        source_path: str = "",
+        timestamp_ms: int = 0,
+        score_components_json: dict | None = None,
     ) -> None:
         from card_capture.data.sql_queries import CARDS_ADD_SAVED
         from card_capture.data.writer import Write
@@ -196,7 +210,11 @@ class CardsRepository:
             raise RuntimeError("CardsRepository initialized without a Writer")
         self._writer.submit(Write(
             sql=CARDS_ADD_SAVED,
-            params=(detection_id, image_path, float(final_score)),
+            params=(
+                detection_id, video_id, image_path, float(final_score),
+                source_path, timestamp_ms,
+                json.dumps(score_components_json or {}),
+            ),
         ))
 
     def add_track_telemetry(

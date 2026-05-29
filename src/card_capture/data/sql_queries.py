@@ -647,7 +647,7 @@ VALUES (?, ?, ?, ?, ?, ?)
 
 CARDS_UPDATE_DEDUPLICATION = """
 UPDATE card_instances
-   SET primary_hash = ?,
+   SET visual_hash = ?,
        is_duplicate_of = ?,
        reid_embedding = COALESCE(?, reid_embedding)
  WHERE id = ?
@@ -661,26 +661,29 @@ UPDATE card_instances
 
 CARDS_ADD_VIEW = """
 INSERT INTO card_views (card_instance_id, frame_index, timestamp_ms,
-                        corners, confidence, rectified_path,
-                        quality_score, is_canonical,
-                        glare_x, glare_y, sharpness, initial_confidence)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        corners_json, confidence, rectified_path,
+                        quality_score_json, is_canonical,
+                        glare_x, glare_y, sharpness,
+                        glare_mask_b64, laplacian_heatmap_b64,
+                        initial_confidence, metadata_json)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 CARDS_ADD_SAVED = """
-INSERT INTO saved_cards (detection_id, image_path, final_score)
-VALUES (?, ?, ?)
+INSERT INTO saved_cards (detection_id, video_id, image_path, final_score,
+                         source_path, timestamp_ms, score_components_json)
+VALUES (?, ?, ?, ?, ?, ?, ?)
 """
 
 CARDS_ADD_TRACK_TELEMETRY = """
-INSERT INTO track_telemetry (video_id, instance_id, frame_index,
-                              area, aspect, cx, cy)
+INSERT INTO track_telemetry (video_id, track_id, frame_index,
+                              polygon_area, aspect_ratio, centroid_x, centroid_y)
 VALUES (?, ?, ?, ?, ?, ?, ?)
 """
 
 CARDS_ADD_PIPELINE_EVENT = """
 INSERT INTO pipeline_events (video_id, frame_index, timestamp_ms,
-                              event_type, data)
+                              event_type, data_json)
 VALUES (?, ?, ?, ?, ?)
 """
 

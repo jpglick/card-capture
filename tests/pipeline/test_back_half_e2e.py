@@ -9,40 +9,37 @@ from card_capture.pipeline.telemetry import InMemoryTelemetry
 
 
 def _init_db(path: Path) -> None:
+    """Build the test DB from the REAL production schema.
+
+    Using ``STORAGE_INIT_SCHEMA`` (the same DDL production runs) keeps this
+    fixture from drifting out of sync with the actual ``card_instances`` /
+    ``card_views`` / ``saved_cards`` / ``track_telemetry`` / ``pipeline_events``
+    columns and their FK/NOT NULL constraints — the exact drift that previously
+    let column-name bugs through. ``pipeline_runs`` is created by migrations in
+    production (not STORAGE_INIT_SCHEMA), so it is added explicitly here.
+    """
     import sqlite3
+
+    from card_capture.storage import Storage
+
+    # Creates videos, card_instances, card_views, saved_cards, track_telemetry,
+    # pipeline_events with the real columns + FK constraints.
+    Storage(path).initialize()
+
     with sqlite3.connect(path) as conn:
-        conn.executescript("""
-            CREATE TABLE pipeline_runs (
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pipeline_runs (
                 run_id TEXT PRIMARY KEY, video_id INTEGER, status TEXT,
                 cards_extracted INTEGER DEFAULT 0, started_at TEXT, finished_at TEXT
-            );
-            CREATE TABLE card_instances (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                video_id INTEGER NOT NULL, track_id TEXT NOT NULL,
-                angle TEXT, session_id TEXT,
-                reid_embedding BLOB, run_id TEXT, primary_hash TEXT,
-                is_duplicate_of INTEGER, fused_image_path TEXT
-            );
-            CREATE TABLE card_views (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                card_instance_id INTEGER NOT NULL, frame_index INTEGER,
-                timestamp_ms INTEGER, corners TEXT, confidence REAL,
-                rectified_path TEXT, quality_score TEXT, is_canonical INTEGER,
-                glare_x REAL, glare_y REAL, sharpness REAL, initial_confidence REAL
-            );
-            CREATE TABLE saved_cards (
-                id INTEGER PRIMARY KEY AUTOINCREMENT, detection_id INTEGER,
-                image_path TEXT, final_score REAL
-            );
-            CREATE TABLE track_telemetry (
-                video_id INTEGER, instance_id TEXT, frame_index INTEGER,
-                area REAL, aspect REAL, cx REAL, cy REAL
-            );
-            CREATE TABLE pipeline_events (
-                video_id INTEGER, frame_index INTEGER, timestamp_ms INTEGER,
-                event_type TEXT, data TEXT
-            );
-        """)
+            )
+            """
+        )
+        # FK parent for card_instances / saved_cards / track_telemetry / pipeline_events.
+        conn.execute(
+            "INSERT INTO videos (id, source_path, file_hash, duration_ms, width, height) "
+            "VALUES (1, '/tmp/synthetic.mov', 'deadbeef', 4000, 750, 1050)"
+        )
 
 
 def test_back_half_e2e_produces_cards(synthetic_two_cards_mov, tmp_path):

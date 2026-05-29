@@ -22,7 +22,7 @@ def db(tmp_path):
                 session_id TEXT,
                 reid_embedding BLOB,
                 run_id TEXT,
-                primary_hash TEXT,
+                visual_hash TEXT,
                 is_duplicate_of INTEGER,
                 fused_image_path TEXT
             );
@@ -31,29 +31,36 @@ def db(tmp_path):
                 card_instance_id INTEGER NOT NULL,
                 frame_index INTEGER,
                 timestamp_ms INTEGER,
-                corners TEXT,
+                corners_json TEXT,
                 confidence REAL,
                 rectified_path TEXT,
-                quality_score TEXT,
+                quality_score_json TEXT,
                 is_canonical INTEGER,
                 glare_x REAL,
                 glare_y REAL,
                 sharpness REAL,
-                initial_confidence REAL
+                glare_mask_b64 TEXT,
+                laplacian_heatmap_b64 TEXT,
+                initial_confidence REAL,
+                metadata_json TEXT
             );
             CREATE TABLE saved_cards (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 detection_id INTEGER,
+                video_id INTEGER,
                 image_path TEXT,
-                final_score REAL
+                final_score REAL,
+                source_path TEXT,
+                timestamp_ms INTEGER,
+                score_components_json TEXT
             );
             CREATE TABLE track_telemetry (
-                video_id INTEGER, instance_id TEXT, frame_index INTEGER,
-                area REAL, aspect REAL, cx REAL, cy REAL
+                video_id INTEGER, track_id TEXT, frame_index INTEGER,
+                polygon_area REAL, aspect_ratio REAL, centroid_x REAL, centroid_y REAL
             );
             CREATE TABLE pipeline_events (
                 video_id INTEGER, frame_index INTEGER, timestamp_ms INTEGER,
-                event_type TEXT, data TEXT
+                event_type TEXT, data_json TEXT
             );
         """)
     return p
@@ -96,7 +103,7 @@ def test_update_instance_deduplication(repo, db):
     repo._writer.flush()
     with open_connection(db) as conn:
         row = conn.execute(
-            "SELECT primary_hash, is_duplicate_of, reid_embedding FROM card_instances WHERE id=?",
+            "SELECT visual_hash, is_duplicate_of, reid_embedding FROM card_instances WHERE id=?",
             (row_id,),
         ).fetchone()
     assert row[0] == "aabbccdd"
@@ -140,7 +147,7 @@ def test_add_card_view(repo, db):
     assert isinstance(view_id, int) and view_id > 0
     with open_connection(db) as conn:
         row = conn.execute(
-            "SELECT frame_index, rectified_path, is_canonical, quality_score "
+            "SELECT frame_index, rectified_path, is_canonical, quality_score_json "
             "FROM card_views WHERE id=?",
             (view_id,),
         ).fetchone()
@@ -151,7 +158,15 @@ def test_add_card_view(repo, db):
 
 
 def test_add_saved_card(repo, db):
-    repo.add_saved_card(detection_id=42, image_path="/tmp/c.jpg", final_score=0.85)
+    repo.add_saved_card(
+        detection_id=42,
+        image_path="/tmp/c.jpg",
+        final_score=0.85,
+        video_id=1,
+        source_path="/test/video.mov",
+        timestamp_ms=1000,
+        score_components_json={"sharpness": 0.8},
+    )
     repo._writer.flush()
     with open_connection(db) as conn:
         row = conn.execute(
@@ -167,7 +182,7 @@ def test_add_track_telemetry(repo, db):
     )
     repo._writer.flush()
     with open_connection(db) as conn:
-        row = conn.execute("SELECT video_id, instance_id, frame_index, area FROM track_telemetry").fetchone()
+        row = conn.execute("SELECT video_id, track_id, frame_index, polygon_area FROM track_telemetry").fetchone()
     assert row[0] == 1
     assert row[1] == "t-abc"
     assert row[2] == 100
@@ -183,7 +198,7 @@ def test_add_pipeline_event(repo, db):
     )
     repo._writer.flush()
     with open_connection(db) as conn:
-        row = conn.execute("SELECT event_type, data FROM pipeline_events").fetchone()
+        row = conn.execute("SELECT event_type, data_json FROM pipeline_events").fetchone()
     assert row[0] == "reid_embedding_failed"
     assert json.loads(row[1])["error"] == "FileNotFoundError"
 

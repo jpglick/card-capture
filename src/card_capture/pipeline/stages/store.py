@@ -127,6 +127,10 @@ def run(state: dict, *, telemetry) -> None:
                     detection_id=view_id,
                     image_path=view_path,
                     final_score=float(fe["quality_score"]),
+                    video_id=video_id,
+                    source_path=view_path,
+                    timestamp_ms=int(fe["timestamp_ms"]),
+                    score_components_json=fe.get("quality_components", {}),
                 )
 
         final_cards.append({
