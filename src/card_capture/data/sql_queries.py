@@ -256,3 +256,256 @@ def result_resource_samples_insert(columns_sql: str, placeholders_sql: str) -> s
 
 def result_pragma_table_info(table: str) -> str:
     return f"PRAGMA table_info({table})"
+
+
+# Storage
+STORAGE_INIT_SCHEMA = """
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS videos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_path TEXT NOT NULL,
+    file_hash TEXT NOT NULL,
+    duration_ms INTEGER NOT NULL,
+    width INTEGER NOT NULL,
+    height INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'processing',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS card_instances (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    video_id INTEGER NOT NULL REFERENCES videos(id),
+    run_id TEXT,
+    track_id TEXT NOT NULL,
+    session_id TEXT,
+    visual_hash TEXT,
+    reid_embedding BLOB,
+    is_duplicate_of INTEGER REFERENCES card_instances(id),
+    angle TEXT,
+    fused_image_path TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(run_id, track_id)
+);
+
+CREATE TABLE IF NOT EXISTS card_views (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    card_instance_id INTEGER NOT NULL REFERENCES card_instances(id),
+    frame_index INTEGER NOT NULL,
+    timestamp_ms INTEGER NOT NULL,
+    corners_json TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    rectified_path TEXT,
+    quality_score_json TEXT,
+    is_canonical INTEGER NOT NULL DEFAULT 0,
+    glare_x REAL,
+    glare_y REAL,
+    sharpness REAL,
+    glare_mask_b64 TEXT,
+    laplacian_heatmap_b64 TEXT,
+    initial_confidence REAL,
+    metadata_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS evidence_frames (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    card_view_id INTEGER NOT NULL REFERENCES card_views(id),
+    source_frame_path TEXT NOT NULL,
+    frame_width INTEGER NOT NULL,
+    frame_height INTEGER NOT NULL,
+    metrics_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS saved_cards (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    detection_id INTEGER NOT NULL,
+    video_id INTEGER NOT NULL REFERENCES videos(id),
+    image_path TEXT NOT NULL,
+    final_score REAL NOT NULL,
+    review_state TEXT NOT NULL DEFAULT 'pending',
+    source_path TEXT NOT NULL,
+    timestamp_ms INTEGER NOT NULL,
+    score_components_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS review_decisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    saved_card_id INTEGER NOT NULL REFERENCES saved_cards(id),
+    decision TEXT NOT NULL,
+    notes TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS performance_logs (
+    log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    video_id INTEGER NOT NULL REFERENCES videos(id),
+    frame_index INTEGER NOT NULL,
+    t_ingest REAL NOT NULL,
+    t_detect REAL NOT NULL,
+    t_refine REAL NOT NULL,
+    t_io REAL NOT NULL,
+    queue_wait REAL NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS track_telemetry (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    video_id INTEGER NOT NULL REFERENCES videos(id),
+    track_id TEXT NOT NULL,
+    frame_index INTEGER NOT NULL,
+    polygon_area REAL NOT NULL,
+    aspect_ratio REAL NOT NULL,
+    centroid_x REAL NOT NULL,
+    centroid_y REAL NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS pipeline_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    video_id INTEGER NOT NULL REFERENCES videos(id),
+    run_id TEXT,
+    stage_id TEXT,
+    frame_index INTEGER NOT NULL,
+    timestamp_ms INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    data_json TEXT,
+    artifact_ref TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+STORAGE_VIDEO_INSERT = (
+    "INSERT INTO videos (source_path, file_hash, duration_ms, width, height, status) "
+    "VALUES (?, ?, ?, ?, ?, ?)"
+)
+STORAGE_VIDEO_ID_BY_SOURCE = "SELECT id FROM videos WHERE source_path = ? OR source_path = ?"
+STORAGE_VIDEO_INSERT_PROCESSING = (
+    "INSERT INTO videos (source_path, file_hash, duration_ms, width, height, status) "
+    "VALUES (?, ?, ?, ?, ?, 'processing')"
+)
+STORAGE_VIDEO_UPDATE_STATUS = "UPDATE videos SET status = ? WHERE id = ?"
+STORAGE_PERFORMANCE_LOG_INSERT = (
+    "INSERT INTO performance_logs (video_id, frame_index, t_ingest, t_detect, t_refine, t_io, queue_wait) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?)"
+)
+STORAGE_TRACK_TELEMETRY_INSERT = (
+    "INSERT INTO track_telemetry (video_id, track_id, frame_index, polygon_area, aspect_ratio, centroid_x, centroid_y) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?)"
+)
+STORAGE_PIPELINE_EVENT_INSERT = (
+    "INSERT INTO pipeline_events (video_id, run_id, stage_id, frame_index, timestamp_ms, event_type, data_json, artifact_ref) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+)
+STORAGE_CARD_INSTANCE_INSERT = (
+    "INSERT INTO card_instances (video_id, run_id, track_id, angle, session_id, reid_embedding) "
+    "VALUES (?, ?, ?, ?, ?, ?)"
+)
+STORAGE_CARD_INSTANCE_DEDUP_WITH_EMBED = (
+    "UPDATE card_instances SET visual_hash = ?, is_duplicate_of = ?, reid_embedding = ?, updated_at = CURRENT_TIMESTAMP "
+    "WHERE id = ?"
+)
+STORAGE_CARD_INSTANCE_DEDUP_NO_EMBED = (
+    "UPDATE card_instances SET visual_hash = ?, is_duplicate_of = ?, updated_at = CURRENT_TIMESTAMP "
+    "WHERE id = ?"
+)
+STORAGE_CARD_INSTANCE_FUSION_UPDATE = (
+    "UPDATE card_instances SET fused_image_path = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+)
+STORAGE_CARD_INSTANCE_CANONICALS = (
+    "SELECT id, visual_hash FROM card_instances "
+    "WHERE visual_hash IS NOT NULL AND is_duplicate_of IS NULL"
+)
+STORAGE_CARD_VIEW_INSERT = """
+INSERT INTO card_views (
+    card_instance_id,
+    frame_index,
+    timestamp_ms,
+    corners_json,
+    confidence,
+    rectified_path,
+    quality_score_json,
+    is_canonical,
+    glare_x,
+    glare_y,
+    sharpness,
+    glare_mask_b64,
+    laplacian_heatmap_b64,
+    initial_confidence,
+    metadata_json
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
+STORAGE_EVIDENCE_FRAME_INSERT = (
+    "INSERT INTO evidence_frames (card_view_id, source_frame_path, frame_width, frame_height, metrics_json) "
+    "VALUES (?, ?, ?, ?, ?)"
+)
+STORAGE_CARD_INSTANCES_BY_VIDEO = """
+SELECT
+    id,
+    video_id,
+    track_id,
+    visual_hash,
+    is_duplicate_of,
+    angle,
+    fused_image_path,
+    created_at,
+    updated_at
+FROM card_instances
+WHERE video_id = ?
+ORDER BY id ASC
+"""
+STORAGE_SAVED_CARD_SOURCE = """
+SELECT
+    card_views.card_instance_id,
+    card_views.timestamp_ms,
+    card_views.quality_score_json,
+    videos.id AS video_id,
+    videos.source_path
+FROM card_views
+JOIN card_instances ON card_instances.id = card_views.card_instance_id
+JOIN videos ON videos.id = card_instances.video_id
+WHERE card_views.id = ?
+"""
+STORAGE_SAVED_CARD_INSERT = """
+INSERT INTO saved_cards (
+    detection_id,
+    video_id,
+    image_path,
+    final_score,
+    review_state,
+    source_path,
+    timestamp_ms,
+    score_components_json
+)
+VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)
+"""
+STORAGE_REVIEW_DECISION_INSERT = (
+    "INSERT INTO review_decisions (saved_card_id, decision, notes) VALUES (?, ?, ?)"
+)
+STORAGE_SAVED_CARD_REVIEW_UPDATE = "UPDATE saved_cards SET review_state = ? WHERE id = ?"
+STORAGE_SAVED_CARDS_BASE = """
+SELECT
+    sc.id,
+    sc.detection_id,
+    sc.image_path,
+    sc.final_score,
+    sc.review_state,
+    sc.source_path,
+    sc.timestamp_ms,
+    sc.score_components_json
+FROM saved_cards sc
+JOIN card_views cv ON cv.id = sc.detection_id
+JOIN card_instances ci ON ci.id = cv.card_instance_id
+"""
+
+
+def storage_pragma_table_info(table: str) -> str:
+    return f"PRAGMA table_info({table})"
+
+
+def storage_alter_table_add_column(table: str, column: str, ddl: str) -> str:
+    return f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"
