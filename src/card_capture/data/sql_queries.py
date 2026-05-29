@@ -101,3 +101,65 @@ PIPELINE_RUN_FINISH = (
     "UPDATE pipeline_runs SET status=?, cards_extracted=?, finished_at=datetime('now') WHERE run_id=?"
 )
 PIPELINE_RUN_LOG_INSERT = "INSERT INTO pipeline_run_logs (run_id, line) VALUES (?, ?)"
+
+# Result importer
+RESULT_RUN_UPDATE_TELEMETRY = "UPDATE pipeline_runs SET detect_telemetry_json=? WHERE run_id=?"
+RESULT_RUN_UPDATE_HOST_INFO = "UPDATE pipeline_runs SET host_info_json=? WHERE run_id=?"
+RESULT_RESOURCE_SAMPLES_DELETE = "DELETE FROM run_resource_samples WHERE run_id=?"
+RESULT_LOGS_COUNT = "SELECT COUNT(*) FROM pipeline_run_logs WHERE run_id=?"
+RESULT_LOGS_INSERT = "INSERT INTO pipeline_run_logs (run_id, line) VALUES (?, ?)"
+RESULT_LOGS_DELETE = "DELETE FROM pipeline_run_logs WHERE run_id=?"
+RESULT_CARD_INSTANCES_FOR_RUN = "SELECT * FROM card_instances WHERE run_id=? ORDER BY id"
+RESULT_CARD_INSTANCE_ID_BY_RUN_TRACK = "SELECT id FROM card_instances WHERE run_id=? AND track_id=?"
+RESULT_EVENTS_DELETE = "DELETE FROM pipeline_events WHERE run_id=?"
+RESULT_EVENTS_FOR_RUN = "SELECT * FROM pipeline_events WHERE run_id=? ORDER BY id"
+RESULT_RESOURCE_SAMPLES_FOR_RUN = "SELECT * FROM run_resource_samples WHERE run_id=? ORDER BY elapsed_s"
+RESULT_LOGS_FOR_RUN = "SELECT line FROM pipeline_run_logs WHERE run_id=? ORDER BY id"
+RESULT_EVENT_EXISTS = "SELECT 1 FROM pipeline_events WHERE run_id=? AND event_type=? LIMIT 1"
+RESULT_EVENT_INSERT = (
+    "INSERT INTO pipeline_events "
+    "(video_id, run_id, stage_id, frame_index, timestamp_ms, event_type, data_json) "
+    "VALUES (?, ?, ?, 0, 0, ?, ?)"
+)
+RESULT_RUN_VIDEO_ID = "SELECT video_id FROM pipeline_runs WHERE run_id=?"
+RESULT_COUNT_CARDS = "SELECT COUNT(*) FROM card_instances WHERE run_id=?"
+RESULT_TABLE_EXISTS = "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?"
+
+
+def result_card_instances_insert(columns_sql: str, placeholders_sql: str) -> str:
+    return f"INSERT OR IGNORE INTO card_instances ({columns_sql}) VALUES ({placeholders_sql})"
+
+
+def result_card_instances_update(assignments_sql: str) -> str:
+    return f"UPDATE card_instances SET {assignments_sql} WHERE run_id=? AND track_id=?"
+
+
+def result_saved_cards_delete_for_card_instance_ids(placeholders_sql: str) -> str:
+    return (
+        "DELETE FROM saved_cards WHERE detection_id IN "
+        f"(SELECT id FROM card_views WHERE card_instance_id IN ({placeholders_sql}))"
+    )
+
+
+def result_card_views_delete_for_card_instance_ids(placeholders_sql: str) -> str:
+    return f"DELETE FROM card_views WHERE card_instance_id IN ({placeholders_sql})"
+
+
+def result_card_views_for_card_instance_ids(placeholders_sql: str) -> str:
+    return f"SELECT * FROM card_views WHERE card_instance_id IN ({placeholders_sql}) ORDER BY id"
+
+
+def result_card_views_insert(columns_sql: str, placeholders_sql: str) -> str:
+    return f"INSERT INTO card_views ({columns_sql}) VALUES ({placeholders_sql})"
+
+
+def result_pipeline_events_insert(columns_sql: str, placeholders_sql: str) -> str:
+    return f"INSERT INTO pipeline_events ({columns_sql}) VALUES ({placeholders_sql})"
+
+
+def result_resource_samples_insert(columns_sql: str, placeholders_sql: str) -> str:
+    return f"INSERT INTO run_resource_samples ({columns_sql}) VALUES ({placeholders_sql})"
+
+
+def result_pragma_table_info(table: str) -> str:
+    return f"PRAGMA table_info({table})"
