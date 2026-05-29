@@ -93,12 +93,14 @@ class LabelingService:
             dict: The candidate data, or None if no unlabeled candidates remain.
         """
         with read_connection(self.db_path) as conn:
+            card_cols = {r[1] for r in conn.execute("PRAGMA table_info(card_instances)").fetchall()}
+            instance_expr = "ci.instance_id" if "instance_id" in card_cols else "ci.track_id"
             # Join card_views with fb_labels to find unlabeled instances.
             # We join card_views -> card_instances -> videos to get run_id/video_id.
             row = conn.execute(
-                """
+                f"""
                 SELECT
-                    ci.instance_id,
+                    {instance_expr} AS instance_id,
                     cv.frame_index,
                     cv.rectified_path AS canonical_url,
                     v.source_path AS video_id,
@@ -106,7 +108,7 @@ class LabelingService:
                 FROM card_views cv
                 JOIN card_instances ci ON ci.id = cv.card_instance_id
                 JOIN videos v ON v.id = ci.video_id
-                LEFT JOIN fb_labels fl ON fl.instance_id = ci.instance_id
+                LEFT JOIN fb_labels fl ON fl.instance_id = {instance_expr}
                 WHERE cv.is_canonical = 1 
                   AND fl.label_id IS NULL
                 ORDER BY cv.confidence DESC
@@ -120,11 +122,11 @@ class LabelingService:
         with read_connection(self.db_path) as conn:
             labels_collected = conn.execute("SELECT COUNT(*) FROM fb_labels").fetchone()[0]
             # Count distinct unlabeled instances that have a canonical view
-            pending_count = conn.execute("""
-                SELECT COUNT(DISTINCT ci.instance_id)
+            pending_count = conn.execute(f"""
+                SELECT COUNT(DISTINCT {instance_expr})
                 FROM card_views cv
                 JOIN card_instances ci ON ci.id = cv.card_instance_id
-                LEFT JOIN fb_labels fl ON fl.instance_id = ci.instance_id
+                LEFT JOIN fb_labels fl ON fl.instance_id = {instance_expr}
                 WHERE cv.is_canonical = 1 AND fl.label_id IS NULL
             """).fetchone()[0]
 

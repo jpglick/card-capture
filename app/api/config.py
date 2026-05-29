@@ -129,12 +129,19 @@ def create_preset(payload: ConfigPreset, request: Request):
             status_code=409,
             detail=f"Preset name '{payload.preset_name}' is reserved for built-in presets.",
         )
+    existing = request.app.state.config_repo.get_preset(payload.preset_name)
+    if existing is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Preset name '{payload.preset_name}' already exists.",
+        )
     try:
         request.app.state.config_repo.upsert_preset(
             name=payload.preset_name,
             description=payload.description,
             config=payload.config,
         )
+        request.app.state.writer.flush()
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Database error: {exc}")
     return payload

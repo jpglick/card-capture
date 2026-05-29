@@ -171,8 +171,8 @@ def get_baseline(*, db_path: Path, name: str) -> Baseline:
 def list_baselines(*, db_path: Path) -> list[dict[str, Any]]:
     """Return a list of all baselines with metadata."""
     with read_connection(db_path) as conn:
-        conn.row_factory = sqlite3.Row
         rows = conn.execute(
             "SELECT baseline_id, name, code_sha, created_at FROM regression_baselines ORDER BY created_at DESC"
         ).fetchall()
-        return [dict(r) for r in rows]
+        keys = ("baseline_id", "name", "code_sha", "created_at")
+        return [dict(zip(keys, r)) for r in rows]

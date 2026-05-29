@@ -15,7 +15,7 @@ class VideoService:
     def list_videos(self, limit: int = 50) -> list[dict[str, Any]]:
         """Return a list of the most recent videos."""
         if self._repo:
-            return self._repo.list_recent(limit=limit)
+            return [self._to_api_video(v) for v in self._repo.list_recent(limit=limit)]
             
         with read_connection(self.db_path) as conn:
             rows = conn.execute(
@@ -23,19 +23,49 @@ class VideoService:
                 (limit,),
             ).fetchall()
         # Fallback for when repo is not yet fully utilized or returns different shape
-        return [dict(zip(["id", "source_path", "file_hash", "duration_ms", "width", "height", "status", "created_at"], r)) for r in rows]
+        db_rows = [
+            dict(
+                zip(
+                    ["id", "source_path", "file_hash", "duration_ms", "width", "height", "status", "created_at"],
+                    r,
+                )
+            )
+            for r in rows
+        ]
+        return [self._to_api_video(v) for v in db_rows]
 
     def get_video(self, video_id: int) -> Optional[dict[str, Any]]:
         """Retrieve metadata for a specific video."""
         if self._repo:
-            return self._repo.get(video_id)
+            row = self._repo.get(video_id)
+            return self._to_api_video(row) if row else None
             
         with read_connection(self.db_path) as conn:
             row = conn.execute(
                 "SELECT * FROM videos WHERE id = ?",
                 (video_id,),
             ).fetchone()
-        return dict(zip(["id", "source_path", "file_hash", "duration_ms", "width", "height", "status", "created_at"], row)) if row else None
+        if row is None:
+            return None
+        db_row = dict(
+            zip(
+                ["id", "source_path", "file_hash", "duration_ms", "width", "height", "status", "created_at"],
+                row,
+            )
+        )
+        return self._to_api_video(db_row)
+
+    def _to_api_video(self, row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "video_id": str(row["id"]),
+            "filename": Path(str(row["source_path"])).name,
+            "duration_ms": int(row.get("duration_ms", 0) or 0),
+            "status": str(row.get("status", "pending")),
+            "created_at": str(row.get("created_at", "")),
+            # Preserve internal fields used by callers like start_run.
+            "source_path": str(row.get("source_path", "")),
+            "id": int(row["id"]),
+        }
 
     def add_video(
         self,
@@ -53,6 +83,7 @@ class VideoService:
                 duration_ms=duration_ms,
                 width=width,
                 height=height,
+                status="pending",
             )
             
         # Legacy fallback
