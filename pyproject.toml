@@ -43,6 +43,7 @@ app = [
   "sse-starlette",
   "pydantic>=2",
   "httpx",
+  "python-multipart",
 ]
 runpod = [
   "runpod>=1.7.0",
@@ -57,6 +58,7 @@ test = [
   "fastapi",
   "pydantic>=2",
   "anyio",
+  "python-multipart",
 ]
 harness = [
   "pydantic>=2",
