@@ -31,11 +31,11 @@ expected side of its GT slot.
 """
 from __future__ import annotations
 
-import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from card_capture.data.connection import read_connection
 from harness.schema import ExpectedCard, TruthFile
 
 
@@ -103,8 +103,7 @@ def match_detections_to_truth(
 
 def _load_detections(db_path: Path, video_id: str) -> list[_Detection]:
     """Query card_instances + card_views for the given video."""
-    with sqlite3.connect(str(db_path)) as conn:
-        conn.row_factory = sqlite3.Row
+    with read_connection(db_path) as conn:
         rows = conn.execute(
             """
             SELECT

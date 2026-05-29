@@ -6,20 +6,19 @@ to find the optimal Adjusted Rand Index (ARI).
 from __future__ import annotations
 
 import json
-import sqlite3
 from pathlib import Path
 
 import numpy as np
 from PIL import Image
 
+from card_capture.data.connection import read_connection
 from ..inference.dino_dedup import DinoDeduplicator
 
 
 def calibrate(*, db_path: Path, variant: str = "vits14") -> dict:
     """Find the threshold that maximizes ARI on confirmed clusters."""
     # 1. Load confirmed clusters from DB
-    with sqlite3.connect(str(db_path)) as conn:
-        conn.row_factory = sqlite3.Row
+    with read_connection(db_path) as conn:
         rows = conn.execute(
             "SELECT cluster_id, confirmed_member_ids_json FROM dedup_clusters WHERE status = 'confirmed'"
         ).fetchall()
@@ -31,8 +30,7 @@ def calibrate(*, db_path: Path, variant: str = "vits14") -> dict:
     gt_map = {} # instance_id -> cluster_id
     instance_to_path = {}
     
-    with sqlite3.connect(str(db_path)) as conn:
-        conn.row_factory = sqlite3.Row
+    with read_connection(db_path) as conn:
         for r in rows:
             cid = r["cluster_id"]
             members = json.loads(r["confirmed_member_ids_json"])

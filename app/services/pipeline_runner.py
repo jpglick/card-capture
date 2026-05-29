@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional, Type
 
 from app.worker_core import parse_metaflow_start_stage
+from card_capture.data.connection import open_connection
 
 _REPO_ROOT = str(Path(__file__).parent.parent.parent)
 logger = logging.getLogger(__name__)
@@ -182,8 +183,7 @@ class PipelineRunner:
         if not self.db_path:
             return
         try:
-            import sqlite3
-            with sqlite3.connect(str(self.db_path)) as conn:
+            with open_connection(self.db_path) as conn:
                 conn.execute(
                     "INSERT OR IGNORE INTO pipeline_runs (run_id, video_id, status) VALUES (?, ?, 'running')",
                     (run_id, video_id),
@@ -191,10 +191,10 @@ class PipelineRunner:
         except Exception as exc:
             print(f"[{run_id}] could not record run start: {exc}", flush=True)
         try:
-            import sqlite3, json as _json
+            import json as _json
             from app.services.resource_sampler import get_host_info
             host_info = get_host_info()
-            with sqlite3.connect(str(self.db_path)) as conn:
+            with open_connection(self.db_path) as conn:
                 conn.execute(
                     "UPDATE pipeline_runs SET host_info_json = ? WHERE run_id = ?",
                     (_json.dumps(host_info), run_id),
@@ -206,8 +206,7 @@ class PipelineRunner:
         if not self.db_path:
             return
         try:
-            import sqlite3
-            with sqlite3.connect(str(self.db_path)) as conn:
+            with open_connection(self.db_path) as conn:
                 cards = conn.execute(
                     "SELECT COUNT(*) FROM card_instances WHERE run_id = ?", (run_id,)
                 ).fetchone()[0]
@@ -240,8 +239,7 @@ class PipelineRunner:
         if not self.db_path:
             return
         try:
-            import sqlite3
-            with sqlite3.connect(str(self.db_path)) as conn:
+            with open_connection(self.db_path) as conn:
                 conn.execute(
                     "INSERT INTO pipeline_run_logs (run_id, line) VALUES (?, ?)",
                     (run_id, line),

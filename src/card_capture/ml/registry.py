@@ -14,10 +14,11 @@ Schema (from Contract 1 / migrations/0001_v4_schema.sql):
     )
 """
 import json
-import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
+from card_capture.data.connection import read_connection
+from card_capture.data.writer import Writer
 
 @dataclass
 class ModelVersion:
@@ -43,20 +44,26 @@ def register_model(
     training_set_hash)`` pair already exists (the UNIQUE constraint prevents
     duplicate retrains on identical data).
     """
-    with sqlite3.connect(db_path) as conn:
-        cur = conn.execute(
-            "INSERT INTO model_versions"
-            "(model_name, training_set_hash, eval_metrics_json, checkpoint_path) "
-            "VALUES (?, ?, ?, ?)",
-            (model_name, training_set_hash, json.dumps(eval_metrics), checkpoint_path),
-        )
-        conn.commit()
-        return cur.lastrowid
+    writer = Writer(db_path)
+    writer.start()
+    try:
+        with writer.serialize():
+            with read_connection(db_path) as conn:
+                cur = conn.execute(
+                    "INSERT INTO model_versions"
+                    "(model_name, training_set_hash, eval_metrics_json, checkpoint_path) "
+                    "VALUES (?, ?, ?, ?)",
+                    (model_name, training_set_hash, json.dumps(eval_metrics), checkpoint_path),
+                )
+                conn.commit()
+                return int(cur.lastrowid)
+    finally:
+        writer.stop()
 
 
 def get_latest(*, db_path: Path, model_name: str) -> Optional[ModelVersion]:
     """Return the most-recently created version for *model_name*, or ``None``."""
-    with sqlite3.connect(db_path) as conn:
+    with read_connection(db_path) as conn:
         row = conn.execute(
             "SELECT version_id, model_name, training_set_hash, eval_metrics_json,"
             " checkpoint_path, created_at "
@@ -72,7 +79,7 @@ def get_latest(*, db_path: Path, model_name: str) -> Optional[ModelVersion]:
 
 def list_models(*, db_path: Path) -> list[ModelVersion]:
     """Return all registered model versions, newest first."""
-    with sqlite3.connect(db_path) as conn:
+    with read_connection(db_path) as conn:
         rows = conn.execute(
             "SELECT version_id, model_name, training_set_hash, eval_metrics_json,"
             " checkpoint_path, created_at "

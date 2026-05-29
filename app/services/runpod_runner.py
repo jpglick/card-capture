@@ -7,7 +7,6 @@ worker handler can access the same bucket without embedding secrets in job paylo
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 from pathlib import Path
 from typing import Optional
 
@@ -18,6 +17,7 @@ from botocore.config import Config as BotocoreConfig
 from app.services.event_bus import Event, EventBus
 from app.services.result_importer import ResultImporter
 from app.services import _event_bus_registry
+from card_capture.data.connection import open_connection
 
 _RUNPOD_API = "https://api.runpod.ai/v2"
 
@@ -243,7 +243,7 @@ class RunPodRunner:
 
     def _record_run_start(self, run_id: str, video_id: Optional[int], db: str) -> None:
         try:
-            with sqlite3.connect(db) as conn:
+            with open_connection(db) as conn:
                 conn.execute(
                     "INSERT OR IGNORE INTO pipeline_runs (run_id, video_id, status)"
                     " VALUES (?, ?, 'running')",
@@ -254,7 +254,7 @@ class RunPodRunner:
 
     def _record_run_finish(self, run_id: str, n_cards: int, db: str) -> None:
         try:
-            with sqlite3.connect(db) as conn:
+            with open_connection(db) as conn:
                 conn.execute(
                     "UPDATE pipeline_runs SET status='completed', cards_extracted=?,"
                     " finished_at=datetime('now') WHERE run_id=?",
@@ -265,7 +265,7 @@ class RunPodRunner:
 
     def _record_run_fail(self, run_id: str, db: str) -> None:
         try:
-            with sqlite3.connect(db) as conn:
+            with open_connection(db) as conn:
                 conn.execute(
                     "UPDATE pipeline_runs SET status='failed',"
                     " finished_at=datetime('now') WHERE run_id=?",

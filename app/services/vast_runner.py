@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sqlite3
 from pathlib import Path
 from typing import Optional
 
@@ -12,6 +11,7 @@ from app.services.vast_client import VastAIClient
 from app.services.worker_client import InstanceWorkerClient
 from app.services.result_importer import ResultImporter
 from app.services import _event_bus_registry
+from card_capture.data.connection import open_connection
 
 _CONFIG_PATH = Path(__file__).parent.parent.parent / "card_capture_config.json"
 
@@ -140,7 +140,7 @@ class VastAIRunner:
 
     def _record_run_start(self, run_id: str, video_id: Optional[int], db: str) -> None:
         try:
-            with sqlite3.connect(db) as conn:
+            with open_connection(db) as conn:
                 conn.execute(
                     "INSERT OR IGNORE INTO pipeline_runs (run_id, video_id, status) VALUES (?, ?, 'running')",
                     (run_id, video_id),
@@ -150,7 +150,7 @@ class VastAIRunner:
 
     def _record_run_finish(self, run_id: str, n_cards: int, db: str) -> None:
         try:
-            with sqlite3.connect(db) as conn:
+            with open_connection(db) as conn:
                 conn.execute(
                     "UPDATE pipeline_runs SET status='completed', cards_extracted=?, finished_at=datetime('now') WHERE run_id=?",
                     (n_cards, run_id),
@@ -160,7 +160,7 @@ class VastAIRunner:
 
     def _record_run_fail(self, run_id: str, db: str) -> None:
         try:
-            with sqlite3.connect(db) as conn:
+            with open_connection(db) as conn:
                 conn.execute(
                     "UPDATE pipeline_runs SET status='failed', finished_at=datetime('now') WHERE run_id=?",
                     (run_id,),

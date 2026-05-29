@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import base64
 import json
-import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from card_capture.data.connection import open_connection
 from .models import CardDetection, CornerDetection, PerformanceTelemetry, QualityScore
 
 
@@ -616,18 +616,15 @@ class Storage:
             for row in rows
         ]
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        return conn
+    def _connect(self):
+        return open_connection(self.db_path)
 
     def _hamming_distance(self, hash1: str, hash2: str) -> int:
         h1 = int(hash1, 16)
         h2 = int(hash2, 16)
         return bin(h1 ^ h2).count("1")
 
-    def _ensure_column(self, conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+    def _ensure_column(self, conn, table: str, column: str, ddl: str) -> None:
         rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
         names = {row["name"] for row in rows}
         if column not in names:

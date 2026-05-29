@@ -4,12 +4,12 @@ from __future__ import annotations
 import json
 import platform
 import socket
-import sqlite3
 import subprocess
 import threading
 import time
 from pathlib import Path
 from typing import Optional
+from card_capture.data.connection import open_connection
 
 
 def get_host_info() -> dict:
@@ -183,7 +183,7 @@ class ResourceSampler:
                 pass
 
         try:
-            with sqlite3.connect(str(self.db_path)) as conn:
+            with open_connection(self.db_path) as conn:
                 cols = {r[1] for r in conn.execute("PRAGMA table_info(run_resource_samples)").fetchall()}
                 values = {
                     "run_id": self.run_id,

@@ -1,8 +1,8 @@
 from __future__ import annotations
-import sqlite3
 from pathlib import Path
 import cv2
 import numpy as np
+from card_capture.data.connection import open_connection, read_connection
 
 SAMPLES_PER_RUN = 20
 _SCAN_FPS = 15.0
@@ -62,7 +62,7 @@ def sample_presence_frames(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     inserted = 0
-    with sqlite3.connect(str(db_path)) as conn:
+    with open_connection(db_path) as conn:
         for fi, ts_ms, small in selected:
             fname = f"{run_id}_{fi}.jpg"
             fpath = out_dir / fname
@@ -74,14 +74,13 @@ def sample_presence_frames(
                 (run_id, video_id, fi, ts_ms, str(fpath)),
             )
             inserted += 1
-        conn.commit()
     return inserted
 
 
 def _balance_targets(db_path: Path) -> tuple[int, int]:
     half = SAMPLES_PER_RUN // 2
     try:
-        with sqlite3.connect(str(db_path)) as conn:
+        with read_connection(db_path) as conn:
             rows = conn.execute(
                 "SELECT label, COUNT(*) FROM presence_samples "
                 "WHERE label IS NOT NULL GROUP BY label"

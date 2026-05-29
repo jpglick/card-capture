@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 import tarfile
 import tempfile
 from pathlib import Path
 from typing import Any, Optional
+from card_capture.data.connection import open_connection
 
 
 class ResultImporter:
@@ -49,12 +49,12 @@ class ResultImporter:
             else:
                 self._import_export_cards(cards, run_id, crops_dir)
 
-        with sqlite3.connect(self.db_path) as conn:
+        with open_connection(self.db_path) as conn:
             return self._count_cards(conn, run_id)
 
     def import_handler_output(self, handler_output: dict[str, Any], run_id: str) -> None:
         """Persist RunPod handler diagnostics that are not part of export.json."""
-        with sqlite3.connect(self.db_path) as conn:
+        with open_connection(self.db_path) as conn:
             video_id = self._local_video_id(conn, run_id)
             telemetry = {
                 "status": handler_output.get("status"),
@@ -113,7 +113,7 @@ class ResultImporter:
                         )
 
     def _import_export_cards(self, cards: list[dict], run_id: str, crops_dir: Path) -> None:
-        with sqlite3.connect(self.db_path) as conn:
+        with open_connection(self.db_path) as conn:
             video_id = self._local_video_id(conn, run_id)
             for card in cards:
                 self._upsert_card_instance(
@@ -129,7 +129,7 @@ class ResultImporter:
                 )
 
     def _import_worker_db(self, worker_db: Path, run_id: str, crops_dir: Path) -> None:
-        with sqlite3.connect(self.db_path) as local, sqlite3.connect(worker_db) as worker:
+        with open_connection(self.db_path) as local, open_connection(worker_db) as worker:
             local.row_factory = sqlite3.Row
             worker.row_factory = sqlite3.Row
             video_id = self._local_video_id(local, run_id)
@@ -164,7 +164,7 @@ class ResultImporter:
 
     def _upsert_card_instance(
         self,
-        conn: sqlite3.Connection,
+        conn: Any,
         *,
         run_id: str,
         video_id: int,
@@ -208,8 +208,8 @@ class ResultImporter:
 
     def _replace_card_views(
         self,
-        local: sqlite3.Connection,
-        worker: sqlite3.Connection,
+        local: Any,
+        worker: Any,
         id_map: dict[int, int],
         crops_dir: Path,
     ) -> None:
@@ -243,7 +243,7 @@ class ResultImporter:
             )
 
     def _replace_events(
-        self, local: sqlite3.Connection, worker: sqlite3.Connection, run_id: str, video_id: int
+        self, local: Any, worker: Any, run_id: str, video_id: int
     ) -> None:
         if not (self._table_exists(local, "pipeline_events") and self._table_exists(worker, "pipeline_events")):
             return
@@ -261,7 +261,7 @@ class ResultImporter:
             )
 
     def _replace_resource_samples(
-        self, local: sqlite3.Connection, worker: sqlite3.Connection, run_id: str
+        self, local: Any, worker: Any, run_id: str
     ) -> None:
         if not (self._table_exists(local, "run_resource_samples") and self._table_exists(worker, "run_resource_samples")):
             return
@@ -276,7 +276,7 @@ class ResultImporter:
                 [values[c] for c in insert_cols],
             )
 
-    def _replace_logs(self, local: sqlite3.Connection, worker: sqlite3.Connection, run_id: str) -> None:
+    def _replace_logs(self, local: Any, worker: Any, run_id: str) -> None:
         if not (self._table_exists(local, "pipeline_run_logs") and self._table_exists(worker, "pipeline_run_logs")):
             return
         local.execute("DELETE FROM pipeline_run_logs WHERE run_id=?", (run_id,))
@@ -285,7 +285,7 @@ class ResultImporter:
 
     def _insert_event_if_missing(
         self,
-        conn: sqlite3.Connection,
+        conn: Any,
         video_id: int,
         run_id: str,
         stage_id: str,
@@ -309,7 +309,7 @@ class ResultImporter:
             (video_id, run_id, stage_id, event_type, json.dumps(payload)),
         )
 
-    def _insert_resource_sample(self, conn: sqlite3.Connection, run_id: str, sample: dict[str, Any]) -> None:
+    def _insert_resource_sample(self, conn: Any, run_id: str, sample: dict[str, Any]) -> None:
         cols = self._columns(conn, "run_resource_samples")
         values = {
             "run_id": run_id,

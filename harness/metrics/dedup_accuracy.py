@@ -19,10 +19,10 @@ applied only to GT cards that were matched to a detection.
 """
 from __future__ import annotations
 
-import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+from card_capture.data.connection import read_connection
 
 from harness.match import match_detections_to_truth
 from harness.metrics.types import MetricResult
@@ -88,8 +88,7 @@ def _build_predicted_clusters(db_path: Path) -> dict[int, int]:
     Cluster root = the ancestor in the ``is_duplicate_of`` chain with
     ``is_duplicate_of IS NULL``.
     """
-    with sqlite3.connect(str(db_path)) as conn:
-        conn.row_factory = sqlite3.Row
+    with read_connection(db_path) as conn:
         rows = conn.execute(
             "SELECT id, is_duplicate_of FROM card_instances"
         ).fetchall()

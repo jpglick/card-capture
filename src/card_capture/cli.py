@@ -287,7 +287,7 @@ def _run_harness(args: argparse.Namespace) -> int:
 
 
 def _run_dataset(args: argparse.Namespace) -> int:
-    import sqlite3
+    from card_capture.data.connection import read_connection
     from .presence.training_data import export_dataset
 
     db_path: Path = args.db
@@ -298,7 +298,7 @@ def _run_dataset(args: argparse.Namespace) -> int:
     if args.video_id is not None:
         video_ids = [args.video_id]
     else:
-        with sqlite3.connect(db_path) as conn:
+        with read_connection(db_path) as conn:
             rows = conn.execute("SELECT id FROM videos ORDER BY id").fetchall()
         video_ids = [r[0] for r in rows]
 

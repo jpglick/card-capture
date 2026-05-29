@@ -6,10 +6,10 @@ in the ``regression_baselines`` and ``regression_runs`` tables.
 from __future__ import annotations
 
 import json
-import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+from card_capture.data.connection import open_connection, read_connection
 
 
 @dataclass(frozen=True)
@@ -53,7 +53,7 @@ def freeze_baseline(
     -------
     int: The new baseline_id.
     """
-    with sqlite3.connect(str(db_path)) as conn:
+    with open_connection(db_path) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
         cur = conn.execute(
             "INSERT INTO regression_baselines(name, code_sha, config_json) VALUES (?, ?, ?)",
@@ -75,7 +75,6 @@ def freeze_baseline(
                 json.dumps(per_video),
             ),
         )
-        conn.commit()
         return baseline_id
 
 
@@ -109,7 +108,7 @@ def persist_run(
     -------
     int: The new run_id.
     """
-    with sqlite3.connect(str(db_path)) as conn:
+    with open_connection(db_path) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
         row = conn.execute(
             "SELECT baseline_id FROM regression_baselines WHERE name = ?",
@@ -133,13 +132,12 @@ def persist_run(
                 json.dumps(per_video),
             ),
         )
-        conn.commit()
         return cur.lastrowid
 
 
 def get_baseline(*, db_path: Path, name: str) -> Baseline:
     """Retrieve a baseline by name."""
-    with sqlite3.connect(str(db_path)) as conn:
+    with read_connection(db_path) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
             """
@@ -172,7 +170,7 @@ def get_baseline(*, db_path: Path, name: str) -> Baseline:
 
 def list_baselines(*, db_path: Path) -> list[dict[str, Any]]:
     """Return a list of all baselines with metadata."""
-    with sqlite3.connect(str(db_path)) as conn:
+    with read_connection(db_path) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             "SELECT baseline_id, name, code_sha, created_at FROM regression_baselines ORDER BY created_at DESC"
