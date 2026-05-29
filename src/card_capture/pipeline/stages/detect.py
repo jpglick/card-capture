@@ -43,9 +43,9 @@ def run(state: dict, *, telemetry) -> None:
         )
         for f in frames
     ]
-    
+    # Execute
     detections = state["yolo_model"].detect_batch(packets, config.get("corner_confidence", 0.5))
-    
+
     rows = []
     for i, p in enumerate(detections):
         rows.append({

@@ -96,6 +96,7 @@ class ResourceSampler:
         self.run_id = run_id
         self.db_path = db_path
         self.start_time = start_time
+        self.current_stage: Optional[str] = None
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
 

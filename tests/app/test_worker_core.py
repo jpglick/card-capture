@@ -114,3 +114,22 @@ def test_parse_metaflow_start_stage_is_legacy_noop():
     ``stage_cb`` callback wired into the unified runtime's telemetry."""
     line = "2026-05-24 22:13:27.434 [1779660806748398/detect/2 (pid 1254)] Task is starting."
     assert parse_metaflow_start_stage(line) is None
+
+
+def test_run_pipeline_passes_full_config(tmp_path, monkeypatch):
+    from unittest.mock import patch, MagicMock
+    captured = {}
+
+    def fake_runtime_run(self, request):
+        captured["config"] = dict(request.config)
+        result = MagicMock()
+        result.manifest.contract_violations = []
+        return result
+
+    from app.worker_core import run_pipeline
+    with patch("card_capture.pipeline.runtime_local.LocalPipelineRuntime.run",
+               new=fake_runtime_run):
+        run_pipeline("job-1", str(tmp_path / "v.mov"), "balanced", tmp_path)
+
+    assert captured["config"]["foil_threshold"] == 50.0
+    assert captured["config"]["use_fb_classifier"] is True

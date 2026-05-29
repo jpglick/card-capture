@@ -59,6 +59,12 @@ def _glare_mask(image: np.ndarray) -> np.ndarray:
     return mask.astype(np.uint8)
 
 
+def _laplacian_heatmap(image: np.ndarray) -> np.ndarray:
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+    lap = cv2.Laplacian(gray, cv2.CV_16S)
+    return cv2.convertScaleAbs(lap)
+
+
 def _laplacian_variance_batch(images: List[Union[np.ndarray, "torch.Tensor"]]) -> List[float]:
     """GPU-batched Laplacian variance, one float per image.
     Supports numpy (uploads) and direct torch tensors.
@@ -185,11 +191,86 @@ def _compute_quality_weighted_score(prepared: Any, max_length: int) -> float:
 def _entry_quality_total(entry: dict) -> float:
     quality_score = entry.get("quality_score")
     if quality_score is not None:
-        return float(quality_score.total)
+        if hasattr(quality_score, "total"):
+            return float(quality_score.total)
+        return float(quality_score)
     candidate = entry.get("candidate")
     if candidate is not None:
-        return float(candidate.score.total)
+        score = getattr(candidate, "score", None)
+        if score is not None:
+            if hasattr(score, "total"):
+                return float(score.total)
+            return float(score)
     return 0.0
+
+
+def _resolve_session_tracks(
+    tracks: list[dict],
+    deduplicator: Any,
+) -> None:
+    """Groups tracks by appearance similarity. The longest/best track in a group is Front.
+    A visually similar track is Back. Distinct appearances are independent Fronts."""
+    if not tracks:
+        return
+
+    # Sort tracks by quality/length to find the best representative for the group
+    tracks.sort(key=lambda t: (
+        t.get("fb_probs", [0, 0])[0] if t.get("fb_probs") else 0,
+        t.get("side_score", 0.0),
+        len(t.get("frame_entries", []))
+    ), reverse=True)
+
+    # 1. Primary track of the session is usually Front unless classifier is extremely sure
+    # but we'll stick to heuristic sorting first.
+    
+    # Track grouping state
+    # group_id -> canonical_track_index
+    groups: dict[int, int] = {}
+    
+    for i, track in enumerate(tracks):
+        # Find if this track belongs to an existing group in this session
+        matched_group_id = None
+        
+        track_emb = track.get("reid_embedding")
+        if track_emb is not None:
+            track_emb = np.array(track_emb, dtype=np.float32)
+            for prev_idx, prev_track in enumerate(tracks[:i]):
+                prev_emb = prev_track.get("reid_embedding")
+                if prev_emb is not None:
+                    prev_emb = np.array(prev_emb, dtype=np.float32)
+                    # Use 0.20 as a slightly looser threshold for intra-session same-card
+                    if deduplicator.is_reid_duplicate(track_emb, prev_emb, threshold=0.20):
+                        matched_group_id = prev_track.get("_group_leader_idx", prev_idx)
+                        break
+        
+        if matched_group_id is None:
+            # New group
+            track["_group_leader_idx"] = i
+            track["angle"] = "Front"
+            track["duplicate_track_index"] = None
+        else:
+            # Group companion
+            track["_group_leader_idx"] = matched_group_id
+            track["duplicate_track_index"] = matched_group_id
+            
+            # Label as Back if we don't have a Back for this group leader yet
+            has_back = any(t.get("angle") == "Back" and t.get("duplicate_track_index") == matched_group_id 
+                          for t in tracks[:i])
+            if not has_back:
+                track["angle"] = "Back"
+            else:
+                track["angle"] = "Front" # Fragment
+
+    # 2. Final classifier check: if a track is 95% sure it's Back, trust it,
+    # even if it's the leader. (Edge case: we only saw the Back of a card).
+    for track in tracks:
+        probs = track.get("fb_probs")
+        if probs and probs[1] > 0.95:
+            track["angle"] = "Back"
+
+    # Clean up internal keys
+    for track in tracks:
+        track.pop("_group_leader_idx", None)
 
 
 def _select_canonical_entries(frame_entries: list[dict], deduplicator: Any) -> list[dict]:

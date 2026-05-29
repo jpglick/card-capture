@@ -64,6 +64,20 @@ class Writer:
             raise RuntimeError("Writer.start() before submit()")
         self._q.put(write)
 
+    def submit_returning(self, write: Write) -> "concurrent.futures.Future[int]":
+        """Submit a write whose ``lastrowid`` we need.
+
+        The internal writer thread executes the statement, calls
+        ``cursor.lastrowid``, and resolves the returned Future. Use
+        ``.result()`` on the call site to block until done.
+        """
+        import concurrent.futures
+        if self._thread is None:
+            raise RuntimeError("Writer.start() before submit_returning()")
+        fut: concurrent.futures.Future = concurrent.futures.Future()
+        self._q.put(("__returning__", write, fut))
+        return fut
+
     def flush(self) -> None:
         """Block until the queue is empty (best-effort)."""
         self._q.join()
@@ -92,6 +106,16 @@ class Writer:
                 try:
                     if item is _SENTINEL:
                         return
+                    
+                    if isinstance(item, tuple) and item and item[0] == "__returning__":
+                        _, write, fut = item
+                        try:
+                            cur = conn.execute(write.sql, write.params)
+                            fut.set_result(cur.lastrowid)
+                        except BaseException as exc:
+                            fut.set_exception(exc)
+                        continue
+
                     write: Write = item
                     conn.execute(write.sql, write.params)
                 except BaseException as exc:  # noqa: BLE001
