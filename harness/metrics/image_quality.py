@@ -158,7 +158,7 @@ def _load_fused_paths(db_path: Path) -> dict[int, Optional[str]]:
         rows = conn.execute(
             "SELECT id, fused_image_path FROM card_instances"
         ).fetchall()
-    return {int(r["id"]): r["fused_image_path"] for r in rows}
+    return {int(r[0]): r[1] for r in rows}
 
 
 def _load_grey(path: Path) -> np.ndarray:

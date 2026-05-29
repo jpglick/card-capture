@@ -17,7 +17,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from card_capture.data.connection import read_connection
+from card_capture.data.connection import open_connection, read_connection
 from card_capture.data.writer import Writer
 
 @dataclass
@@ -48,7 +48,7 @@ def register_model(
     writer.start()
     try:
         with writer.serialize():
-            with read_connection(db_path) as conn:
+            with open_connection(db_path) as conn:
                 cur = conn.execute(
                     "INSERT INTO model_versions"
                     "(model_name, training_set_hash, eval_metrics_json, checkpoint_path) "

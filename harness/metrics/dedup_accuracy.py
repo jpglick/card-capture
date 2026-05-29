@@ -95,7 +95,7 @@ def _build_predicted_clusters(db_path: Path) -> dict[int, int]:
 
     # Build parent map
     parent: dict[int, Optional[int]] = {
-        int(r["id"]): (int(r["is_duplicate_of"]) if r["is_duplicate_of"] is not None else None)
+        int(r[0]): (int(r[1]) if r[1] is not None else None)
         for r in rows
     }
 

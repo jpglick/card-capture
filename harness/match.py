@@ -122,10 +122,10 @@ def _load_detections(db_path: Path, video_id: str) -> list[_Detection]:
         ).fetchall()
     return [
         _Detection(
-            instance_id=int(row["instance_id"]),
-            angle=row["angle"],
-            start_ms=int(row["start_ms"]),
-            end_ms=int(row["end_ms"]),
+            instance_id=int(row[0]),
+            angle=row[1],
+            start_ms=int(row[2]),
+            end_ms=int(row[3]),
         )
         for row in rows
     ]
