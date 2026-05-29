@@ -10,7 +10,6 @@ name = sqlite3 only inside card_capture.data and migrations
 type = forbidden
 source_modules =
     card_capture.runtime
-    card_capture.platforms
 forbidden_modules =
     sqlite3
 
@@ -26,7 +25,6 @@ source_modules =
 forbidden_modules =
     runpod
     beam
-    vastai
 
 [importlinter:contract:strict-gpu-no-image-io]
 name = strict GPU code must not import OpenCV/PIL file IO

@@ -17,7 +17,7 @@ from .request import PipelineRunRequest, PipelineRunResult
 @dataclasses.dataclass(frozen=True)
 class PipelineRunHandle:
     run_id: str
-    backend: str                # "local", "runpod", "beam", "vastai"
+    backend: str                # "local", "runpod", "beam"
     opaque: str = ""            # provider-specific job id, opaque to callers
 
 

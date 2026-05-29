@@ -24,9 +24,6 @@ _PIPELINE_FIELDS = {
 
 _COMPUTE_FIELDS = {
     "pipeline_backend": str,
-    "cuda_gpu_type": str,
-    "vast_template_id": str,
-    "cuda_idle_timeout_s": int,
     # Beam
     "beam_api_key": str,
     "beam_volume_id": str,
@@ -43,9 +40,6 @@ _COMPUTE_FIELDS = {
 
 _COMPUTE_DEFAULTS = {
     "pipeline_backend": "mps",
-    "cuda_gpu_type": "RTX 4090",
-    "vast_template_id": "",
-    "cuda_idle_timeout_s": 600,
     "beam_api_key": "",
     "beam_volume_id": "",
     "beam_endpoint_id": "",

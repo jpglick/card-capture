@@ -40,21 +40,6 @@ def _build_runner(request: Request):
     db_path = request.app.state.db_path
     backend = cfg.get("pipeline_backend", "mps")
 
-    if backend == "cuda":
-        api_key = os.environ.get("VAST_API_KEY", "")
-        if not api_key:
-            raise HTTPException(status_code=500, detail="VAST_API_KEY environment variable is not set")
-        from app.services.vast_runner import VastAIRunner
-        return VastAIRunner(
-            bus=bus,
-            db_path=db_path,
-            output_base=db_path.parent,
-            api_key=api_key,
-            gpu_type=cfg.get("cuda_gpu_type", "RTX 4090"),
-            template_id=cfg.get("vast_template_id", ""),
-            idle_timeout_s=int(cfg.get("cuda_idle_timeout_s", 600)),
-        )
-
     if backend == "beam":
         api_key = cfg.get("beam_api_key") or os.environ.get("BEAM_API_KEY", "")
         if not api_key:
