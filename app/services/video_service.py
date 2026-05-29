@@ -5,6 +5,15 @@ from pathlib import Path
 from typing import Any, Optional
 
 from card_capture.data.connection import read_connection
+from card_capture.data.sql_queries import (
+    VIDEO_DELETE,
+    VIDEO_DELETE_CARDS,
+    VIDEO_DELETE_EVENTS,
+    VIDEO_GET,
+    VIDEO_INSERT,
+    VIDEO_LIST,
+    VIDEO_UPDATE_STATUS,
+)
 
 
 class VideoService:
@@ -19,7 +28,7 @@ class VideoService:
             
         with read_connection(self.db_path) as conn:
             rows = conn.execute(
-                "SELECT * FROM videos ORDER BY created_at DESC LIMIT ?",
+                VIDEO_LIST,
                 (limit,),
             ).fetchall()
         # Fallback for when repo is not yet fully utilized or returns different shape
@@ -42,7 +51,7 @@ class VideoService:
             
         with read_connection(self.db_path) as conn:
             row = conn.execute(
-                "SELECT * FROM videos WHERE id = ?",
+                VIDEO_GET,
                 (video_id,),
             ).fetchone()
         if row is None:
@@ -91,10 +100,7 @@ class VideoService:
         conn = open_connection(self.db_path)
         try:
             cur = conn.execute(
-                """
-                INSERT INTO videos(source_path, file_hash, duration_ms, width, height)
-                VALUES (?, ?, ?, ?, ?)
-                """,
+                VIDEO_INSERT,
                 (source_path, file_hash, duration_ms, width, height),
             )
             conn.commit()
@@ -111,7 +117,7 @@ class VideoService:
         from card_capture.data.connection import open_connection
         conn = open_connection(self.db_path)
         try:
-            conn.execute("UPDATE videos SET status = ? WHERE id = ?", (status, video_id))
+            conn.execute(VIDEO_UPDATE_STATUS, (status, video_id))
             conn.commit()
         finally:
             conn.close()
@@ -122,14 +128,14 @@ class VideoService:
         # It needs multiple writes, so it must go through the writer.
         if self._repo and self._repo._writer:
             from card_capture.data.writer import Write
-            self._repo._writer.submit(Write("DELETE FROM videos WHERE id = ?", (video_id,)))
-            self._repo._writer.submit(Write("DELETE FROM pipeline_events WHERE video_id = ?", (video_id,)))
-            self._repo._writer.submit(Write("DELETE FROM card_instances WHERE video_id = ?", (video_id,)))
+            self._repo._writer.submit(Write(VIDEO_DELETE, (video_id,)))
+            self._repo._writer.submit(Write(VIDEO_DELETE_EVENTS, (video_id,)))
+            self._repo._writer.submit(Write(VIDEO_DELETE_CARDS, (video_id,)))
         else:
             from card_capture.data.connection import open_connection
             conn = open_connection(self.db_path)
             try:
-                conn.execute("DELETE FROM videos WHERE id = ?", (video_id,))
+                conn.execute(VIDEO_DELETE, (video_id,))
                 conn.commit()
             finally:
                 conn.close()

@@ -5,6 +5,14 @@ from pathlib import Path
 from typing import Any, List, Optional
 
 from card_capture.data.connection import read_connection
+from card_capture.data.sql_queries import (
+    CARD_GET_ONE,
+    CARD_SOURCE_FRAMES,
+    CARDS_CANONICAL_VIEW,
+    CARDS_COUNT_BASE,
+    CARDS_LIST_BASE,
+    CARDS_VIDEO_SOURCE,
+)
 
 
 def _to_file_url(path: Optional[str]) -> Optional[str]:
@@ -47,8 +55,8 @@ class CardService:
         page_size: int = 50,
     ) -> dict[str, Any]:
         """Return a paginated list of extracted card instances."""
-        query = "SELECT id, track_id, video_id, run_id, angle, fused_image_path, created_at FROM card_instances"
-        count_query = "SELECT COUNT(*) FROM card_instances"
+        query = CARDS_LIST_BASE
+        count_query = CARDS_COUNT_BASE
         params = []
         where_clauses = ["hidden = 0"]
 
@@ -80,11 +88,11 @@ class CardService:
                 
                 # Get the canonical view to get confidence
                 view = conn.execute(
-                    "SELECT confidence, rectified_path FROM card_views WHERE card_instance_id = ? AND is_canonical = 1",
+                    CARDS_CANONICAL_VIEW,
                     (c_id,)
                 ).fetchone()
                 
-                video_row = conn.execute("SELECT source_path FROM videos WHERE id = ?", (vid,)).fetchone()
+                video_row = conn.execute(CARDS_VIDEO_SOURCE, (vid,)).fetchone()
                 video_id_str = Path(video_row[0]).stem if video_row else str(vid)
 
                 items.append({
@@ -111,10 +119,7 @@ class CardService:
     def get_card(self, card_instance_id: int) -> Optional[dict[str, Any]]:
         """Retrieve a single card record by internal database ID."""
         with read_connection(str(self.db_path)) as conn:
-            row = conn.execute(
-                "SELECT id, track_id, video_id, run_id, angle, fused_image_path, created_at FROM card_instances WHERE id = ? AND hidden = 0",
-                (card_instance_id,),
-            ).fetchone()
+            row = conn.execute(CARD_GET_ONE, (card_instance_id,)).fetchone()
             if not row:
                 return None
             
@@ -125,12 +130,9 @@ class CardService:
                 (c_id,)
             ).fetchone()
 
-            source_frames = conn.execute(
-                "SELECT frame_index FROM card_views WHERE card_instance_id = ?",
-                (c_id,)
-            ).fetchall()
+            source_frames = conn.execute(CARD_SOURCE_FRAMES, (c_id,)).fetchall()
             
-            video_row = conn.execute("SELECT source_path FROM videos WHERE id = ?", (vid,)).fetchone()
+            video_row = conn.execute(CARDS_VIDEO_SOURCE, (vid,)).fetchone()
             video_id_str = Path(video_row[0]).stem if video_row else str(vid)
 
             return {

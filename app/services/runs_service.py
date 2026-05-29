@@ -6,6 +6,15 @@ from pathlib import Path
 from typing import Any, List, Optional
 
 from card_capture.data.connection import read_connection
+from card_capture.data.sql_queries import (
+    RUN_DETAILS,
+    RUN_EVENTS,
+    RUN_LOGS,
+    RUN_RESOURCE_RANGE,
+    RUN_RESOURCE_SAMPLES,
+    RUN_STAGE_EVENTS,
+    RUNS_LIST_BASE,
+)
 
 
 class RunService:
@@ -22,15 +31,7 @@ class RunService:
             if video_id:
                 where += " AND pr.video_id = ?"
                 params.append(video_id)
-            rows = conn.execute(f"""
-                SELECT pr.run_id, pr.video_id, pr.status, pr.cards_extracted,
-                       pr.started_at as created_at, pr.finished_at,
-                       v.source_path
-                FROM pipeline_runs pr
-                LEFT JOIN videos v ON v.id = pr.video_id
-                {where}
-                ORDER BY pr.started_at DESC
-            """, params).fetchall()
+            rows = conn.execute(RUNS_LIST_BASE.format(where=where), params).fetchall()
 
             runs = []
             for r in rows:
@@ -59,34 +60,16 @@ class RunService:
     def get_run_details(self, run_id: str) -> Optional[dict[str, Any]]:
         """Retrieve full details for a run."""
         with read_connection(self.db_path) as conn:
-            row = conn.execute(
-                """
-                SELECT pr.run_id, pr.video_id, pr.status, pr.cards_extracted,
-                       pr.started_at, pr.finished_at,
-                       v.source_path, v.duration_ms as video_duration_ms
-                FROM pipeline_runs pr
-                LEFT JOIN videos v ON v.id = pr.video_id
-                WHERE pr.run_id = ?
-                """,
-                (run_id,),
-            ).fetchone()
+            row = conn.execute(RUN_DETAILS, (run_id,)).fetchone()
 
             if not row:
                 return None
 
-            events = conn.execute(
-                "SELECT event_type, data_json, created_at FROM pipeline_events "
-                "WHERE run_id = ? ORDER BY created_at ASC",
-                (run_id,),
-            ).fetchall()
+            events = conn.execute(RUN_EVENTS, (run_id,)).fetchall()
 
             # Fetch persisted log lines (last 50)
             try:
-                log_rows = conn.execute(
-                    "SELECT line FROM pipeline_run_logs WHERE run_id = ? "
-                    "ORDER BY id ASC",
-                    (run_id,),
-                ).fetchall()
+                log_rows = conn.execute(RUN_LOGS, (run_id,)).fetchall()
                 logs = [r[0] for r in log_rows][-50:]
             except Exception:
                 logs = []
@@ -134,19 +117,12 @@ class RunService:
 
     def get_run_resources(self, run_id: str) -> dict:
         with read_connection(self.db_path) as conn:
-            row = conn.execute(
-                "SELECT started_at, finished_at FROM pipeline_runs WHERE run_id = ?",
-                (run_id,)
-            ).fetchone()
+            row = conn.execute(RUN_RESOURCE_RANGE, (run_id,)).fetchone()
             if not row:
                 return {}
 
             started, finished = row
-            samples = conn.execute(
-                "SELECT elapsed_s, cpu_pct, mem_used_mb, mem_pct, gpu_pct, vram_used_mb "
-                "FROM run_resource_samples WHERE run_id = ? ORDER BY elapsed_s",
-                (run_id,)
-            ).fetchall()
+            samples = conn.execute(RUN_RESOURCE_SAMPLES, (run_id,)).fetchall()
 
             # Stage markers from pipeline_events (if table exists)
             stage_markers = []
@@ -155,11 +131,7 @@ class RunService:
                     from datetime import datetime
                     fmt = "%Y-%m-%d %H:%M:%S"
                     run_start = datetime.strptime(started, fmt)
-                    events = conn.execute(
-                        "SELECT stage_id, event_type, created_at FROM pipeline_events "
-                        "WHERE run_id = ? AND event_type LIKE 'stage_%' ORDER BY created_at",
-                        (run_id,)
-                    ).fetchall()
+                    events = conn.execute(RUN_STAGE_EVENTS, (run_id,)).fetchall()
                     for ev in events:
                         if ev[2]:
                             try:
