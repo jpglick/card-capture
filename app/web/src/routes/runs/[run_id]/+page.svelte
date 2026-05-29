@@ -4,6 +4,7 @@
     import { api } from '$lib/api/client';
     import type { RunDetail, RunResources, ResourceSample, StageMarker } from '$lib/api/types';
     import ResourceChart from '$lib/components/ResourceChart.svelte';
+    import WaterfallChart from '$lib/components/WaterfallChart.svelte';
 
     const runId = page.params.run_id!;
     let run = $state<RunDetail | null>(null);
@@ -131,9 +132,15 @@
             value: r.vram_used_mb != null && totalMb ? (r.vram_used_mb / totalMb) * 100 : null,
         }));
     });
+    
+    const neuralSamples = $derived.by(() => {
+        const s: ResourceSample[] = resources?.samples ?? [];
+        return s.map(r => ({ elapsed_s: r.elapsed_s, value: r.neural_pct ?? null }));
+    });
 
     const hasGpu = $derived.by(() => (resources?.samples ?? []).some((s: ResourceSample) => s.gpu_pct != null));
     const hasVram = $derived.by(() => (resources?.samples ?? []).some((s: ResourceSample) => s.vram_used_mb != null));
+    const hasNeural = $derived.by(() => (resources?.samples ?? []).some((s: ResourceSample) => s.neural_pct != null));
     const isUnified = $derived(resources?.host_info?.vram_is_unified ?? false);
     const knownStageNames = $derived([...new Set(stagesWithColor.map(s => s.name))]);
 </script>
@@ -317,26 +324,20 @@
                     noData={vramSamples.length === 0}
                 />
             {/if}
+            {#if hasNeural}
+                <ResourceChart
+                    samples={neuralSamples}
+                    stages={stagesWithColor}
+                    label="Neural Engine %"
+                    color="#8b5cf6"
+                    noData={neuralSamples.length === 0}
+                />
+            {/if}
         </div>
     {/if}
 
     {#if run.status === 'running' && Object.keys(progressMap).length > 0}
-        <div class="multi-progress">
-            {#each Object.values(progressMap).sort((a, b) => a.stage_id.localeCompare(b.stage_id)) as p}
-                <div class="progress-container">
-                    <div class="progress-info">
-                        <span class="progress-stage">
-                            <strong>{p.stage_id.replace('.', ' ')}</strong>
-                        </span>
-                        <span class="progress-detail">{p.detail}</span>
-                        <span class="progress-pct">{p.pct}%</span>
-                    </div>
-                    <div class="progress-bar-bg">
-                        <div class="progress-bar-fill" style="width: {p.pct}%; background: {stageColor(p.stage_id.split('.')[0])}"></div>
-                    </div>
-                </div>
-            {/each}
-        </div>
+        <WaterfallChart {progressMap} />
     {/if}
 
     <h2>{run.status === 'running' ? 'Live log' : 'Run log'}</h2>
