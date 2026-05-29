@@ -18,6 +18,7 @@ class TelemetryEvent:
 class PipelineTelemetry(Protocol):
     def stage_started(self, stage: str, metadata: Mapping[str, object]) -> None: ...
     def stage_finished(self, stage: str, elapsed_ms: int, metadata: Mapping[str, object]) -> None: ...
+    def progress(self, stage_id: str, pct: int, detail: str) -> None: ...
     def resource_sample(self, sample: Mapping[str, object]) -> None: ...
     def contract_violation(self, code: str, metadata: Mapping[str, object]) -> None: ...
 
@@ -25,6 +26,7 @@ class PipelineTelemetry(Protocol):
 class NoopTelemetry:
     def stage_started(self, stage: str, metadata: Mapping[str, object]) -> None: ...
     def stage_finished(self, stage: str, elapsed_ms: int, metadata: Mapping[str, object]) -> None: ...
+    def progress(self, stage_id: str, pct: int, detail: str) -> None: ...
     def resource_sample(self, sample: Mapping[str, object]) -> None: ...
     def contract_violation(self, code: str, metadata: Mapping[str, object]) -> None: ...
 
@@ -42,6 +44,9 @@ class InMemoryTelemetry:
         self.events.append(
             TelemetryEvent("stage_finished", {"stage": stage, "elapsed_ms": elapsed_ms, **metadata})
         )
+        
+    def progress(self, stage_id: str, pct: int, detail: str) -> None:
+        self.events.append(TelemetryEvent("progress", {"stage": stage_id, "pct": pct, "detail": detail}))
 
     def resource_sample(self, sample: Mapping[str, object]) -> None:
         self.events.append(TelemetryEvent("resource_sample", dict(sample)))
@@ -80,6 +85,9 @@ class OtelMetricsTelemetry:
     def stage_finished(self, stage: str, elapsed_ms: int, metadata: Mapping[str, object]):
         attrs = {"stage": stage, **{k: str(v) for k, v in metadata.items()}}
         self._stage_duration.record(elapsed_ms, attributes=attrs)
+        
+    def progress(self, stage_id: str, pct: int, detail: str) -> None:
+        pass
 
     def resource_sample(self, sample: Mapping[str, object]):
         # Record any single numeric field if present; otherwise a count of 1.
