@@ -156,6 +156,7 @@ class RunService:
                         "mem_pct": s[3],
                         "gpu_pct": s[4],
                         "vram_used_mb": s[5],
+                        "neural_pct": s[6],
                     }
                     for s in samples
                 ],
