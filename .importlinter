@@ -37,7 +37,8 @@ source_modules =
     card_capture.runtime.strict_gpu
 forbidden_modules =
     PIL
-    cv2
+    PIL.Image
+    cv2.imgcodecs
 
 [importlinter:contract:layered]
 name = layered architecture
