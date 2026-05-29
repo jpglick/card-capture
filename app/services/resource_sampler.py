@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 from typing import Optional
 from card_capture.data.connection import open_connection
+from card_capture.data.sql_queries import RESOURCE_SAMPLES_PRAGMA, resource_samples_insert
 
 
 def get_host_info() -> dict:
@@ -184,7 +185,7 @@ class ResourceSampler:
 
         try:
             with open_connection(self.db_path) as conn:
-                cols = {r[1] for r in conn.execute("PRAGMA table_info(run_resource_samples)").fetchall()}
+                cols = {r[1] for r in conn.execute(RESOURCE_SAMPLES_PRAGMA).fetchall()}
                 values = {
                     "run_id": self.run_id,
                     "elapsed_s": elapsed_s,
@@ -200,8 +201,7 @@ class ResourceSampler:
                 }
                 insert_cols = [c for c in values if c in cols]
                 conn.execute(
-                    f"INSERT INTO run_resource_samples ({', '.join(insert_cols)}) "
-                    f"VALUES ({', '.join('?' for _ in insert_cols)})",
+                    resource_samples_insert(", ".join(insert_cols), ", ".join("?" for _ in insert_cols)),
                     [values[c] for c in insert_cols],
                 )
         except Exception:

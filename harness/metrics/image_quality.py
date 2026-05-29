@@ -29,6 +29,7 @@ from typing import Optional
 
 import numpy as np
 from card_capture.data.connection import read_connection
+from card_capture.data.sql_queries import HARNESS_FUSED_PATHS
 
 from harness.match import match_detections_to_truth
 from harness.metrics.types import MetricResult
@@ -155,9 +156,7 @@ def image_quality(
 def _load_fused_paths(db_path: Path) -> dict[int, Optional[str]]:
     """Return mapping from card_instance.id → fused_image_path."""
     with read_connection(db_path) as conn:
-        rows = conn.execute(
-            "SELECT id, fused_image_path FROM card_instances"
-        ).fetchall()
+        rows = conn.execute(HARNESS_FUSED_PATHS).fetchall()
     return {int(r[0]): r[1] for r in rows}
 
 

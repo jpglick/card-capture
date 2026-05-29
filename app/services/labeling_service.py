@@ -20,6 +20,7 @@ from card_capture.data.sql_queries import (
     LABELING_PRAGMA_CARD_INSTANCES,
     LABELS_COUNT,
     TRUTH_GET,
+    labeling_cluster_update_query,
 )
 from harness.schema import TruthFile
 
@@ -158,7 +159,7 @@ class LabelingService:
         status: Optional[str] = None,
         confirmed: Optional[list[str]] = None,
     ) -> None:
-        """Update status or confirmed members of a dedup cluster."""
+        """Set cluster status and/or confirmed members."""
         # This update should also go through a repository if we had one for clusters.
         # For now, we use read_connection and the writer? 
         # Wait, I don't have a cluster repository.
@@ -180,7 +181,7 @@ class LabelingService:
         updates.append("updated_at = datetime('now')")
         params.append(cluster_id)
         
-        sql = f"UPDATE dedup_clusters SET {', '.join(updates)} WHERE cluster_id = ?"
+        sql = labeling_cluster_update_query(", ".join(updates))
         
         # We need access to the writer.
         if self._repo and self._repo._writer:

@@ -509,3 +509,125 @@ def storage_pragma_table_info(table: str) -> str:
 
 def storage_alter_table_add_column(table: str, column: str, ddl: str) -> str:
     return f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"
+
+
+# App/service leftovers
+PIPELINE_RUN_MARK_COMPLETED = "UPDATE pipeline_runs SET status='completed', cards_extracted=?, finished_at=datetime('now') WHERE run_id=?"
+PIPELINE_RUN_MARK_FAILED = "UPDATE pipeline_runs SET status='failed', finished_at=datetime('now') WHERE run_id=?"
+TRAINING_RUN_CARDS_EXTRACTED = "SELECT cards_extracted FROM pipeline_runs WHERE run_id=?"
+CARDS_CANONICAL_VIEW_WITH_FRAME = "SELECT confidence, rectified_path, frame_index FROM card_views WHERE card_instance_id = ? AND is_canonical = 1"
+REGRESSION_RUN_METRICS = "SELECT metrics_json, per_video_json FROM regression_runs WHERE run_id = ?"
+RESOURCE_SAMPLES_PRAGMA = "PRAGMA table_info(run_resource_samples)"
+PRESENCE_SAMPLE_INSERT = "INSERT INTO presence_samples (run_id, video_id, frame_index, timestamp_ms, image_path) VALUES (?, ?, ?, ?, ?)"
+PRESENCE_LABEL_COUNTS = "SELECT label, COUNT(*) FROM presence_samples WHERE label IS NOT NULL GROUP BY label"
+MINING_HARD_CASES_BASE = "SELECT case_id, video_id, run_id, stage_id, reason, thumbnail_path, source_frame_path, created_at FROM hard_cases"
+MINING_HARD_CASE_BY_ID = "SELECT thumbnail_path, source_frame_path FROM hard_cases WHERE case_id = ?"
+MINING_HARD_CASE_PROMOTED = "UPDATE hard_cases SET reason = ? WHERE case_id = ?"
+
+
+def labeling_cluster_update_query(updates_sql: str) -> str:
+    return f"UPDATE dedup_clusters SET {updates_sql} WHERE cluster_id = ?"
+
+
+def resource_samples_insert(columns_sql: str, placeholders_sql: str) -> str:
+    return f"INSERT INTO run_resource_samples ({columns_sql}) VALUES ({placeholders_sql})"
+
+# Misc app/src leftovers
+WORKER_CORE_CARD_EXPORT = "SELECT track_id, session_id, fused_image_path, angle FROM card_instances WHERE run_id=?"
+RUNPOD_HANDLER_TABLES = "SELECT name FROM sqlite_master WHERE type='table'"
+RUNPOD_HANDLER_EVENTS_BY_TYPE = (
+    "SELECT event_type, COUNT(*) as n FROM pipeline_events WHERE run_id=? GROUP BY event_type ORDER BY n DESC"
+)
+RUNPOD_HANDLER_PIPELINE_EVENTS_PRAGMA = "PRAGMA table_info(pipeline_events)"
+RUNPOD_HANDLER_STAGE_EVENTS = "SELECT event_type, data_json FROM pipeline_events WHERE run_id=? AND event_type LIKE 'stage_%'"
+RUNPOD_HANDLER_RUN_TELEMETRY = "SELECT detect_telemetry_json FROM pipeline_runs WHERE run_id=?"
+MAIN_BOOTSTRAP_VIDEO = "SELECT id FROM videos ORDER BY id LIMIT 1"
+CONFIG_PRESETS_LIST = "SELECT preset_name, description, config_json, created_at FROM config_presets ORDER BY created_at DESC"
+CONFIG_PRESET_BY_NAME = "SELECT preset_name, description, config_json, created_at FROM config_presets WHERE preset_name = ?"
+
+
+def runpod_handler_count_query(table: str, where: str = "") -> str:
+    suffix = f" WHERE {where}" if where else ""
+    return f"SELECT COUNT(*) FROM {table}{suffix}"
+
+TIMELINE_EVENTS_BY_FRAME = "SELECT * FROM pipeline_events ORDER BY frame_index"
+TIMELINE_INSTANCES_SUMMARY = """
+SELECT ci.id, ci.video_id, ci.session_id, ci.angle, ci.is_duplicate_of,
+       MIN(cv.timestamp_ms) as start_time, MAX(cv.timestamp_ms) as end_time,
+       COUNT(cv.id) as detection_count,
+       MAX(sc.final_score) as max_score
+FROM card_instances ci
+LEFT JOIN card_views cv ON cv.card_instance_id = ci.id
+LEFT JOIN saved_cards sc ON sc.detection_id = cv.id
+GROUP BY ci.id
+ORDER BY start_time
+"""
+CLI_VIDEO_IDS = "SELECT id FROM videos ORDER BY id"
+TRAINING_PRESENCE_LABELED = "SELECT id, image_path, label FROM presence_samples WHERE label IS NOT NULL"
+TRAINING_FB_LABELED_ROWS = """
+SELECT fl.label_id AS id, cv.rectified_path AS image_path, fl.side AS label
+FROM fb_labels fl
+JOIN card_instances ci ON ci.track_id = fl.instance_id
+JOIN card_views cv ON cv.card_instance_id = ci.id
+    AND cv.frame_index = fl.frame_index
+WHERE fl.side IN ('front', 'back')
+ORDER BY fl.label_id
+"""
+PRESENCE_DATASET_ROWS = """
+SELECT cv.id, cv.frame_index, cv.timestamp_ms, ef.source_frame_path,
+       cv.corners_json, cv.confidence
+FROM card_views cv
+LEFT JOIN evidence_frames ef ON ef.card_view_id = cv.id
+JOIN card_instances ci ON ci.id = cv.card_instance_id
+WHERE ci.video_id = ? AND cv.confidence >= ?
+ORDER BY cv.frame_index
+"""
+ML_TRAIN_FB_DATASET = """
+SELECT cv.image_path, fl.side
+FROM fb_labels fl
+JOIN card_views cv ON cv.card_instance_id = fl.instance_id AND cv.frame_index = fl.frame_index
+WHERE fl.side IN ('front', 'back')
+"""
+ML_REGISTER_INSERT = (
+    "INSERT INTO model_versions(model_name, training_set_hash, eval_metrics_json, checkpoint_path) "
+    "VALUES (?, ?, ?, ?)"
+)
+ML_GET_LATEST = (
+    "SELECT version_id, model_name, training_set_hash, eval_metrics_json, checkpoint_path, created_at "
+    "FROM model_versions WHERE model_name = ? ORDER BY created_at DESC LIMIT 1"
+)
+ML_LIST_MODELS = (
+    "SELECT version_id, model_name, training_set_hash, eval_metrics_json, checkpoint_path, created_at "
+    "FROM model_versions ORDER BY created_at DESC"
+)
+DEDUP_CONFIRMED_CLUSTERS = "SELECT cluster_id, confirmed_member_ids_json FROM dedup_clusters WHERE status = 'confirmed'"
+DEDUP_INSTANCE_FUSED_BY_TRACK = "SELECT fused_image_path FROM card_instances WHERE track_id = ?"
+HARNESS_PRAGMA_FK_ON = "PRAGMA foreign_keys = ON"
+HARNESS_BASELINE_INSERT = "INSERT INTO regression_baselines(name, code_sha, config_json) VALUES (?, ?, ?)"
+HARNESS_RUN_INSERT = "INSERT INTO regression_runs(baseline_id, code_sha, config_json, metrics_json, per_video_json) VALUES (?, ?, ?, ?, ?)"
+HARNESS_BASELINE_ID_BY_NAME = "SELECT baseline_id FROM regression_baselines WHERE name = ?"
+HARNESS_BASELINE_GET = """
+SELECT rb.name, rb.code_sha, rb.config_json, rr.metrics_json, rr.per_video_json
+FROM regression_baselines rb
+JOIN regression_runs rr ON rr.baseline_id = rb.baseline_id
+WHERE rb.name = ?
+ORDER BY rr.created_at ASC
+LIMIT 1
+"""
+HARNESS_BASELINES_LIST = "SELECT baseline_id, name, code_sha, created_at FROM regression_baselines ORDER BY created_at DESC"
+HARNESS_TRUTH_FILES_BASE = "SELECT video_id, payload_json FROM truth_files"
+HARD_CASE_INSERT = "INSERT INTO hard_cases(run_id, frame_index, stage_id, reason, thumbnail_path, source_frame_path) VALUES (?, ?, ?, ?, ?, ?)"
+HARNESS_MATCH_DETECTIONS = """
+SELECT ci.id AS instance_id, ci.angle AS angle, MIN(cv.timestamp_ms) AS start_ms, MAX(cv.timestamp_ms) AS end_ms
+FROM card_instances ci
+JOIN card_views cv ON cv.card_instance_id = ci.id
+JOIN videos v ON v.id = ci.video_id
+WHERE v.source_path LIKE ?
+GROUP BY ci.id
+ORDER BY start_ms
+"""
+HARNESS_FUSED_PATHS = "SELECT id, fused_image_path FROM card_instances"
+HARNESS_DEDUP_CLUSTERS = "SELECT id, is_duplicate_of FROM card_instances"
+
+def harness_truth_files_with_video_filter(ph: str) -> str:
+    return f"{HARNESS_TRUTH_FILES_BASE} WHERE video_id IN ({ph})"

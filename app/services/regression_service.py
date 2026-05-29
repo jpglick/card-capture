@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from harness.baseline import get_baseline, list_baselines
+from card_capture.data.sql_queries import REGRESSION_RUN_METRICS
 
 
 class RegressionService:
@@ -23,8 +24,8 @@ class RegressionService:
         """Compare two regression runs and return deltas."""
         from card_capture.data.connection import read_connection
         with read_connection(str(self.db_path)) as conn:
-            a_row = conn.execute("SELECT metrics_json, per_video_json FROM regression_runs WHERE run_id = ?", (run_a,)).fetchone()
-            b_row = conn.execute("SELECT metrics_json, per_video_json FROM regression_runs WHERE run_id = ?", (run_b,)).fetchone()
+            a_row = conn.execute(REGRESSION_RUN_METRICS, (run_a,)).fetchone()
+            b_row = conn.execute(REGRESSION_RUN_METRICS, (run_b,)).fetchone()
             
             if not a_row or not b_row:
                 raise ValueError("One or both runs not found")

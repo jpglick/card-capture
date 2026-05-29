@@ -24,6 +24,7 @@ from card_capture.data.sql_queries import (
     TRAINING_PENDING_PRESENCE,
     TRAINING_RECENT_RUNS,
     TRAINING_VIDEOS_ALL,
+    TRAINING_RUN_CARDS_EXTRACTED,
 )
 
 logger = logging.getLogger(__name__)
@@ -306,7 +307,7 @@ class TrainingService:
         
         with read_connection(self.db_path) as conn:
             row = conn.execute(
-                "SELECT cards_extracted FROM pipeline_runs WHERE run_id=?", (run_id,)
+                TRAINING_RUN_CARDS_EXTRACTED, (run_id,)
             ).fetchone()
         return row[0] if row else 0
 

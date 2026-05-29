@@ -11,6 +11,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from card_capture.data.connection import read_connection
+from card_capture.data.sql_queries import (
+    MINING_HARD_CASES_BASE,
+    MINING_HARD_CASE_BY_ID,
+    MINING_HARD_CASE_PROMOTED,
+)
 
 
 class MiningService:
@@ -21,7 +26,7 @@ class MiningService:
 
     def list_hard_cases(self, stage_id: Optional[str] = None) -> List[dict[str, Any]]:
         """Return all captured hard cases from the database."""
-        query = "SELECT case_id, video_id, run_id, stage_id, reason, thumbnail_path, source_frame_path, created_at FROM hard_cases"
+        query = MINING_HARD_CASES_BASE
         params = []
         if stage_id:
             query += " WHERE stage_id = ?"
@@ -38,7 +43,7 @@ class MiningService:
         """Move a hard case image to the permanent training directory."""
         with read_connection(self.db_path) as conn:
             row = conn.execute(
-                "SELECT thumbnail_path, source_frame_path FROM hard_cases WHERE case_id = ?",
+                MINING_HARD_CASE_BY_ID,
                 (case_id,)
             ).fetchone()
             if not row:
@@ -60,7 +65,7 @@ class MiningService:
             if self._repo and self._repo._writer:
                 from card_capture.data.writer import Write
                 self._repo._writer.submit(Write(
-                    "UPDATE hard_cases SET reason = ? WHERE case_id = ?",
+                    MINING_HARD_CASE_PROMOTED,
                     (f"promoted:{model_name}:{label}", case_id)
                 ))
             else:
@@ -68,7 +73,7 @@ class MiningService:
                 conn_w = open_connection(self.db_path)
                 try:
                     conn_w.execute(
-                        "UPDATE hard_cases SET reason = ? WHERE case_id = ?",
+                        MINING_HARD_CASE_PROMOTED,
                         (f"promoted:{model_name}:{label}", case_id)
                     )
                     conn_w.commit()

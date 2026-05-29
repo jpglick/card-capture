@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 from torchvision.models import mobilenet_v3_small
 from card_capture.data.connection import read_connection
+from card_capture.data.sql_queries import TRAINING_PRESENCE_LABELED
 
 _LABEL_MAP = {"present": 1, "absent": 0}
 
@@ -125,9 +126,7 @@ def train_presence(
 
 def _load_labeled_rows(db_path: Path) -> list[dict]:
     with read_connection(db_path) as conn:
-        rows = conn.execute(
-            "SELECT id, image_path, label FROM presence_samples WHERE label IS NOT NULL"
-        ).fetchall()
+        rows = conn.execute(TRAINING_PRESENCE_LABELED).fetchall()
     return [dict(r) for r in rows]
 
 

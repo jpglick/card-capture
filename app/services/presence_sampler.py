@@ -3,6 +3,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 from card_capture.data.connection import open_connection, read_connection
+from card_capture.data.sql_queries import PRESENCE_LABEL_COUNTS, PRESENCE_SAMPLE_INSERT
 
 SAMPLES_PER_RUN = 20
 _SCAN_FPS = 15.0
@@ -68,9 +69,7 @@ def sample_presence_frames(
             fpath = out_dir / fname
             cv2.imwrite(str(fpath), small)
             conn.execute(
-                """INSERT INTO presence_samples
-                   (run_id, video_id, frame_index, timestamp_ms, image_path)
-                   VALUES (?, ?, ?, ?, ?)""",
+                PRESENCE_SAMPLE_INSERT,
                 (run_id, video_id, fi, ts_ms, str(fpath)),
             )
             inserted += 1
@@ -82,8 +81,7 @@ def _balance_targets(db_path: Path) -> tuple[int, int]:
     try:
         with read_connection(db_path) as conn:
             rows = conn.execute(
-                "SELECT label, COUNT(*) FROM presence_samples "
-                "WHERE label IS NOT NULL GROUP BY label"
+                PRESENCE_LABEL_COUNTS
             ).fetchall()
     except Exception:
         return half, half

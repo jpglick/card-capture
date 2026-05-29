@@ -27,7 +27,7 @@ from app.services.mining_service import MiningService
 
 
 def create_app(db_path: Optional[Path] = None) -> FastAPI:
-    """Create and configure the FastAPI application.
+    """Build and configure the FastAPI application.
     """
     if db_path is None:
         db_path = Path(os.environ.get("CC_DB", "card_capture_output/cards.sqlite"))

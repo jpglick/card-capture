@@ -12,6 +12,7 @@ import numpy as np
 from PIL import Image
 
 from card_capture.data.connection import read_connection
+from card_capture.data.sql_queries import DEDUP_CONFIRMED_CLUSTERS, DEDUP_INSTANCE_FUSED_BY_TRACK
 from ..inference.dino_dedup import DinoDeduplicator
 
 
@@ -19,9 +20,7 @@ def calibrate(*, db_path: Path, variant: str = "vits14") -> dict:
     """Find the threshold that maximizes ARI on confirmed clusters."""
     # 1. Load confirmed clusters from DB
     with read_connection(db_path) as conn:
-        rows = conn.execute(
-            "SELECT cluster_id, confirmed_member_ids_json FROM dedup_clusters WHERE status = 'confirmed'"
-        ).fetchall()
+        rows = conn.execute(DEDUP_CONFIRMED_CLUSTERS).fetchall()
 
     if not rows:
         return {"error": "No confirmed clusters found for calibration."}
@@ -37,9 +36,7 @@ def calibrate(*, db_path: Path, variant: str = "vits14") -> dict:
             for mid in members:
                 gt_map[mid] = cid
                 # Find image path for this instance
-                card_row = conn.execute(
-                    "SELECT fused_image_path FROM card_instances WHERE track_id = ?", (mid,)
-                ).fetchone()
+                card_row = conn.execute(DEDUP_INSTANCE_FUSED_BY_TRACK, (mid,)).fetchone()
                 if card_row and Path(card_row["fused_image_path"]).exists():
                     instance_to_path[mid] = Path(card_row["fused_image_path"])
 

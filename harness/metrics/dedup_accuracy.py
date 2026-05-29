@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 from card_capture.data.connection import read_connection
+from card_capture.data.sql_queries import HARNESS_DEDUP_CLUSTERS
 
 from harness.match import match_detections_to_truth
 from harness.metrics.types import MetricResult
@@ -89,9 +90,7 @@ def _build_predicted_clusters(db_path: Path) -> dict[int, int]:
     ``is_duplicate_of IS NULL``.
     """
     with read_connection(db_path) as conn:
-        rows = conn.execute(
-            "SELECT id, is_duplicate_of FROM card_instances"
-        ).fetchall()
+        rows = conn.execute(HARNESS_DEDUP_CLUSTERS).fetchall()
 
     # Build parent map
     parent: dict[int, Optional[int]] = {

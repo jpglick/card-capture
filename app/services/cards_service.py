@@ -8,6 +8,7 @@ from card_capture.data.connection import read_connection
 from card_capture.data.sql_queries import (
     CARD_GET_ONE,
     CARD_SOURCE_FRAMES,
+    CARDS_CANONICAL_VIEW_WITH_FRAME,
     CARDS_CANONICAL_VIEW,
     CARDS_COUNT_BASE,
     CARDS_LIST_BASE,
@@ -126,7 +127,7 @@ class CardService:
             c_id, track_id, vid, r_id, angle, fused, created = row
             
             view = conn.execute(
-                "SELECT confidence, rectified_path, frame_index FROM card_views WHERE card_instance_id = ? AND is_canonical = 1",
+                CARDS_CANONICAL_VIEW_WITH_FRAME,
                 (c_id,)
             ).fetchone()
 

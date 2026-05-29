@@ -10,6 +10,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 from card_capture.data.connection import open_connection, read_connection
+from card_capture.data.sql_queries import (
+    HARNESS_BASELINE_GET,
+    HARNESS_BASELINE_ID_BY_NAME,
+    HARNESS_BASELINE_INSERT,
+    HARNESS_BASELINES_LIST,
+    HARNESS_PRAGMA_FK_ON,
+    HARNESS_RUN_INSERT,
+)
 
 
 @dataclass(frozen=True)
@@ -54,19 +62,15 @@ def freeze_baseline(
     int: The new baseline_id.
     """
     with open_connection(db_path) as conn:
-        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute(HARNESS_PRAGMA_FK_ON)
         cur = conn.execute(
-            "INSERT INTO regression_baselines(name, code_sha, config_json) VALUES (?, ?, ?)",
+            HARNESS_BASELINE_INSERT,
             (name, code_sha, json.dumps(config)),
         )
         baseline_id = cur.lastrowid
 
         conn.execute(
-            """
-            INSERT INTO regression_runs(
-                baseline_id, code_sha, config_json, metrics_json, per_video_json
-            ) VALUES (?, ?, ?, ?, ?)
-            """,
+            HARNESS_RUN_INSERT,
             (
                 baseline_id,
                 code_sha,
@@ -109,9 +113,9 @@ def persist_run(
     int: The new run_id.
     """
     with open_connection(db_path) as conn:
-        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute(HARNESS_PRAGMA_FK_ON)
         row = conn.execute(
-            "SELECT baseline_id FROM regression_baselines WHERE name = ?",
+            HARNESS_BASELINE_ID_BY_NAME,
             (baseline_name,),
         ).fetchone()
         if not row:
@@ -119,11 +123,7 @@ def persist_run(
         baseline_id = row[0]
 
         cur = conn.execute(
-            """
-            INSERT INTO regression_runs(
-                baseline_id, code_sha, config_json, metrics_json, per_video_json
-            ) VALUES (?, ?, ?, ?, ?)
-            """,
+            HARNESS_RUN_INSERT,
             (
                 baseline_id,
                 code_sha,
@@ -139,22 +139,7 @@ def get_baseline(*, db_path: Path, name: str) -> Baseline:
     """Retrieve a baseline by name."""
     with read_connection(db_path) as conn:
         conn.row_factory = sqlite3.Row
-        row = conn.execute(
-            """
-            SELECT
-                rb.name,
-                rb.code_sha,
-                rb.config_json,
-                rr.metrics_json,
-                rr.per_video_json
-            FROM regression_baselines rb
-            JOIN regression_runs rr ON rr.baseline_id = rb.baseline_id
-            WHERE rb.name = ?
-            ORDER BY rr.created_at ASC
-            LIMIT 1
-            """,
-            (name,),
-        ).fetchone()
+        row = conn.execute(HARNESS_BASELINE_GET, (name,)).fetchone()
 
         if not row:
             raise ValueError(f"Baseline '{name}' not found.")
@@ -171,8 +156,6 @@ def get_baseline(*, db_path: Path, name: str) -> Baseline:
 def list_baselines(*, db_path: Path) -> list[dict[str, Any]]:
     """Return a list of all baselines with metadata."""
     with read_connection(db_path) as conn:
-        rows = conn.execute(
-            "SELECT baseline_id, name, code_sha, created_at FROM regression_baselines ORDER BY created_at DESC"
-        ).fetchall()
+        rows = conn.execute(HARNESS_BASELINES_LIST).fetchall()
         keys = ("baseline_id", "name", "code_sha", "created_at")
         return [dict(zip(keys, r)) for r in rows]

@@ -18,6 +18,14 @@ import runpod
 from botocore.config import Config as BotocoreConfig
 
 from app.worker_core import apply_cuda_config, restore_config, run_pipeline, package_results
+from card_capture.data.sql_queries import (
+    RUNPOD_HANDLER_EVENTS_BY_TYPE,
+    RUNPOD_HANDLER_PIPELINE_EVENTS_PRAGMA,
+    RUNPOD_HANDLER_RUN_TELEMETRY,
+    RUNPOD_HANDLER_STAGE_EVENTS,
+    RUNPOD_HANDLER_TABLES,
+    runpod_handler_count_query,
+)
 
 _NVDEC_PROBE_VIDEO = Path("/tmp/cc_nvdec_preflight.mp4")
 _NVDEC_PROBE_MIN_BYTES = 4096
@@ -253,15 +261,12 @@ def _collect_db_diagnostics(run_id: str, db_path: Path, output_dir: Path) -> dic
         return result
     try:
         with read_connection(db_path) as conn:
-            tables = {r[0] for r in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+            tables = {r[0] for r in conn.execute(RUNPOD_HANDLER_TABLES).fetchall()}
 
             def count(table: str, where: str = "") -> int:
                 if table not in tables:
                     return -1
-                q = f"SELECT COUNT(*) FROM {table}"
-                if where:
-                    q += f" WHERE {where}"
+                q = runpod_handler_count_query(table, where)
                 return conn.execute(q).fetchone()[0]
 
             result["card_instances_total"] = count("card_instances")
@@ -270,22 +275,14 @@ def _collect_db_diagnostics(run_id: str, db_path: Path, output_dir: Path) -> dic
             result["pipeline_events_total"] = count("pipeline_events")
 
             if "pipeline_events" in tables:
-                rows = conn.execute(
-                    "SELECT event_type, COUNT(*) as n FROM pipeline_events "
-                    "WHERE run_id=? GROUP BY event_type ORDER BY n DESC",
-                    (run_id,),
-                ).fetchall()
+                rows = conn.execute(RUNPOD_HANDLER_EVENTS_BY_TYPE, (run_id,)).fetchall()
                 result["events"] = {et: n for et, n in rows}
 
                 # Surface stage timings + any payload fields (event_data is JSON
                 # blob per stage with frame counts, device, durations, etc.)
-                cols = [c[1] for c in conn.execute("PRAGMA table_info(pipeline_events)").fetchall()]
+                cols = [c[1] for c in conn.execute(RUNPOD_HANDLER_PIPELINE_EVENTS_PRAGMA).fetchall()]
                 if "data_json" in cols:
-                    stage_rows = conn.execute(
-                        "SELECT event_type, data_json FROM pipeline_events "
-                        "WHERE run_id=? AND event_type LIKE 'stage_%'",
-                        (run_id,),
-                    ).fetchall()
+                    stage_rows = conn.execute(RUNPOD_HANDLER_STAGE_EVENTS, (run_id,)).fetchall()
                     import json as _json
                     stage_payloads = {}
                     for et, blob in stage_rows:
@@ -300,10 +297,7 @@ def _collect_db_diagnostics(run_id: str, db_path: Path, output_dir: Path) -> dic
             # detect_telemetry_json answers: was YOLO on cuda? how many batches?
             # how many frames hit YOLO? triage pass rate? — all the slow-step questions.
             if "pipeline_runs" in tables:
-                row = conn.execute(
-                    "SELECT detect_telemetry_json FROM pipeline_runs WHERE run_id=?",
-                    (run_id,),
-                ).fetchone()
+                row = conn.execute(RUNPOD_HANDLER_RUN_TELEMETRY, (run_id,)).fetchone()
                 if row and row[0]:
                     import json as _json
                     try:

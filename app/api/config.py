@@ -117,7 +117,7 @@ def list_presets(request: Request):
 
 @router.post("/presets", response_model=ConfigPreset, status_code=201)
 def create_preset(payload: ConfigPreset, request: Request):
-    """Create a new user-defined config preset."""
+    """Add a new user-defined config preset."""
     if payload.preset_name in _BUILTIN_NAMES:
         raise HTTPException(
             status_code=409,
@@ -153,7 +153,7 @@ def get_pipeline_config(_request: Request):
 
 @router.patch("/pipeline")
 def patch_pipeline_config(body: dict, _request: Request):
-    """Update one or more pipeline performance fields in card_capture_config.json."""
+    """Modify one or more pipeline performance fields in card_capture_config.json."""
     unknown = set(body) - set(_PIPELINE_FIELDS)
     if unknown:
         raise HTTPException(status_code=422, detail=f"Unknown fields: {sorted(unknown)}")
@@ -205,7 +205,7 @@ def get_compute_config(_request: Request):
 
 @router.patch("/compute")
 def patch_compute_config(body: dict, _request: Request):
-    """Update compute backend fields in card_capture_config.json."""
+    """Modify compute backend fields in card_capture_config.json."""
     unknown = set(body) - set(_COMPUTE_FIELDS)
     if unknown:
         raise HTTPException(status_code=422, detail=f"Unknown fields: {sorted(unknown)}")

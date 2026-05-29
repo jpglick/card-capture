@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Optional
 
 from card_capture.data.connection import read_connection
+from card_capture.data.sql_queries import HARNESS_MATCH_DETECTIONS
 from harness.schema import ExpectedCard, TruthFile
 
 
@@ -104,22 +105,7 @@ def match_detections_to_truth(
 def _load_detections(db_path: Path, video_id: str) -> list[_Detection]:
     """Query card_instances + card_views for the given video."""
     with read_connection(db_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT
-                ci.id            AS instance_id,
-                ci.angle         AS angle,
-                MIN(cv.timestamp_ms) AS start_ms,
-                MAX(cv.timestamp_ms) AS end_ms
-            FROM card_instances ci
-            JOIN card_views cv ON cv.card_instance_id = ci.id
-            JOIN videos v ON v.id = ci.video_id
-            WHERE v.source_path LIKE ?
-            GROUP BY ci.id
-            ORDER BY start_ms
-            """,
-            (f"%{video_id}%",),
-        ).fetchall()
+        rows = conn.execute(HARNESS_MATCH_DETECTIONS, (f"%{video_id}%",)).fetchall()
     return [
         _Detection(
             instance_id=int(row[0]),

@@ -62,7 +62,7 @@ class CandidateSelector:
 
     def select(self, candidates: Iterable[ScoredCandidate]) -> List[ScoredCandidate]:
         """
-        Select best candidates using spatial clustering to separate card instances.
+        Pick best candidates using spatial clustering to separate card instances.
         
         Algorithm:
         1. Sort detections chronologically

@@ -96,7 +96,7 @@ class BackgroundModel:
         return self.bgr
 
     def refresh_from_frame(self, frame_bgr: np.ndarray) -> None:
-        """Update background model using EWMA with alpha=0.1.
+        """Refresh background model using EWMA with alpha=0.1.
 
         Called periodically during inter-window gaps (quiescent periods when
         the workspace is empty) to track slow lighting drift over long captures.

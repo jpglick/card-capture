@@ -10,6 +10,7 @@ import sys
 import tarfile
 import typing
 from pathlib import Path
+from card_capture.data.sql_queries import WORKER_CORE_CARD_EXPORT
 
 CUDA_CONFIG_OVERRIDES: dict = {
     "detector": "cuda",
@@ -166,8 +167,7 @@ def package_results(job_id: str, output_dir: Path, db_path: Path) -> bytes:
         try:
             with read_connection(db_path) as conn:
                 rows = conn.execute(
-                    "SELECT track_id, session_id, fused_image_path, angle"
-                    " FROM card_instances WHERE run_id=?",
+                    WORKER_CORE_CARD_EXPORT,
                     (job_id,),
                 ).fetchall()
                 cards = [{"track_id": r[0], "session_id": r[1],

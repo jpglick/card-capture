@@ -109,7 +109,7 @@ class VideoService:
             conn.close()
 
     def update_status(self, video_id: int, status: str) -> None:
-        """Update the processing status of a video."""
+        """Set the processing status for a video."""
         if self._repo:
             self._repo.update_status(video_id, status)
             return

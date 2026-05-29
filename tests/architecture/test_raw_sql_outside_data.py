@@ -1,16 +1,13 @@
 """Static AST scan: raw SQL string literals outside card_capture.data and migrations.
 
-Phase 1: advisory.
-Phase 4: blocking (after data layer migration).
+Blocking by default at Phase E. Allowed roots are listed below; adding a new
+root requires a paired plan amendment.
 """
 from __future__ import annotations
 
 import ast
-import os
 import re
 from pathlib import Path
-
-import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -21,9 +18,9 @@ ALLOWED_ROOTS = (
     "harness/schema.py",
 )
 
-# Heuristic: a string literal that begins with SELECT/INSERT/UPDATE/DELETE/CREATE/PRAGMA/ALTER/DROP
 SQL_RE = re.compile(
-    r"^\s*(SELECT|INSERT|UPDATE|DELETE|CREATE|PRAGMA|ALTER|DROP|WITH)\b", re.IGNORECASE
+    r"^\s*(SELECT|INSERT|UPDATE|DELETE|CREATE|PRAGMA|ALTER|DROP|WITH)\b",
+    re.IGNORECASE,
 )
 
 
@@ -46,19 +43,8 @@ def _scan(path: Path) -> list[str]:
     return out
 
 
-@pytest.mark.skipif(
-    os.environ.get("V55_RAW_SQL_BLOCKING") != "1",
-    reason="Phase 1 advisory: set V55_RAW_SQL_BLOCKING=1 to fail on violations",
-)
-def test_no_raw_sql_outside_data_blocking():
+def test_no_raw_sql_outside_data() -> None:
     violations: list[str] = []
     for p in _iter_python_files():
         violations.extend(_scan(p))
     assert not violations, "\n".join(violations)
-
-
-def test_raw_sql_advisory():
-    print("=== Raw-SQL scan (advisory) ===")
-    for p in _iter_python_files():
-        for v in _scan(p):
-            print(v)

@@ -288,6 +288,7 @@ def _run_harness(args: argparse.Namespace) -> int:
 
 def _run_dataset(args: argparse.Namespace) -> int:
     from card_capture.data.connection import read_connection
+    from card_capture.data.sql_queries import CLI_VIDEO_IDS
     from .presence.training_data import export_dataset
 
     db_path: Path = args.db
@@ -299,7 +300,7 @@ def _run_dataset(args: argparse.Namespace) -> int:
         video_ids = [args.video_id]
     else:
         with read_connection(db_path) as conn:
-            rows = conn.execute("SELECT id FROM videos ORDER BY id").fetchall()
+            rows = conn.execute(CLI_VIDEO_IDS).fetchall()
         video_ids = [r[0] for r in rows]
 
     if not video_ids:

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import click
+from card_capture.data.sql_queries import HARNESS_TRUTH_FILES_BASE, harness_truth_files_with_video_filter
 
 from harness.baseline import freeze_baseline, get_baseline, persist_run
 from harness.config import load_pipeline_config
@@ -193,10 +194,10 @@ def export(db: Path, out_dir: Path, videos: Optional[str]):
     video_ids = [v.strip() for v in videos.split(",")] if videos else []
     
     with read_connection(db) as conn:
-        query = "SELECT video_id, payload_json FROM truth_files"
+        query = HARNESS_TRUTH_FILES_BASE
         params = []
         if video_ids:
-            query += " WHERE video_id IN (" + ",".join(["?"] * len(video_ids)) + ")"
+            query = harness_truth_files_with_video_filter(",".join(["?"] * len(video_ids)))
             params = video_ids
             
         rows = conn.execute(query, params).fetchall()
