@@ -5,9 +5,10 @@ They are stored in the ``hard_cases`` table.
 """
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
 from typing import Optional
+from card_capture.data.connection import open_connection
+from card_capture.data.sql_queries import HARD_CASE_INSERT
 
 
 def record_hard_case(
@@ -43,21 +44,6 @@ def record_hard_case(
     -------
     int: The new case_id.
     """
-    with sqlite3.connect(str(db_path)) as conn:
-        cur = conn.execute(
-            """
-            INSERT INTO hard_cases(
-                run_id, frame_index, stage_id, reason, thumbnail_path, source_frame_path
-            ) VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                run_id,
-                frame_index,
-                stage_id,
-                reason,
-                thumbnail_path,
-                source_frame_path,
-            ),
-        )
-        conn.commit()
+    with open_connection(db_path) as conn:
+        cur = conn.execute(HARD_CASE_INSERT, (run_id, frame_index, stage_id, reason, thumbnail_path, source_frame_path))
         return cur.lastrowid

@@ -12,10 +12,12 @@ dependencies = [
   "opencv-python",
   "Pillow>=10.4.0",
   "supervision>=0.21,<0.28",
-  "vastai>=0.5.0",
   "httpx>=0.27.0",
   "python-dotenv>=1.0.0",
   "boto3>=1.34.0",
+  "opentelemetry-api>=1.25.0",
+  "opentelemetry-sdk>=1.25.0",
+  "imagehash>=4.3",
 ]
 
 [project.optional-dependencies]
@@ -59,12 +61,48 @@ harness = [
   "scikit-image>=0.21",
   "scikit-learn>=1.3",
 ]
+dev = [
+  "import-linter>=2.0",
+  "pytest>=7.0",
+]
 
 [project.scripts]
 card-capture = "card_capture.cli:main"
 
 [tool.pytest.ini_options]
 pythonpath = ["src", "."]
+markers = [
+  "quarantine: known-broken test, must reference an issue and disposition; excluded from default CI lane",
+  "cuda: requires NVIDIA CUDA hardware",
+  "mps: requires Apple Silicon MPS",
+  "provider: requires external provider credentials",
+  "benchmark: real-video performance benchmark",
+  "slow: takes >5s; excluded from fast PR lane",
+]
+addopts = "-m 'not quarantine and not benchmark'"
+
+[tool.gpu_strict_lint]
+files = [
+  "src/card_capture/runtime/strict_gpu.py",
+  "src/card_capture/runtime/gpu_session.py",
+  "src/card_capture/runtime/guards.py",
+  # batches.py is the EXPORT BOUNDARY itself; intentionally NOT in scope.
+]
+forbidden_calls = [
+  "cv2.VideoCapture",
+  "cv2.imread",
+  "cv2.imwrite",            # exception: card_capture.runtime.batches.to_cpu_for_export
+  "PIL.Image.open",
+  "torch.Tensor.cpu",
+  "torch.Tensor.numpy",
+]
+allowed_export_helpers = [
+  "card_capture.runtime.batches.to_cpu_for_score",
+  "card_capture.runtime.batches.to_cpu_for_phash",
+  "card_capture.runtime.batches.to_cpu_for_export",
+  "card_capture.runtime.batches.to_cpu_for_fuse",
+  "card_capture.runtime.batches.to_cpu_for_dedup",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

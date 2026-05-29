@@ -1,7 +1,6 @@
 """Train the presence classifier (MobileNetV3-Small) from presence_samples."""
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
 from typing import Optional
 
@@ -12,6 +11,8 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 from torchvision.models import mobilenet_v3_small
+from card_capture.data.connection import read_connection
+from card_capture.data.sql_queries import TRAINING_PRESENCE_LABELED
 
 _LABEL_MAP = {"present": 1, "absent": 0}
 
@@ -124,11 +125,8 @@ def train_presence(
 
 
 def _load_labeled_rows(db_path: Path) -> list[dict]:
-    with sqlite3.connect(str(db_path)) as conn:
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            "SELECT id, image_path, label FROM presence_samples WHERE label IS NOT NULL"
-        ).fetchall()
+    with read_connection(db_path) as conn:
+        rows = conn.execute(TRAINING_PRESENCE_LABELED).fetchall()
     return [dict(r) for r in rows]
 
 

@@ -23,12 +23,13 @@ fused image before SSIM computation (a warning is logged).
 from __future__ import annotations
 
 import logging
-import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
+from card_capture.data.connection import read_connection
+from card_capture.data.sql_queries import HARNESS_FUSED_PATHS
 
 from harness.match import match_detections_to_truth
 from harness.metrics.types import MetricResult
@@ -154,12 +155,9 @@ def image_quality(
 
 def _load_fused_paths(db_path: Path) -> dict[int, Optional[str]]:
     """Return mapping from card_instance.id → fused_image_path."""
-    with sqlite3.connect(str(db_path)) as conn:
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            "SELECT id, fused_image_path FROM card_instances"
-        ).fetchall()
-    return {int(r["id"]): r["fused_image_path"] for r in rows}
+    with read_connection(db_path) as conn:
+        rows = conn.execute(HARNESS_FUSED_PATHS).fetchall()
+    return {int(r[0]): r[1] for r in rows}
 
 
 def _load_grey(path: Path) -> np.ndarray:

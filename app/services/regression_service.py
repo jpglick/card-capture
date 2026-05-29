@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from harness.baseline import get_baseline, list_baselines
+from card_capture.data.sql_queries import REGRESSION_RUN_METRICS
 
 
 class RegressionService:
@@ -21,17 +22,16 @@ class RegressionService:
 
     def compare(self, run_a: int, run_b: int) -> dict[str, Any]:
         """Compare two regression runs and return deltas."""
-        import sqlite3
-        with sqlite3.connect(str(self.db_path)) as conn:
-            conn.row_factory = sqlite3.Row
-            a = conn.execute("SELECT * FROM regression_runs WHERE run_id = ?", (run_a,)).fetchone()
-            b = conn.execute("SELECT * FROM regression_runs WHERE run_id = ?", (run_b,)).fetchone()
+        from card_capture.data.connection import read_connection
+        with read_connection(str(self.db_path)) as conn:
+            a_row = conn.execute(REGRESSION_RUN_METRICS, (run_a,)).fetchone()
+            b_row = conn.execute(REGRESSION_RUN_METRICS, (run_b,)).fetchone()
             
-            if not a or not b:
+            if not a_row or not b_row:
                 raise ValueError("One or both runs not found")
                 
-            metrics_a = json.loads(a["metrics_json"])
-            metrics_b = json.loads(b["metrics_json"])
+            metrics_a = json.loads(a_row[0])
+            metrics_b = json.loads(b_row[0])
             
             deltas = self._compute_deltas(metrics_a, metrics_b)
             
@@ -42,8 +42,8 @@ class RegressionService:
                     regressions.append(f"{k} dropped by {abs(v):.2%}")
             
             # Per-video deltas
-            pv_a = {v["video_id"]: v for v in json.loads(a["per_video_json"])}
-            pv_b = {v["video_id"]: v for v in json.loads(b["per_video_json"])}
+            pv_a = {v["video_id"]: v for v in json.loads(a_row[1])}
+            pv_b = {v["video_id"]: v for v in json.loads(b_row[1])}
             
             per_video_deltas = []
             for vid in set(pv_a.keys()) | set(pv_b.keys()):

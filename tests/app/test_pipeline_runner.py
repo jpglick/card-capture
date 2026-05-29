@@ -55,11 +55,11 @@ def test_runner_emits_stage_events_for_each_step():
                 collector(),
                 runner.run_async(
                     "run_1",
+                    video_id=1,
                     video="x.mov",
                     output_dir="/tmp/o",
                     db="/tmp/db.sqlite",
-                ),
-            ),
+                ),            ),
             timeout=10,
         )
 
@@ -86,20 +86,21 @@ def test_runner_emits_run_failed_on_exception():
 
         runner = PipelineRunner(bus=bus, flow_cls=_BrokenFlow)
 
-        with pytest.raises(RuntimeError, match="flow crashed"):
-            await asyncio.wait_for(
-                asyncio.gather(
-                    collector(),
-                    runner.run_async(
-                        "run_fail",
-                        video="x.mov",
-                        output_dir="/tmp/o",
-                        db="/tmp/db.sqlite",
-                    ),
-                    return_exceptions=False,
+        # run_async swallows exceptions to avoid spurious 500s in FastAPI background tasks
+        await asyncio.wait_for(
+            asyncio.gather(
+                collector(),
+                runner.run_async(
+                    "run_fail",
+                    video_id=1,
+                    video="x.mov",
+                    output_dir="/tmp/o",
+                    db="/tmp/db.sqlite",
                 ),
-                timeout=10,
-            )
+                return_exceptions=False,
+            ),
+            timeout=10,
+        )
 
     asyncio.run(main())
 

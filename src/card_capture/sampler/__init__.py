@@ -118,15 +118,21 @@ class VideoSampler:
 
     def _sample_with_cv2(self, video_path: Path, sample_fps: float, pixel_format: str = "bgr24") -> Iterator[FrameSample]:
         import platform
+        used_avfoundation = False
         if platform.system() == "Darwin":
             capture = cv2.VideoCapture(str(video_path), cv2.CAP_AVFOUNDATION)
+            used_avfoundation = True
+            if not capture.isOpened():
+                capture.release()
+                capture = _open_capture(video_path)
+                used_avfoundation = False
         else:
             capture = _open_capture(video_path)
             
         if not capture.isOpened():
             raise ValueError(f"Could not decode video: {video_path}")
         
-        print(f"[sampler] opencv decoder active (macOS AVFoundation: {platform.system() == 'Darwin'})", flush=True)
+        print(f"[sampler] opencv decoder active (macOS AVFoundation: {used_avfoundation})", flush=True)
 
         source_fps = capture.get(cv2.CAP_PROP_FPS) or sample_fps
         frame_step = max(1, int(round(source_fps / sample_fps))) if sample_fps > 0 else 1
@@ -319,7 +325,7 @@ class StabilityBasedSampler:
             capture.release()
         return windows
 
-    def sample(self, video_path: Path, sample_fps: float) -> Iterator[FrameSample]:
+    def sample(self, video_path: Path = None, sample_fps: float = 0.0) -> Iterator[FrameSample]:
         video_path = Path(video_path)
         windows = self._find_stable_windows(video_path)
         if not windows: return
@@ -341,12 +347,23 @@ class StabilityBasedSampler:
             capture.release()
 
 class SyntheticSampler:
-    def sample(self, video_path: Path, sample_fps: float) -> Iterator[FrameSample]:
+    def __init__(self):
+        self.last_selected_frame_count = 0
+        self.last_source_fps = 30.0
+        self.last_scan_frame_count = 0
+        self.last_inter_window_gaps_frames = []
+        self.last_valley_splits = []
+        self.background_proxies = []
+
+    def sample(self, video_path: Path = None, sample_fps: float = 0.0) -> Iterator[FrameSample]:
         # Yield 10 identical frames so the tracker can form a stable track
+        count = 0
         for i in range(10):
             image = np.zeros((120, 90, 3), dtype=np.uint8)
             image[15:105, 10:80] = 180
             yield FrameSample(frame_index=i, timestamp_ms=i * 100, image=image, width=90, height=120)
+            count += 1
+        self.last_selected_frame_count = count
 
 class ContrastBasedSampler:
     def __init__(self, video_path: str, scan_fps: float = 5.0, scan_width: int = 160, contrast_threshold: float = 600.0, min_presence_frames: int = 3, candidates_per_window: int = 3, device: str = "auto", window_merge_gap: int = 5, motion_threshold: float = 8.0, histogram_sigma: float = 1.5, edge_density_threshold: float = 0.15, sobel_magnitude_threshold: float = 50.0, detection_metrics: list[str] = None):

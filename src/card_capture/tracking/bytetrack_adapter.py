@@ -6,7 +6,7 @@ from typing import List, Optional
 
 import numpy as np
 
-from ..selector import ScoredCandidate, TrackState
+from ..models import ScoredCandidate, TrackState, FramePacket
 
 
 def _xyxy_from_corners(corners) -> np.ndarray:
@@ -115,3 +115,41 @@ class ByteTrackAdapter:
         """Return all tracks (current + previously reset) above min length."""
         all_tracks = list(self._tracks.values()) + list(self._all_finalized)
         return [t for t in all_tracks if len(t.candidates) >= self.min_track_length]
+
+    def assign(
+        self,
+        detections: List[dict] | List[ScoredCandidate],
+        frames: List[dict] | List[FramePacket],
+    ) -> List[TrackState]:
+        """Unified entry point for the pipeline 'track' stage.
+
+        Processes all detections frame-by-frame and returns finalized tracks.
+        """
+        self.reset()
+        if not detections:
+            return []
+
+        # Group detections by frame_index
+        by_frame: dict[int, list[ScoredCandidate]] = {}
+        for d in detections:
+            if isinstance(d, dict):
+                # Convert dict to ScoredCandidate if needed
+                from ..models import QualityScore, ScoredCandidate
+                cand = ScoredCandidate(
+                    detection_id=d.get("detection_id", str(uuid.uuid4())),
+                    timestamp_ms=d.get("timestamp_ms", 0),
+                    image_path=d.get("image_path", ""),
+                    score=QualityScore(total=d.get("novelty_score", 1.0), components={}),
+                    corners=d.get("corners", []),
+                    frame_index=d.get("frame_index", 0),
+                )
+            else:
+                cand = d
+            
+            by_frame.setdefault(cand.frame_index, []).append(cand)
+
+        # Process frames in order
+        for idx in sorted(by_frame.keys()):
+            self.process(by_frame[idx])
+
+        return self.finalize()

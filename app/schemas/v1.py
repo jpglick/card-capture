@@ -915,7 +915,17 @@ class SSERunFailed(BaseModel):
 # ---------------------------------------------------------------------------
 
 class LabelTruthExpectedCard(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(
+        frozen=True,
+        json_schema_extra={
+            "example": {
+                "card_id": "card_001",
+                "front_present": True,
+                "back_present": True,
+                "physical_card_key": "black_lotus_unl",
+            }
+        }
+    )
     card_id: str
     front_present: bool = True
     back_present: bool = False
@@ -927,19 +937,54 @@ class LabelTruthExpectedCard(BaseModel):
 
 
 class LabelTruth(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(
+        frozen=True,
+        json_schema_extra={
+            "example": {
+                "video_id": "practice_session_03",
+                "schema_version": 1,
+                "expected_cards": [
+                    {
+                        "card_id": "card_001",
+                        "front_present": True,
+                        "back_present": True,
+                        "physical_card_key": "black_lotus_unl",
+                    }
+                ],
+            }
+        }
+    )
     video_id: str
     schema_version: int = 1
     expected_cards: list[LabelTruthExpectedCard] = []
 
 
 class LabelFB(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "instance_id": "e5f6g7h8-...",
+                "frame_index": 4201,
+                "side": "front",
+            }
+        }
+    )
     instance_id: str
     frame_index: int
     side: str  # front | back | uncertain
 
 
 class LabelFBResult(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "label_id": 248,
+                "instance_id": "e5f6g7h8-...",
+                "side": "front",
+                "created_at": "2026-05-12T15:00:01Z",
+            }
+        }
+    )
     label_id: int
     instance_id: str
     side: str
@@ -947,6 +992,18 @@ class LabelFBResult(BaseModel):
 
 
 class DedupCluster(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "cluster_id": 5,
+                "status": "unverified",
+                "predicted_member_ids": ["e5f6g7h8-...", "a1b2c3d4-..."],
+                "confirmed_member_ids": None,
+                "member_thumbnails": ["/static/crops/e5f6_thumb.jpg"],
+                "updated_at": "2026-05-12T14:01:10Z",
+            }
+        }
+    )
     cluster_id: int
     status: str
     predicted_member_ids: list[str] = Field(default_factory=list)
@@ -999,6 +1056,16 @@ class Baseline(BaseModel):
 
 
 class RegressionRun(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "run_id": 7,
+                "baseline_id": 1,
+                "status": "completed",
+                "created_at": "2026-05-12T16:00:00Z",
+            }
+        }
+    )
     run_id: int
     baseline_id: int
     status: str
@@ -1015,6 +1082,23 @@ class RegressionRunDetail(BaseModel):
 
 
 class RegressionCompare(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "run_a": 6,
+                "run_b": 7,
+                "metric_deltas": {
+                    "card_recall": 0.02,
+                    "card_precision": -0.01,
+                    "side_accuracy": 0.05,
+                    "dedup_ari": 0.03,
+                    "image_quality_ssim": 0.00,
+                },
+                "regressions": [],
+                "per_video_deltas": [],
+            }
+        }
+    )
     run_a: int
     run_b: int
     metric_deltas: dict[str, Any]

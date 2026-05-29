@@ -7,6 +7,7 @@ from typing import List, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
+from card_capture.data.sql_queries import PRESENCE_DATASET_ROWS
 
 
 def sample_negative_patches(
@@ -76,18 +77,7 @@ def export_dataset(
     pos_n = 0
     neg_n = 0
     with storage._connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT cv.id, cv.frame_index, cv.timestamp_ms, ef.source_frame_path,
-                   cv.corners_json, cv.confidence
-            FROM card_views cv
-            LEFT JOIN evidence_frames ef ON ef.card_view_id = cv.id
-            JOIN card_instances ci ON ci.id = cv.card_instance_id
-            WHERE ci.video_id = ? AND cv.confidence >= ?
-            ORDER BY cv.frame_index
-            """,
-            (video_id, confidence_floor),
-        ).fetchall()
+        rows = conn.execute(PRESENCE_DATASET_ROWS, (video_id, confidence_floor)).fetchall()
 
     rng_seed = 0
     for row in rows:

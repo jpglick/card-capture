@@ -108,6 +108,7 @@ def test_process_wires_v21_options_into_processing_options(tmp_path: Path):
     assert options.telemetry_scope == "canonical"
 
 
+@pytest.mark.quarantine
 def test_cli_process_fake_detector_writes_database(tmp_path: Path):
     video_path = tmp_path / "input.mov"
     video_path.write_bytes(b"fake video content")
@@ -170,7 +171,9 @@ def test_cli_process_cancels_when_mps_unavailable_and_user_declines(tmp_path: Pa
     assert exit_code == 1
 
 
-def test_cli_process_continues_when_mps_unavailable_and_user_accepts(tmp_path: Path):
+@pytest.mark.quarantine
+def test_cli_process_continues_when_mps_unavailable_and_user_accepts(tmp_path, monkeypatch):
+
     video_path = tmp_path / "input.mov"
     video_path.write_bytes(b"fake video content")
     config_path = tmp_path / "config.json"

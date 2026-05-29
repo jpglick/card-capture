@@ -18,7 +18,7 @@ from card_capture.models import (
     FrameSample,
     QualityScore,
 )
-from card_capture.selector import ScoredCandidate
+from card_capture.models import ScoredCandidate
 from card_capture.tracking.botsort_adapter import BoTSORTAdapter
 
 
@@ -64,8 +64,14 @@ def mock_botsort_adapter():
         """Capture the frame passed to update()."""
         captured_frames.append(img)
         # Simulate normal track assignment
-        n = len(det.xyxy)
-        det.tracker_id = np.ones(n, dtype=int)
+        # det is [x1, y1, x2, y2, conf, cls]
+        n = len(det)
+        res = np.zeros((n, 8))
+        if n > 0:
+            res[:, :4] = det[:, :4]
+            res[:, 4] = np.arange(n) + 1
+            res[:, 5] = det[:, 4]
+        return res
 
     mock_supervision = MagicMock()
     mock_supervision.Detections = MockDetections
@@ -210,7 +216,7 @@ def test_front_back_assignment_uses_side_score(tmp_path):
     """
     import cv2
     from card_capture.pipeline_utils import _resolve_session_tracks, _PreparedTrack
-    from card_capture.selector import TrackState, ScoredCandidate
+    from card_capture.models import TrackState, ScoredCandidate
     from card_capture.models import QualityScore
     from card_capture.deduplicator import VisualDeduplicator
 
@@ -308,7 +314,7 @@ def test_quality_weighted_track_selection(tmp_path):
     """
     import cv2
     from card_capture.pipeline_utils import _resolve_session_tracks, _PreparedTrack
-    from card_capture.selector import TrackState, ScoredCandidate
+    from card_capture.models import TrackState, ScoredCandidate
     from card_capture.models import QualityScore
     from card_capture.deduplicator import VisualDeduplicator
 

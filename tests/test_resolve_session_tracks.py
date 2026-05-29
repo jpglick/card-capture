@@ -3,8 +3,7 @@ import numpy as np
 import cv2
 
 pytest.skip("_resolve_session_tracks and _PreparedTrack retired with monolith", allow_module_level=True)
-from card_capture.selector import TrackState, ScoredCandidate
-from card_capture.models import QualityScore
+from card_capture.models import TrackState, ScoredCandidate, QualityScore
 from card_capture.deduplicator import VisualDeduplicator
 
 

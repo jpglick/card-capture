@@ -31,11 +31,12 @@ expected side of its GT slot.
 """
 from __future__ import annotations
 
-import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from card_capture.data.connection import read_connection
+from card_capture.data.sql_queries import HARNESS_MATCH_DETECTIONS
 from harness.schema import ExpectedCard, TruthFile
 
 
@@ -103,30 +104,14 @@ def match_detections_to_truth(
 
 def _load_detections(db_path: Path, video_id: str) -> list[_Detection]:
     """Query card_instances + card_views for the given video."""
-    with sqlite3.connect(str(db_path)) as conn:
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            """
-            SELECT
-                ci.id            AS instance_id,
-                ci.angle         AS angle,
-                MIN(cv.timestamp_ms) AS start_ms,
-                MAX(cv.timestamp_ms) AS end_ms
-            FROM card_instances ci
-            JOIN card_views cv ON cv.card_instance_id = ci.id
-            JOIN videos v ON v.id = ci.video_id
-            WHERE v.source_path LIKE ?
-            GROUP BY ci.id
-            ORDER BY start_ms
-            """,
-            (f"%{video_id}%",),
-        ).fetchall()
+    with read_connection(db_path) as conn:
+        rows = conn.execute(HARNESS_MATCH_DETECTIONS, (f"%{video_id}%",)).fetchall()
     return [
         _Detection(
-            instance_id=int(row["instance_id"]),
-            angle=row["angle"],
-            start_ms=int(row["start_ms"]),
-            end_ms=int(row["end_ms"]),
+            instance_id=int(row[0]),
+            angle=row[1],
+            start_ms=int(row[2]),
+            end_ms=int(row[3]),
         )
         for row in rows
     ]

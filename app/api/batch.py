@@ -69,23 +69,20 @@ async def _run_batch(batch_id: str, body: BatchRequest, request: Request) -> Non
             job["run_id"] = run_id
             job["status"] = "running"
 
-            # Look up video path from DB
-            import sqlite3
-            with sqlite3.connect(db_path) as conn:
-                row = conn.execute(
-                    "SELECT source_path FROM videos WHERE id=?", (video_id,)
-                ).fetchone()
-            if not row:
+            # Look up video path from DB using the repository
+            video_row = request.app.state.videos_repo.get(video_id)
+            if not video_row:
                 job["status"] = "failed"
                 job["error"] = f"Video {video_id} not found"
                 _batches[batch_id]["failed"] += 1
                 continue
 
+            video_path = video_row["source_path"]
             output_dir = str(output_base / run_id)
             try:
                 await runner.run_async(
                     run_id,
-                    video=row[0],
+                    video=video_path,
                     output_dir=output_dir,
                     db=str(db_path),
                     config_preset=body.config_preset,

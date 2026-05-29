@@ -2,13 +2,14 @@
 """
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
 from typing import List, Tuple
 
 import torch
 from PIL import Image
 from torch.utils.data import Dataset, DataLoader
+from card_capture.data.connection import read_connection
+from card_capture.data.sql_queries import ML_TRAIN_FB_DATASET
 from .fb_classifier import FBClassifier, get_transforms
 
 
@@ -18,15 +19,9 @@ class FBDataset(Dataset):
         self.transform = transform
         self.samples: List[Tuple[str, int]] = []
         
-        with sqlite3.connect(str(db_path)) as conn:
-            conn.row_factory = sqlite3.Row
+        with read_connection(db_path) as conn:
             # We need to join fb_labels with card_views to get the image_path
-            rows = conn.execute("""
-                SELECT cv.image_path, fl.side
-                FROM fb_labels fl
-                JOIN card_views cv ON cv.card_instance_id = fl.instance_id AND cv.frame_index = fl.frame_index
-                WHERE fl.side IN ('front', 'back')
-            """).fetchall()
+            rows = conn.execute(ML_TRAIN_FB_DATASET).fetchall()
             
             side_map = {'front': 0, 'back': 1}
             for r in rows:

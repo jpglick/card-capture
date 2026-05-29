@@ -13,6 +13,7 @@ class PipelineConfig:
     # Core Orchestration
     detector: str = "docaligner"
     reader_backend: str = "auto"
+    config_preset: str = "balanced"
     queue_size: int = 256
     inference_batch_size: int = 16
     device: str = "auto"

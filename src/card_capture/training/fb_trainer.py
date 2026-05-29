@@ -5,7 +5,6 @@ so training and production inference are guaranteed to be compatible.
 """
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
 from typing import Optional
 
@@ -15,6 +14,8 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
+from card_capture.data.connection import read_connection
+from card_capture.data.sql_queries import TRAINING_FB_LABELED_ROWS
 
 # 'uncertain' and 'no_card' are excluded — not useful for the FB task
 _LABEL_MAP = {"front": 0, "back": 1}
@@ -125,17 +126,8 @@ def train_fb(
 
 
 def _load_labeled_rows(db_path: Path) -> list[dict]:
-    with sqlite3.connect(str(db_path)) as conn:
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            """SELECT fl.label_id AS id, cv.rectified_path AS image_path, fl.side AS label
-               FROM fb_labels fl
-               JOIN card_instances ci ON ci.track_id = fl.instance_id
-               JOIN card_views cv ON cv.card_instance_id = ci.id
-                   AND cv.frame_index = fl.frame_index
-               WHERE fl.side IN ('front', 'back')
-               ORDER BY fl.label_id"""
-        ).fetchall()
+    with read_connection(db_path) as conn:
+        rows = conn.execute(TRAINING_FB_LABELED_ROWS).fetchall()
     return [dict(r) for r in rows]
 
 

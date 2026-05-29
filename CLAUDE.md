@@ -6,25 +6,33 @@ deduplicated card images + SQLite metadata.
 
 ---
 
-## Pipeline (10 stages, Metaflow)
+## Architecture (Unified Runtime, v5.5+)
+
+The pipeline runs as a high-performance in-process loop (`UnifiedRuntime`) to
+minimize IPC overhead and redundant video decoding.
 
 ```
 Video.mov
-  Stage 1  Adaptive Presence Sampler   — 192px fast scan @ 15fps; valley-split detection
-  Stage 2  Frame Triage                — drop >98% dark frames
-  Stage 3  YOLO Corner Detection       — YOLOv8-OBB @ 640px, conf ≥ 0.5, batched GPU
-  Stage 4  Background Novelty Gate     — drop frames matching empty workspace
-  Stage 5  Session-Aware Tracking      — BoT-SORT or ByteTrack; 4 reset signals
-  Stage 6  GPU Refinement              — Kornia perspective warp → 750×1050
-  Stage 7  Quality Scoring             — 7-component score; prune weak tracks
-  Stage 8  Front/Back Resolution       — longest track = Front; pHash Back gate
-  Stage 9  Lighting-Diverse Fusion     — 4-quadrant glare selection; median or foil-aware fuse
-  Stage 10 Global Dedup + Storage      — pHash + ReID; write cards.sqlite
+  [Producer Thread]
+  Stage 1  Stride Sampler             — Decodes frames @ variable FPS based on activity
+  
+  [Worker Thread (GPU Boundary)]
+  Stage 2  YOLO Corner Detection       — YOLOv8-OBB @ 640px; batched GPU inference
+  Stage 3  Eager Warp / Crop Cache    — GPU-resident 750×1050 crops; skips re-decoding
+  
+  [Main Thread]
+  Stage 4  Background Novelty Gate     — Mean + Variance model; drops empty stands
+  Stage 5  Session-Aware Tracking      — BoT-SORT/ByteTrack; 4 reset signals
+  Stage 6  Refinement & Scoring        — Consumes cached crops; 7-component quality score
+  Stage 7  Front/Back Resolution       — Heuristic or classifier-based resolution
+  Stage 8  Lighting-Diverse Fusion     — Median or foil-aware glare rejection
+  Stage 9  Global Dedup + Storage      — Single-Writer DAL; cards.sqlite
 ```
 
-Stages 1–3: producer/consumer subprocesses.  
-Stages 4–10: main process (Metaflow steps in `pipeline/steps/`).  
-Monolith path (`src/card_capture/pipeline.py`) is deprecated; deleted in Wave 5.
+**Architectural Mandates:**
+- **In-Process:** Production runs must use `UnifiedRuntime`. Metaflow is for remote orchestration only.
+- **Strict GPU Boundary:** All PyTorch/Kornia operations MUST happen in the `_worker` thread.
+- **Single-Writer DAL:** All DB writes MUST go through `SingleWriterDAL` in `card_capture.dal`.
 
 ---
 
@@ -32,31 +40,17 @@ Monolith path (`src/card_capture/pipeline.py`) is deprecated; deleted in Wave 5.
 
 | File | Purpose |
 |---|---|
-| `pipeline/card_capture_flow.py` | Metaflow orchestrator — thin `@step` calls into `pipeline/steps/` |
-| `pipeline/steps/` | One module per stage (detect, novelty, track, refine, score, resolve, fuse, dedup, store) |
-| `src/card_capture/sampler/__init__.py` | Stage 1: two-pass presence sampler + valley splits |
-| `src/card_capture/detectors.py` | Stage 3: YOLOv8-OBB inference |
-| `src/card_capture/presence/background_novelty.py` | Stage 4: novelty gate |
-| `src/card_capture/tracking/botsort_adapter.py` | Stage 5: BoT-SORT + ReID |
-| `src/card_capture/tracking/bytetrack_adapter.py` | Stage 5: ByteTrack fallback |
-| `src/card_capture/tracking/centroid_jump.py` | Session reset signal #3 |
-| `src/card_capture/gpu_refinement.py` | Stage 6: Kornia warp (GPU) |
-| `src/card_capture/cropper.py` | Stage 6: CPU fallback |
-| `src/card_capture/scoring.py` | Stage 7: quality components |
-| `src/card_capture/fuser.py` | Stage 9: frame selection + fusion |
-| `src/card_capture/fusion/foil_detection.py` | Laplacian variance foil classifier |
-| `src/card_capture/fusion/median_fusion.py` | Glare-rejection fusion for foil cards |
-| `src/card_capture/deduplicator.py` | Stage 10: pHash + cosine dedup |
-| `src/card_capture/storage.py` | SQLite schema + persistence |
-| `src/card_capture/config.py` | `PipelineConfig` dataclass + `load_config()` |
-| `src/card_capture/adaptive_gap.py` | Per-video session-split gap computation |
-| `src/card_capture/cli.py` | CLI entry point (`card-capture` command) |
-| `app/main.py` | FastAPI app factory |
-| `app/api/` | REST routes (videos, runs, cards, label, training, regression, config) |
-| `app/services/` | Domain services used by routes |
-| `app/web/src/` | Svelte SPA |
-| `migrations/run_migrations.py` | SQLite migration runner + startup assertion |
-| `harness/` | Regression harness (metrics, runner, CLI) |
+| `src/card_capture/runtime.py` | **Core:** Unified in-process orchestrator and producer/worker threads |
+| `src/card_capture/dal.py` | Data Access Layer: Single-Writer thread-safe SQLite persistence |
+| `src/card_capture/models.py` | Centralized domain objects (`FrameSample`, `TrackState`, etc.) |
+| `src/card_capture/interfaces.py` | Protocols for components (`CardDetector`, `FrameSampler`) |
+| `src/card_capture/sampler/` | `StrideSampler` for two-pass presence detection |
+| `src/card_capture/detectors.py` | YOLOv8-OBB backends + device probing |
+| `src/card_capture/presence/` | Novelty gate (Mean/Variance) + background modeling |
+| `src/card_capture/tracking/` | BoT-SORT and ByteTrack adapters |
+| `src/card_capture/cropper.py` | `PrecisionNormalizer` for consistent homography |
+| `src/card_capture/storage.py` | (Internal) Direct SQLite storage logic |
+| `pipeline/card_capture_flow.py` | Metaflow orchestrator (Remote/Baseline use only) |
 
 ---
 
@@ -69,116 +63,46 @@ corner_confidence          = 0.5    # YOLO gate
 background_novelty_threshold = 0.08 # empty-workspace gate
 fast_scan_fps              = 15.0   # sampler scan speed
 valley_drop_ratio          = 0.40   # valley sensitivity for card swaps
-centroid_jump_ratio        = 0.30   # tracking reset on position jump
-foil_threshold             = 50.0   # Laplacian variance; 0 = always median
-rotate_180                 = False  # flip for upside-down camera
 tracker_backend            = "bytetrack"
-min_track_length           = 6
-reid_distance_threshold    = 0.6
-fusion_target_frames       = 4
+min_track_length           = 3
+fusion_target_frames       = 1
+rotate_180                 = False  # flip for upside-down camera
 ```
 
-Config file: `card_capture_config.json` (gitignored; copy from `harness/config.example.json`).  
-CLI flags override config. Presets (fast/balanced/quality) live in `cards.sqlite:config_presets`.
-
 ---
 
-## Key Data Types
-
-```python
-FrameSample(frame_index, timestamp_ms, image, w, h)
-DetectionPacket(frame_index, timestamp_ms, w, h, corner_detection, telemetry)
-ScoredCandidate(detection_id, timestamp_ms, image_path, score, corners, frame_index)
-TrackState(instance_id, candidates, last_centroid, last_frame_index, angle, reid_embedding)
-QualityScore(sharpness, glare, aspect_ratio, size, complexity, border_purity, confidence, total)
-```
-
-Quality score weights: sharpness 25%, border_purity 20%, aspect_ratio 15%, glare 15%,
-complexity 10%, size 10%, confidence 5%.
-
----
-
-## Session Reset Signals (Stage 5)
-
-A new tracking session is started when any of these fire:
-1. Frame-index gap (sampler window boundary)
-2. Valley split (hand-swap detected in Stage 1)
-3. Centroid jump (> 0.30× frame width)
-4. ReID shift (BoT-SORT only)
-
----
-
-## Testing
+## Testing & Baseline
 
 ```bash
-# All unit tests
-python3 -m pytest tests/ -q
+# All unit tests (excluding quarantined hardware-dependent tests)
+python3 -m pytest tests/ -m "not quarantine" -q
 
-# Skip the slow integration test (requires fixture video)
-python3 -m pytest tests/ -q --ignore=tests/pipeline/test_path_equivalence.py
+# Established v5.5 baseline results
+# Location: docs/superpowers/plans/v5-5/baseline-results.md
 ```
 
-Pre-existing failures (not regressions): `tests/migrations/test_schema.py::test_migrations_are_idempotent`,
-several in `test_wave1/2_robustness.py`, `test_path_equivalence.py`.
+Quarantined tests (`@pytest.mark.quarantine`) include those requiring CUDA/MPS hardware or missing external credentials.
 
 ---
 
 ## Commands
 
 ```bash
-# Process a video (Metaflow pipeline, default)
+# Process a video (Unified pipeline, default)
 card-capture process video.MOV --output-dir out --db out/cards.sqlite
 
-# Stage 1 only — fast sanity check (~35s)
-card-capture sampler sessions video.MOV
+# Run via Metaflow (legacy/remote)
+card-capture process video.MOV --pipeline metaflow --db out/cards.sqlite
 
-# Start the web app (two terminals)
-uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload   # terminal 1
-cd app/web && npm run dev                                      # terminal 2
-# → http://localhost:5173
-
-# Regression harness
-card-capture harness run --baseline v1 --db cards.sqlite --truth-dir golden_set/
-
-# Export presence training data
-card-capture dataset export --db cards.sqlite --out-dir data/presence_dataset
-
-# Train presence classifier
-card-capture train presence --data data/presence_dataset --out models/presence_classifier.pt
+# Start the web app
+uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+# UI: http://localhost:8000 (FastAPI handles static files)
 ```
 
 ---
 
-## Output Structure
+## Known Weaknesses (v5.5)
 
-```
-<output_dir>/
-  frames/                     source frames (one per detection)
-  crops/                      fused canonical images (750×1050 px)
-  cards.sqlite                all metadata, events, embeddings
-  run_telemetry.json
-  tracker_association_events.json
-```
-
-Database tables: `videos`, `card_instances`, `card_views`, `pipeline_events`,
-`config_presets`, `fb_labels`, `truth_files`, `regression_baselines`, `_migrations`.
-
----
-
-## Known Weaknesses (see `docs/V4_CONCERNS.md`)
-
-- Background novelty gate uses single mean (no variance model)
-- pHash Front/Back gate uses rotation tolerance as proxy for content similarity
-- BoT-SORT ReID fed real fused images now (late embedding in `store.py`) but tracker path still degraded
-- Quality scorer is hand-weighted; no learned ranker
-- Settings UI exposes 5 of ~30 tunable thresholds
-
----
-
-## Docs
-
-- `docs/architecture/arch-4.1.md` — detailed v4.1 spec
-- `docs/architecture/roadmap.md` — phase plan, what's shipped vs pending
-- `docs/V4_CONCERNS.md` + `docs/V4_CONCERNS_PASS2.md` — open issues and review findings
-- `OPERATOR.md` — running the app, processing videos, training walkthrough
-- `QUICK_REFERENCE.md` — CLI flags cheat sheet
+- In-process telemetry coverage in `UnifiedRuntime` is incomplete (TODOs in code).
+- F/B classifier fallback uses longest-track heuristic (classifier needs training update).
+- Eager warping in worker thread uses CPU fallback if Kornia is not strictly enforced.

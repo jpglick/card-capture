@@ -1,7 +1,95 @@
 -- migrations/0001_v4_schema.sql
 -- All statements wrapped in IF NOT EXISTS / try-except for idempotency.
 
--- 1. truth_files
+-- 0. videos (Base table)
+CREATE TABLE IF NOT EXISTS videos (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_path   TEXT    NOT NULL,
+    file_hash     TEXT    NOT NULL,
+    duration_ms   INTEGER NOT NULL,
+    width         INTEGER NOT NULL,
+    height        INTEGER NOT NULL,
+    status        TEXT    NOT NULL DEFAULT 'processing',
+    created_at    TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 1. pipeline_events
+CREATE TABLE IF NOT EXISTS pipeline_events (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    video_id      INTEGER REFERENCES videos(id),
+    run_id        TEXT,
+    stage_id      TEXT,
+    frame_index   INTEGER NOT NULL,
+    timestamp_ms  INTEGER NOT NULL,
+    event_type    TEXT    NOT NULL,
+    data_json     TEXT,
+    artifact_ref  TEXT,
+    created_at    TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 2. card_instances
+CREATE TABLE IF NOT EXISTS card_instances (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    instance_id   TEXT    UNIQUE, -- Logical UUID
+    video_id      INTEGER NOT NULL REFERENCES videos(id),
+    run_id        TEXT,
+    track_id      TEXT    NOT NULL,
+    session_id    TEXT,
+    start_frame   INTEGER,
+    end_frame     INTEGER,
+    angle         TEXT,
+    visual_hash   TEXT,
+    fused_image_path TEXT,
+    reid_embedding BLOB,
+    is_hidden     INTEGER DEFAULT 0,
+    is_duplicate_of INTEGER REFERENCES card_instances(id),
+    updated_at    TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at    TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(run_id, track_id)
+);
+
+-- 3. card_views
+CREATE TABLE IF NOT EXISTS card_views (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    card_instance_id INTEGER NOT NULL REFERENCES card_instances(id),
+    instance_id   TEXT    REFERENCES card_instances(instance_id),
+    frame_index   INTEGER NOT NULL,
+    timestamp_ms  INTEGER NOT NULL,
+    image_path    TEXT,
+    rectified_path TEXT,
+    corners_json  TEXT,
+    confidence    REAL,
+    quality_score FLOAT,
+    quality_score_json TEXT,
+    is_canonical  INTEGER NOT NULL DEFAULT 0,
+    side          TEXT,
+    phash         TEXT,
+    reid_embedding BLOB,
+    initial_confidence REAL,
+    glare_x       REAL,
+    glare_y       REAL,
+    sharpness     REAL,
+    glare_mask_b64 TEXT,
+    laplacian_heatmap_b64 TEXT,
+    metadata_json TEXT,
+    created_at    TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 4. saved_cards (Backward-compatibility)
+CREATE TABLE IF NOT EXISTS saved_cards (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    detection_id  INTEGER NOT NULL,
+    video_id      INTEGER NOT NULL REFERENCES videos(id),
+    image_path    TEXT    NOT NULL,
+    final_score   REAL    NOT NULL,
+    review_state  TEXT    NOT NULL DEFAULT 'pending',
+    source_path   TEXT    NOT NULL,
+    timestamp_ms  INTEGER NOT NULL,
+    score_components_json TEXT NOT NULL,
+    created_at    TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 5. truth_files
 -- Stores the ground-truth labeling payload for each video (one row per video).
 -- Written by: Surface D (labeling endpoints). Read by: Surface D (harness), Surface B (labeling UX).
 -- JSON payload: truth.json schema (Contract 4).
@@ -98,11 +186,6 @@ CREATE TABLE IF NOT EXISTS hard_cases (
     source_frame_path TEXT,
     created_at        TEXT    NOT NULL DEFAULT (datetime('now'))
 );
-
--- Extensions to existing pipeline_events table
--- Applied with try/except at migration runtime (SQLite < 3.35.5 has no IF NOT EXISTS for ADD COLUMN).
-ALTER TABLE pipeline_events ADD COLUMN stage_id TEXT;
-ALTER TABLE pipeline_events ADD COLUMN artifact_ref TEXT;
 
 -- Indices
 CREATE INDEX IF NOT EXISTS idx_regression_runs_baseline ON regression_runs(baseline_id);

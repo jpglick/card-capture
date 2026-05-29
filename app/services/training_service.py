@@ -4,12 +4,28 @@ Provides :class:`TrainingService` which is attached to the FastAPI app's
 ``state`` object in :mod:`app.main`.  Routes in :mod:`app.api.training`
 delegate to it via ``request.app.state.training_service``.
 """
+from __future__ import annotations
+
 import logging
 import threading
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
+
+from card_capture.data.connection import read_connection
+from card_capture.data.sql_queries import (
+    TRAINING_FB_DIST,
+    TRAINING_FB_LAST,
+    TRAINING_HISTORY,
+    TRAINING_LATEST_METRICS,
+    TRAINING_PENDING_CORNERS,
+    TRAINING_PENDING_FB,
+    TRAINING_PENDING_PRESENCE,
+    TRAINING_RECENT_RUNS,
+    TRAINING_VIDEOS_ALL,
+    TRAINING_RUN_CARDS_EXTRACTED,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +46,15 @@ class TrainingJob:
 class TrainingService:
     """Thread-safe, in-process job queue for ML model retraining."""
 
-    def __init__(self, db_path: Path) -> None:
+    def __init__(
+        self,
+        db_path: Path,
+        training_repo=None,
+        ml_repo=None,
+    ) -> None:
         self.db_path = db_path
+        self._training_repo = training_repo
+        self._ml_repo = ml_repo
         self._jobs: dict[str, TrainingJob] = {}
         self._lock = threading.Lock()
 
@@ -41,17 +64,15 @@ class TrainingService:
 
     def list_datasets(self) -> list[dict]:
         """Return dataset sizes and stats for each registered model type."""
-        import sqlite3
         from datetime import datetime
 
-        with sqlite3.connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            fb_rows = conn.execute("SELECT side, COUNT(*) as count FROM fb_labels GROUP BY side").fetchall()
-            fb_dist = {row["side"]: row["count"] for row in fb_rows}
+        with read_connection(self.db_path) as conn:
+            fb_rows = conn.execute(TRAINING_FB_DIST).fetchall()
+            fb_dist = {row[0]: row[1] for row in fb_rows}
             fb_total = sum(fb_dist.values())
             
             # last_updated for fb
-            fb_last = conn.execute("SELECT MAX(created_at) FROM fb_labels").fetchone()[0] or datetime.now().isoformat()
+            fb_last = conn.execute(TRAINING_FB_LAST).fetchone()[0] or datetime.now().isoformat()
 
         return [
             {
@@ -99,59 +120,40 @@ class TrainingService:
     # ------------------------------------------------------------------
 
     def next_presence_sample(self) -> Optional[dict]:
-        import sqlite3
-        with sqlite3.connect(str(self.db_path)) as conn:
-            conn.row_factory = sqlite3.Row
-            row = conn.execute(
-                "SELECT id, image_path, frame_index FROM presence_samples "
-                "WHERE label IS NULL ORDER BY id LIMIT 1"
-            ).fetchone()
-            if row is None:
-                return None
-            pending = conn.execute(
-                "SELECT COUNT(*) FROM presence_samples WHERE label IS NULL"
-            ).fetchone()[0]
+        if not self._training_repo:
+            return None
+        res = self._training_repo.next_presence_sample()
+        if not res:
+            return None
         return {
-            "sample_id": row["id"],
-            "image_url": self._to_url(row["image_path"]),
-            "frame_index": row["frame_index"],
-            "pending_count": pending,
+            "sample_id": res["id"],
+            "image_url": self._to_url(res["image_path"]),
+            "frame_index": res["frame_index"],
+            "pending_count": res["pending_count"],
         }
 
     def label_presence(self, sample_id: int, label: str) -> None:
         assert label in ("present", "absent"), f"invalid label: {label!r}"
-        import sqlite3
-        with sqlite3.connect(str(self.db_path)) as conn:
-            conn.execute(
-                "UPDATE presence_samples SET label=?, labeled_at=datetime('now') WHERE id=?",
-                (label, sample_id),
-            )
-            conn.commit()
+        if self._training_repo:
+            self._training_repo.label_presence(sample_id, label)
 
     # ------------------------------------------------------------------
     # Corner queue
     # ------------------------------------------------------------------
 
     def next_corner_sample(self) -> Optional[dict]:
-        import sqlite3
-        with sqlite3.connect(str(self.db_path)) as conn:
-            conn.row_factory = sqlite3.Row
-            row = conn.execute(
-                "SELECT id, image_path, frame_index, predicted_corners, confidence "
-                "FROM corner_samples WHERE label IS NULL ORDER BY confidence LIMIT 1"
-            ).fetchone()
-            if row is None:
-                return None
-            pending = conn.execute(
-                "SELECT COUNT(*) FROM corner_samples WHERE label IS NULL"
-            ).fetchone()[0]
+        if not self._training_repo:
+            return None
+        res = self._training_repo.next_corner_sample()
+        if not res:
+            return None
         return {
-            "sample_id": row["id"],
-            "image_url": self._to_url(row["image_path"]),
-            "frame_index": row["frame_index"],
-            "predicted_corners": row["predicted_corners"],
-            "confidence": row["confidence"],
-            "pending_count": pending,
+            "sample_id": res["id"],
+            "image_url": self._to_url(res["image_path"]),
+            "frame_index": res["frame_index"],
+            "predicted_corners": res["predicted_corners"],
+            "confidence": res["confidence"],
+            "pending_count": res["pending_count"],
         }
 
     def label_corner(
@@ -161,63 +163,46 @@ class TrainingService:
         corrected_corners: Optional[str] = None,
     ) -> None:
         assert label in ("correct", "adjusted", "negative"), f"invalid label: {label!r}"
-        import sqlite3
-        with sqlite3.connect(str(self.db_path)) as conn:
-            conn.execute(
-                """UPDATE corner_samples
-                   SET label=?, corrected_corners=?, labeled_at=datetime('now')
-                   WHERE id=?""",
-                (label, corrected_corners, sample_id),
-            )
-            conn.commit()
+        if self._training_repo:
+            self._training_repo.label_corner(sample_id, label, corrected_corners)
 
     # ------------------------------------------------------------------
     # Stats
     # ------------------------------------------------------------------
 
     def get_stats(self) -> dict:
-        import sqlite3
-        with sqlite3.connect(str(self.db_path)) as conn:
-            conn.row_factory = sqlite3.Row
-
+        with read_connection(self.db_path) as conn:
             presence_pending = conn.execute(
-                "SELECT COUNT(*) FROM presence_samples WHERE label IS NULL"
+                TRAINING_PENDING_PRESENCE
             ).fetchone()[0]
             fb_pending = conn.execute(
-                """SELECT COUNT(*) FROM card_instances ci
-                   WHERE NOT EXISTS (
-                       SELECT 1 FROM fb_labels fl WHERE fl.instance_id = ci.track_id
-                   )"""
+                TRAINING_PENDING_FB
             ).fetchone()[0]
             corner_pending = conn.execute(
-                "SELECT COUNT(*) FROM corner_samples WHERE label IS NULL"
+                TRAINING_PENDING_CORNERS
             ).fetchone()[0]
 
             accuracies = {}
             for model in ("presence", "fb_classifier"):
                 row = conn.execute(
-                    "SELECT eval_metrics_json FROM model_versions "
-                    "WHERE model_name=? ORDER BY created_at DESC LIMIT 1",
+                    TRAINING_LATEST_METRICS,
                     (model,),
                 ).fetchone()
-                if row and row["eval_metrics_json"]:
+                if row and row[0]:
                     import json
-                    m = json.loads(row["eval_metrics_json"])
+                    m = json.loads(row[0])
                     accuracies[model] = m.get("accuracy")
 
-            history_rows = conn.execute(
-                "SELECT model_name, eval_metrics_json, created_at FROM model_versions "
-                "ORDER BY created_at ASC"
-            ).fetchall()
+            history_rows = conn.execute(TRAINING_HISTORY).fetchall()
             history = []
             for r in history_rows:
-                if r["eval_metrics_json"]:
+                if r[1]:
                     import json
-                    m = json.loads(r["eval_metrics_json"])
+                    m = json.loads(r[1])
                     history.append({
-                        "model": r["model_name"],
+                        "model": r[0],
                         "accuracy": m.get("accuracy"),
-                        "created_at": r["created_at"],
+                        "created_at": r[2],
                     })
 
         return {
@@ -236,30 +221,13 @@ class TrainingService:
 
     def snapshot_baseline(self, job_id: str, n: int = 3) -> None:
         """Snapshot pipeline output for last N runs before retraining."""
-        import sqlite3
-        with sqlite3.connect(str(self.db_path)) as conn:
-            runs = conn.execute(
-                "SELECT run_id, cards_extracted FROM pipeline_runs "
-                "ORDER BY started_at DESC LIMIT ?",
-                (n,),
-            ).fetchall()
-            for run_id, cards in runs:
-                conn.execute(
-                    "INSERT INTO benchmark_snapshots (job_id, run_id, cards_extracted) "
-                    "VALUES (?, ?, ?)",
-                    (job_id, run_id, cards),
-                )
-            conn.commit()
+        if self._training_repo:
+            self._training_repo.snapshot_baseline(job_id, n)
 
     def get_benchmark_baseline(self, job_id: str) -> list[dict]:
-        import sqlite3
-        with sqlite3.connect(str(self.db_path)) as conn:
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                "SELECT run_id, cards_extracted FROM benchmark_snapshots WHERE job_id=?",
-                (job_id,),
-            ).fetchall()
-        return [dict(r) for r in rows]
+        if self._training_repo:
+            return self._training_repo.get_benchmark_baseline(job_id)
+        return []
 
     def start_benchmark(self, n: int = 3) -> TrainingJob:
         from datetime import datetime
@@ -278,27 +246,24 @@ class TrainingService:
 
     def _run_benchmark_job(self, job: TrainingJob, n: int) -> None:
         from datetime import datetime
-        import sqlite3
         try:
             with self._lock:
                 job.status = "running"
 
-            with sqlite3.connect(str(self.db_path)) as conn:
-                conn.row_factory = sqlite3.Row
+            with read_connection(self.db_path) as conn:
                 runs = conn.execute(
-                    "SELECT run_id, video_id, cards_extracted FROM pipeline_runs "
-                    "WHERE status='completed' ORDER BY started_at DESC LIMIT ?",
+                    TRAINING_RECENT_RUNS,
                     (n,),
                 ).fetchall()
                 videos = {
-                    r["id"]: r["source_path"]
-                    for r in conn.execute("SELECT id, source_path FROM videos").fetchall()
+                    r[0]: r[1]
+                    for r in conn.execute(TRAINING_VIDEOS_ALL).fetchall()
                 }
 
             rows = []
-            for run in runs:
-                video_path = videos.get(run["video_id"], "")
-                before = run["cards_extracted"]
+            for run_id, video_id, cards_extracted in runs:
+                video_path = videos.get(video_id, "")
+                before = cards_extracted
                 after = self._rerun_video(video_path)
                 video_name = Path(video_path).name
                 rows.append({
@@ -321,7 +286,7 @@ class TrainingService:
                 job.completed_at = datetime.now().isoformat()
 
     def _rerun_video(self, video_path: str) -> int:
-        import subprocess, sys, uuid, sqlite3
+        import subprocess, sys, uuid
         from pathlib import Path as _Path
         run_id = f"benchmark-{uuid.uuid4().hex[:8]}"
         out_dir = _Path(self.db_path).parent / run_id
@@ -339,9 +304,10 @@ class TrainingService:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         if proc.returncode != 0:
             raise RuntimeError(f"Pipeline failed: {proc.stderr[-500:]}")
-        with sqlite3.connect(str(self.db_path)) as conn:
+        
+        with read_connection(self.db_path) as conn:
             row = conn.execute(
-                "SELECT cards_extracted FROM pipeline_runs WHERE run_id=?", (run_id,)
+                TRAINING_RUN_CARDS_EXTRACTED, (run_id,)
             ).fetchone()
         return row[0] if row else 0
 
@@ -413,20 +379,15 @@ class TrainingService:
                 job.logs.append(f"FAILED: {exc}")
 
     def _record_model_version(self, model_name: str, metrics: dict) -> None:
-        import sqlite3, json, time
-        training_set_hash = str(int(time.time()))
-        with sqlite3.connect(str(self.db_path)) as conn:
-            conn.execute(
-                "INSERT INTO model_versions (model_name, training_set_hash, eval_metrics_json, checkpoint_path) "
-                "VALUES (?, ?, ?, ?)",
-                (
-                    model_name,
-                    training_set_hash,
-                    json.dumps(metrics),
-                    f"models/{model_name}.pt",
-                ),
+        if self._training_repo:
+            import time
+            training_set_hash = str(int(time.time()))
+            self._training_repo.record_model_version(
+                name=model_name,
+                hash=training_set_hash,
+                metrics=metrics,
+                path=f"models/{model_name}.pt",
             )
-            conn.commit()
 
     def _to_url(self, abs_path: str) -> str:
         p = Path(abs_path)

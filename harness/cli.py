@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import click
+from card_capture.data.sql_queries import HARNESS_TRUTH_FILES_BASE, harness_truth_files_with_video_filter
 
 from harness.baseline import freeze_baseline, get_baseline, persist_run
 from harness.config import load_pipeline_config
@@ -186,18 +187,17 @@ def freeze(name: str, db: Path, truth_dir: Path, videos: Optional[str]):
 @click.option("--videos", help="Comma-separated video IDs to export.")
 def export(db: Path, out_dir: Path, videos: Optional[str]):
     """Export truth.json files from the database."""
-    import sqlite3
+    from card_capture.data.connection import read_connection
     
     out_dir.mkdir(parents=True, exist_ok=True)
     
     video_ids = [v.strip() for v in videos.split(",")] if videos else []
     
-    with sqlite3.connect(str(db)) as conn:
-        conn.row_factory = sqlite3.Row
-        query = "SELECT video_id, payload_json FROM truth_files"
+    with read_connection(db) as conn:
+        query = HARNESS_TRUTH_FILES_BASE
         params = []
         if video_ids:
-            query += " WHERE video_id IN (" + ",".join(["?"] * len(video_ids)) + ")"
+            query = harness_truth_files_with_video_filter(",".join(["?"] * len(video_ids)))
             params = video_ids
             
         rows = conn.execute(query, params).fetchall()

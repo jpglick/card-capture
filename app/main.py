@@ -8,7 +8,6 @@ import os
 # Safe to call even if the file doesn't exist (no-op).
 from dotenv import load_dotenv
 load_dotenv()
-import sqlite3
 from pathlib import Path
 from typing import Optional
 
@@ -28,7 +27,7 @@ from app.services.mining_service import MiningService
 
 
 def create_app(db_path: Optional[Path] = None) -> FastAPI:
-    """Create and configure the FastAPI application.
+    """Build and configure the FastAPI application.
     """
     if db_path is None:
         db_path = Path(os.environ.get("CC_DB", "card_capture_output/cards.sqlite"))
@@ -36,7 +35,8 @@ def create_app(db_path: Optional[Path] = None) -> FastAPI:
     # Ensure the database file exists.
     if not db_path.exists():
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        sqlite3.connect(db_path).close()
+        from card_capture.data.connection import open_connection
+        open_connection(db_path).close()
 
     # 1. Initialise storage tables (creates pipeline_events, card_instances, etc. if needed)
     from card_capture.storage import Storage
@@ -48,6 +48,41 @@ def create_app(db_path: Optional[Path] = None) -> FastAPI:
     apply_migrations(db_path)
     assert_migrations_complete(db_path)
 
+    from contextlib import asynccontextmanager
+    from card_capture.data.writer import Writer
+    from card_capture.data.repositories.runs import RunsRepository
+    from card_capture.data.repositories.events import EventsRepository
+    from card_capture.data.repositories.cards import CardsRepository
+    from card_capture.data.repositories.videos import VideosRepository
+    from card_capture.data.repositories.labeling import LabelingRepository
+    from card_capture.data.repositories.telemetry import TelemetryRepository
+    from card_capture.data.repositories.config import ConfigRepository
+    from card_capture.data.repositories.batch import BatchRepository
+    from card_capture.data.repositories.training import TrainingRepository
+    from card_capture.data.repositories.ml import MLRepository
+
+    # 3. Instantiate repositories and services (writer=None initially)
+    writer = Writer(db_path=db_path)
+    runs_repo = RunsRepository(writer, db_path)
+    events_repo = EventsRepository(writer, db_path)
+    cards_repo = CardsRepository(writer, db_path)
+    videos_repo = VideosRepository(writer, db_path)
+    labeling_repo = LabelingRepository(writer, db_path)
+    telemetry_repo = TelemetryRepository(writer, db_path)
+    config_repo = ConfigRepository(writer, db_path)
+    batch_repo = BatchRepository(writer, db_path)
+    training_repo = TrainingRepository(writer, db_path)
+    ml_repo = MLRepository(writer, db_path)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        # Start the single-writer thread
+        app.state.writer.start()
+        try:
+            yield
+        finally:
+            app.state.writer.stop()
+
     app = FastAPI(
         title="Card Capture v4",
         version="0.1.0",
@@ -55,21 +90,52 @@ def create_app(db_path: Optional[Path] = None) -> FastAPI:
             "REST + SSE service layer for the Card Capture trading-card "
             "extraction pipeline."
         ),
+        lifespan=lifespan,
     )
 
-    # Initialize services
+    # Initialize state
     app.state.db_path = db_path
+    app.state.writer = writer
+    app.state.runs_repo = runs_repo
+    app.state.events_repo = events_repo
+    app.state.cards_repo = cards_repo
+    app.state.videos_repo = videos_repo
+    app.state.labeling_repo = labeling_repo
+    app.state.telemetry_repo = telemetry_repo
+    app.state.config_repo = config_repo
+    app.state.batch_repo = batch_repo
+    app.state.training_repo = training_repo
+    app.state.ml_repo = ml_repo
+
     app.state.event_bus = EventBus()
-    app.state.training_service = TrainingService(db_path=db_path)
-    app.state.labeling_service = LabelingService(db_path=db_path)
+    app.state.training_service = TrainingService(
+        db_path=db_path,
+        training_repo=training_repo,
+        ml_repo=ml_repo,
+    )
+    app.state.labeling_service = LabelingService(
+        db_path=db_path,
+        labeling_repo=labeling_repo,
+    )
     app.state.regression_service = RegressionService(db_path=db_path)
-    app.state.video_service = VideoService(db_path=db_path)
-    app.state.run_service = RunService(db_path=db_path)
-    app.state.card_service = CardService(db_path=db_path)
+    app.state.video_service = VideoService(
+        db_path=db_path,
+        videos_repo=videos_repo,
+    )
+    app.state.run_service = RunService(
+        db_path=db_path,
+        runs_repo=runs_repo,
+        events_repo=events_repo,
+    )
+    app.state.card_service = CardService(
+        db_path=db_path,
+        cards_repo=cards_repo,
+    )
     app.state.playground_service = PlaygroundService(db_path=db_path)
     app.state.mining_service = MiningService(
         db_path=db_path,
-        training_data_dir=Path("data/training")
+        training_data_dir=Path("data/training"),
+        training_repo=training_repo,
     )
 
     # Serve pipeline output (crops, frames) as static files

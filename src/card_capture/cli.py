@@ -42,9 +42,9 @@ def build_parser() -> argparse.ArgumentParser:
     process.add_argument("--reid-distance-threshold", type=float, default=None, dest="reid_distance_threshold")
     process.add_argument(
         "--pipeline",
-        choices=["metaflow", "monolith"],
-        default="metaflow",
-        help="Which pipeline architecture to run. The 'monolith' path is deprecated and will be removed in Wave 5. Use --pipeline metaflow (the default).",
+        choices=["metaflow", "monolith", "unified"],
+        default="unified",
+        help="Which pipeline architecture to run. 'unified' is the new high-performance in-process runtime.",
     )
     process.add_argument(
         "--resume",
@@ -140,6 +140,7 @@ def _run_process(args: argparse.Namespace) -> int:
         if val is not None:
             setattr(config, attr, val)
 
+    presence_threshold = getattr(args, "presence_threshold", None) or config.presence_threshold
     if config.detector == "fake":
         detector = FakeCardDetector()
         sampler = SyntheticSampler()
@@ -154,7 +155,6 @@ def _run_process(args: argparse.Namespace) -> int:
             device=config.device,
         )
         weights = Path("models/presence_classifier.pt")
-        presence_threshold = getattr(args, "presence_threshold", None) or 0.5
         sampler = AdaptivePresenceSampler(
             video_path=args.video_path,
             reader_backend=config.reader_backend,
@@ -163,7 +163,44 @@ def _run_process(args: argparse.Namespace) -> int:
             presence_threshold=presence_threshold,
         )
 
-    if getattr(args, "pipeline", "metaflow") == "metaflow":
+    # Ensure video is registered in DB to get an ID for FK constraints
+    import hashlib
+    file_hash = hashlib.sha256(args.video_path.read_bytes()).hexdigest()[:12] if args.video_path.exists() else "fake-hash"
+    video_id = storage.add_video(
+        source_path=str(args.video_path),
+        file_hash=file_hash,
+        duration_ms=0, # TODO: probe duration
+        width=0,       # TODO: probe dimensions
+        height=0
+    )
+
+    if getattr(args, "pipeline", "unified") == "unified":
+        from card_capture.pipeline.request import PipelineRunRequest
+        from card_capture.pipeline.runtime_local import LocalPipelineRuntime
+        from card_capture.pipeline.telemetry import InMemoryTelemetry
+        
+        telemetry = InMemoryTelemetry()
+        runtime = LocalPipelineRuntime(telemetry=telemetry)
+        req = PipelineRunRequest(
+            run_id=args.run_id or uuid.uuid4().hex[:12],
+            input_video=f"artifact://local/{args.video_path}",
+            output_root=f"artifact://local/{args.output_dir}/",
+            runtime_mode="strict_gpu" if config.device != "cpu" else "cpu_debug",
+            config={"corner_confidence": config.corner_confidence} if config.corner_confidence else {},
+        )
+        
+        print(f"Starting unified runtime process for video {video_id}...")
+        result = runtime.run(req)
+        
+        if result.manifest.contract_violations:
+            print(f"Pipeline failed: {result.manifest.contract_violations}")
+            return 1
+        else:
+            print(f"Pipeline completed successfully. Results in {args.output_dir}")
+            print(result.manifest.to_json())
+            return 0
+
+    if getattr(args, "pipeline", "unified") == "metaflow":
         import os
         import subprocess
         # Metaflow spawns a subprocess per step; those subprocesses won't find
@@ -250,7 +287,8 @@ def _run_harness(args: argparse.Namespace) -> int:
 
 
 def _run_dataset(args: argparse.Namespace) -> int:
-    import sqlite3
+    from card_capture.data.connection import read_connection
+    from card_capture.data.sql_queries import CLI_VIDEO_IDS
     from .presence.training_data import export_dataset
 
     db_path: Path = args.db
@@ -261,8 +299,8 @@ def _run_dataset(args: argparse.Namespace) -> int:
     if args.video_id is not None:
         video_ids = [args.video_id]
     else:
-        with sqlite3.connect(db_path) as conn:
-            rows = conn.execute("SELECT id FROM videos ORDER BY id").fetchall()
+        with read_connection(db_path) as conn:
+            rows = conn.execute(CLI_VIDEO_IDS).fetchall()
         video_ids = [r[0] for r in rows]
 
     if not video_ids:

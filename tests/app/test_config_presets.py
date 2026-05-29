@@ -9,7 +9,8 @@ from app.main import create_app
 def client(tmp_path):
     db = tmp_path / "cards.sqlite"
     app = create_app(db_path=db)
-    return TestClient(app)
+    with TestClient(app) as c:
+        yield c
 
 
 def test_list_presets_returns_builtins(client):

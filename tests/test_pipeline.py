@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 from queue import Empty, Full
 
-from card_capture.models import CardDetection, CornerDetection, DetectionPacket, FramePacket, FrameSample, QualityScore
+from card_capture.models import CardDetection, CornerDetection, DetectionPacket, FramePacket, FrameSample, QualityScore, ScoredCandidate, TrackState
 from card_capture.pipeline_utils import (
     _appearance_vector,
     _side_textiness_score,
@@ -19,7 +19,6 @@ from card_capture.workers import (
     _put_with_retry,
 )
 from card_capture.deduplicator import VisualDeduplicator
-from card_capture.selector import ScoredCandidate
 from card_capture.storage import Storage
 
 
@@ -737,7 +736,7 @@ def test_candidate_novelty_collection_does_not_drop_pre_tracking_candidates(tmp_
 def test_prune_empty_workspace_tracks_drops_low_novelty_tracks(tmp_path):
     """A finalized track whose medoid frame's quad matches the background is removed."""
     from card_capture.pipeline_utils import _prune_empty_workspace_tracks, _PreparedTrack
-    from card_capture.selector import TrackState
+    from card_capture.models import TrackState
     from card_capture.presence.background_novelty import BackgroundModel
     import cv2
 

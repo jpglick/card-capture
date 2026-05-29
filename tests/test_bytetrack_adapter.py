@@ -1,7 +1,6 @@
 import numpy as np
 
-from card_capture.selector import ScoredCandidate
-from card_capture.models import QualityScore
+from card_capture.models import QualityScore, ScoredCandidate
 from card_capture.tracking import ByteTrackAdapter
 
 

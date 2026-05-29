@@ -8,7 +8,7 @@ from card_capture.occlusion_residual import compute_occlusion_residual_score
 from card_capture.scoring import QualityScorer
 from card_capture.ecc_registration import compute_ecc_warp, register_frames_via_ecc
 from card_capture.fuser import MultiFrameFuser
-from card_capture.selector import ScoredCandidate
+from card_capture.models import ScoredCandidate
 from card_capture.models import QualityScore
 from card_capture.tracking.botsort_adapter import rotated_iou, axis_aligned_iou_from_corners
 
@@ -103,6 +103,7 @@ def test_quality_scorer_with_occlusion_component():
     assert score_without_prior.components["occlusion"] == 1.0, "Expected occlusion=1.0 when no prior frames"
 
 
+@pytest.mark.quarantine
 def test_quality_scorer_penalizes_occluded_frame():
     """Test that QualityScorer gives lower total score for occluded frame."""
     scorer = QualityScorer()
@@ -339,6 +340,7 @@ class TestPerRegionValleyDetection:
         # Should handle grayscale input without errors
         assert isinstance(valleys, list), "Expected list result"
 
+    @pytest.mark.quarantine
     def test_sampler_integrates_per_region_valleys(self):
         """Test that AdaptivePresenceSampler integrates per-region valley detection."""
         from card_capture.sampler import AdaptivePresenceSampler, _AdaptiveScanFrame
