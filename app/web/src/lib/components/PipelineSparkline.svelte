@@ -33,6 +33,23 @@
     return () => clearInterval(timer);
   });
 
+  // Effect to process progressMap updates purely
+  $effect(() => {
+      for (const [id, p] of Object.entries(progressMap)) {
+          if (!stageStats[id]) {
+              stageStats[id] = { startTime: Date.now(), finished: false, durationMs: 0 };
+          }
+          const match = p.detail.match(/elapsed_ms=(\d+)/);
+          if (match && !stageStats[id].finished) {
+              stageStats[id] = { 
+                  ...stageStats[id], 
+                  finished: true, 
+                  durationMs: parseInt(match[1]) 
+              };
+          }
+      }
+  });
+
   const stages = $derived(ALL_STAGES.map((s) => {
       const p = progressMap[s.id];
       let status = 'pending';
@@ -45,24 +62,13 @@
           detail = p.detail;
           status = pct >= 100 ? 'complete' : 'running';
           
-          if (status === 'running' && !stageStats[s.id]) {
-              stageStats[s.id] = { startTime: Date.now(), finished: false, durationMs: 0 };
-          }
-          
-          // Parse duration if available in detail (e.g., "elapsed_ms=1234")
-          const match = detail.match(/elapsed_ms=(\d+)/);
-          if (match) {
-              stageStats[s.id] = { 
-                  ...stageStats[s.id], 
-                  finished: true, 
-                  durationMs: parseInt(match[1]) 
-              };
-          }
-
-          if (stageStats[s.id]?.finished) {
-              elapsed = stageStats[s.id].durationMs / 1000;
-          } else if (stageStats[s.id]?.startTime) {
-              elapsed = (now - stageStats[s.id].startTime) / 1000;
+          const stats = stageStats[s.id];
+          if (stats) {
+              if (stats.finished) {
+                  elapsed = stats.durationMs / 1000;
+              } else if (stats.startTime) {
+                  elapsed = (now - stats.startTime) / 1000;
+              }
           }
       }
       return { ...s, status, pct, detail, elapsed };
