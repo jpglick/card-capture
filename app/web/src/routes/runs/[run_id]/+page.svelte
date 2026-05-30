@@ -36,6 +36,38 @@
         try {
             loading = true;
             run = await api.runs.detail(runId);
+            
+            // Reconstruct progressMap from historical events if the run is finished
+            if (run && run.status !== 'running' && run.events) {
+                const newProgress: Record<string, { stage_id: string; pct: number; detail: string }> = {};
+                for (const ev of run.events) {
+                    if (ev.event_type === 'stage_progress' && ev.data_json) {
+                        try {
+                            const d = JSON.parse(ev.data_json);
+                            if (d.stage_id) {
+                                newProgress[d.stage_id] = d;
+                            }
+                        } catch {}
+                    } else if (ev.event_type === 'stage_finished' && ev.data_json) {
+                        try {
+                            const d = JSON.parse(ev.data_json);
+                            if (d.stage) {
+                                newProgress[d.stage] = { stage_id: d.stage, pct: 100, detail: `elapsed_ms=${d.elapsed_ms}` };
+                            }
+                        } catch {}
+                    }
+                }
+                
+                // Fallback: If we don't have stage_progress events (older runs), use stage_timings
+                if (Object.keys(newProgress).length === 0 && run.stage_timings) {
+                     for (const t of run.stage_timings) {
+                         newProgress[t.stage] = { stage_id: t.stage, pct: 100, detail: `elapsed_ms=${t.elapsed_ms}` };
+                     }
+                }
+                
+                progressMap = newProgress;
+            }
+            
         } catch (e: any) {
             error = e.message;
         } finally {
@@ -336,7 +368,7 @@
         </div>
     {/if}
 
-    {#if run.status === 'running' && Object.keys(progressMap).length > 0}
+    {#if Object.keys(progressMap).length > 0}
         <WaterfallChart {progressMap} />
     {/if}
 
