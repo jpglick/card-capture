@@ -1,10 +1,10 @@
 <script lang="ts">
-    import { onMount, onDestroy } from 'svelte';
+    import { onMount, onDestroy, tick } from 'svelte';
     import { page } from '$app/state';
     import { api } from '$lib/api/client';
     import type { RunDetail, RunResources, ResourceSample, StageMarker } from '$lib/api/types';
     import ResourceChart from '$lib/components/ResourceChart.svelte';
-    import WaterfallChart from '$lib/components/WaterfallChart.svelte';
+    import PipelineSparkline from '$lib/components/PipelineSparkline.svelte';
 
     const runId = page.params.run_id!;
     let run = $state<RunDetail | null>(null);
@@ -15,6 +15,13 @@
     let progressMap = $state<Record<string, { stage_id: string; pct: number; detail: string }>>({});
     let evtSource: EventSource | null = null;
     let pollTimer: ReturnType<typeof setInterval> | null = null;
+    let logBoxElement: HTMLElement | undefined = $state();
+
+    $effect(() => {
+        if (logBoxElement && (liveLines.length > 0 || run?.logs?.length)) {
+            logBoxElement.scrollTop = logBoxElement.scrollHeight;
+        }
+    });
 
     // Stage colors — shared between the legend and chart markers
     const STAGE_COLORS: Record<string, string> = {
@@ -379,11 +386,11 @@
     {/if}
 
     {#if Object.keys(progressMap).length > 0}
-        <WaterfallChart {progressMap} />
+        <PipelineSparkline {progressMap} />
     {/if}
 
     <h2>{run.status === 'running' ? 'Live log' : 'Run log'}</h2>
-    <div class="log-box">
+    <div class="log-box" bind:this={logBoxElement}>
         {#if run.status === 'running' && liveLines.length === 0}
             <span class="muted">Waiting for pipeline output…</span>
         {:else if run.status !== 'running' && liveLines.length === 0 && (!run.logs || run.logs.length === 0) && (!run.events || run.events.length === 0)}
@@ -482,9 +489,9 @@
         border-radius: 8px;
         font-family: monospace;
         font-size: 0.82rem;
-        min-height: 120px;
-        max-height: 480px;
+        height: 480px;
         overflow-y: auto;
+        scroll-behavior: smooth;
     }
 
     .log-line { padding: 1px 0; line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
