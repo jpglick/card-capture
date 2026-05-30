@@ -1,26 +1,50 @@
-"""Stage 1: Adaptive Presence Sampler.
+"""Stage 1: Adaptive Presence Sampler (streaming producer).
 
-The key V5.5 change: we open the input video ONCE and stash the open handle
-in state so detect/refine can reuse it.
+Starts a background decode thread (``FrameProducer``) so the ``detect`` stage can
+run inference while later frames are still decoding. Frames are NOT materialized
+here; ``detect`` drains the producer and fills ``state["sampled_frames"]``.
 """
 from __future__ import annotations
 
 from pathlib import Path
+
+import cv2
+
 from card_capture.sampler import StrideSampler
+from card_capture.sampler.frame_producer import FrameProducer
+
+
+def _estimate_selected_count(video_path: str, target_fps: float) -> int:
+    """Cheap header probe -> estimated kept-frame count (for detect progress)."""
+    cap = cv2.VideoCapture(video_path)
+    try:
+        if not cap.isOpened():
+            return 0
+        src_fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+        total = float(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0.0)
+    finally:
+        cap.release()
+    if src_fps <= 0 or total <= 0 or target_fps <= 0:
+        return 0
+    stride = max(1, round(src_fps / target_fps))
+    return int(total // stride)
 
 
 def run(state: dict, *, telemetry) -> None:
     request = state["request"]
     video_path = request.input_video.replace("artifact://local/", "")
     telemetry.resource_sample({"event": "decode_open", "path": video_path})
-    
-    # We use StrideSampler directly for now. In a full implementation, we'd
-    # select the backend based on request.config.
+
     sampler = StrideSampler(video_path=Path(video_path))
-    
-    # Consume the generator to get all frames
-    frames = list(sampler.sample())
-    
+    producer = FrameProducer(sampler).start()
+    # Block until the first frame is decoded so this stage's timing reflects
+    # decode startup; all remaining frames overlap the detect stage.
+    producer.wait_first(timeout=60.0)
+
     state["sampler"] = sampler
-    state["sampled_frames"] = frames  # list of FrameSample
     state["video_path"] = video_path
+    state["frame_producer"] = producer
+    state["sampled_frames"] = []  # filled by the detect stage as it drains
+    state["estimated_frame_total"] = _estimate_selected_count(
+        video_path, sampler.target_yolo_fps
+    )
