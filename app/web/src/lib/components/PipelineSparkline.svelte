@@ -1,6 +1,4 @@
 <script lang="ts">
-  // PipelineSparkline.svelte
-  
   interface StageData {
       stage_id: string;
       pct: number;
@@ -14,173 +12,133 @@
   } = $props();
 
   const ALL_STAGES = [
-    { id: 'sample', name: 'AdaptivePresenceSampler' },
-    { id: 'detect', name: 'Feature Extraction (YOLO)' },
-    { id: 'novelty', name: 'Background Novelty' },
-    { id: 'track', name: 'ByteTrack Integration' },
-    { id: 'refine', name: 'Entity Cropping & Warping' },
-    { id: 'score', name: 'Quality Scoring' },
-    { id: 'resolve', name: 'Session Aggregation' },
-    { id: 'fuse', name: 'Lighting-Diverse Fusion' },
-    { id: 'dedup', name: 'Global Deduplication' },
-    { id: 'store', name: 'Data Export & Store' },
+    { id: 'sample', name: 'Video Sampler', phase: 1 },
+    { id: 'detect', name: 'Object Det (YOLO)', phase: 1 },
+    { id: 'novelty', name: 'Novelty Gate', phase: 1 },
+    { id: 'track', name: 'ByteTrack', phase: 2 },
+    { id: 'refine', name: 'Entity Warping', phase: 2 },
+    { id: 'score', name: 'Quality Scorer', phase: 2 },
+    { id: 'resolve', name: 'F/B Resolver', phase: 2 },
+    { id: 'fuse', name: 'Image Fusion', phase: 3 },
+    { id: 'dedup', name: 'Deduplication', phase: 3 },
+    { id: 'store', name: 'Data Export', phase: 3 },
   ];
 
-  const stages = $derived(ALL_STAGES.map((s, index) => {
+  const stages = $derived(ALL_STAGES.map((s) => {
       const p = progressMap[s.id];
       let status = 'pending';
-      let detail = 'Waiting for upstream...';
       let pct = 0;
+      let detail = '';
       
       if (p) {
           pct = p.pct;
           detail = p.detail;
           status = pct >= 100 ? 'complete' : 'running';
       }
-      return { ...s, status, detail, pct, phase: Math.floor(index / 5) + 1 };
+      return { ...s, status, pct, detail };
   }));
-
-  let hoveredStage = $state<any>(null);
 
 </script>
 
-<div class="dashboard">
-  <header>
-    <h2>Pipeline Telemetry</h2>
-  </header>
-
-  <div class="sparkline-grid">
-    {#each stages as stage}
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div 
-        class="cell {stage.status}" 
-        onmouseenter={() => hoveredStage = stage}
-        onmouseleave={() => hoveredStage = null}
-      >
+<div class="sparkline-grid">
+  {#each stages as stage}
+    <div class="card status-{stage.status} phase-{stage.phase}">
+      <div class="phase-label">PHASE {stage.phase}</div>
+      <div class="title" title={stage.detail}>{stage.name}</div>
+      
+      {#if stage.status !== 'pending'}
+        <div class="progress-track">
+          <div class="progress-fill" style="width: {stage.pct}%"></div>
         </div>
-    {/each}
-  </div>
+      {/if}
 
-  <div class="tooltip-area">
-    {#if hoveredStage}
-      <div class="tooltip">
-        <h3>{hoveredStage.name}</h3>
-        <p><strong>Status:</strong> <span class="status-text {hoveredStage.status}">{hoveredStage.status} ({hoveredStage.pct}%)</span></p>
-        <p><strong>Detail:</strong> {hoveredStage.detail}</p>
-        <p><strong>Phase Group:</strong> {hoveredStage.phase}</p>
+      <div class="status-label">
+        {#if stage.status === 'complete'}
+          DONE
+        {:else if stage.status === 'running'}
+          RUNNING...
+        {:else}
+          PENDING
+        {/if}
       </div>
-    {:else}
-      <p class="placeholder">Hover over a grid cell to inspect pipeline span data.</p>
-    {/if}
-  </div>
+    </div>
+  {/each}
 </div>
 
 <style>
-  .dashboard {
-    font-family: system-ui, -apple-system, sans-serif;
-    max-width: 480px;
-    margin: 0;
-    padding: 1.5rem;
-    border-radius: 8px;
-    background: #1e1e2d;
-    color: #c9d1d9;
-    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-    margin-bottom: 1.5rem;
-  }
-
-  header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 1.5rem;
-  }
-
-  header h2 {
-    margin: 0;
-    font-size: 1.2rem;
-    color: #e6edf3;
-  }
-
-  /* Sparkline Grid Layout */
   .sparkline-grid {
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
     gap: 12px;
-    margin-bottom: 1.5rem;
+    margin-bottom: 2rem;
+    padding: 1rem 0;
   }
 
-  /* Base Cell Styling */
-  .cell {
-    aspect-ratio: 1;
-    border-radius: 6px;
-    background: #374151;
-    border: 1px solid #4b5563;
+  .card {
+    background-color: #1a1b1e;
+    border-radius: 8px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    min-height: 110px;
+    border: 1px solid transparent;
     transition: all 0.2s ease;
-    cursor: crosshair;
   }
 
-  .cell:hover {
-    transform: scale(1.1);
-    border-color: #9ca3af;
-  }
-
-  /* Status Animations */
-  .cell.pending {
-    background: transparent;
-  }
-
-  .cell.running {
-    background: #727cf5;
-    border-color: #9098f8;
-    animation: pulse 1.5s infinite;
-  }
-
-  .cell.complete {
-    background: #0acf97; /* Green fill */
-    border-color: #34d399;
-  }
-
-  @keyframes pulse {
-    0% { opacity: 0.6; }
-    50% { opacity: 1; box-shadow: 0 0 8px #727cf5; }
-    100% { opacity: 0.6; }
-  }
-
-  /* Tooltip Styling */
-  .tooltip-area {
-    min-height: 140px;
-    padding: 1rem;
-    background: #28283a;
-    border-radius: 6px;
-    border: 1px solid #37374a;
-  }
-
-  .tooltip h3 {
-    margin: 0 0 0.5rem 0;
-    font-size: 1.1rem;
-    color: #e6edf3;
-  }
-
-  .tooltip p {
-    margin: 0.35rem 0;
-    font-size: 0.85rem;
-    color: #9ca3af;
-  }
-
-  .status-text {
-    text-transform: capitalize;
-    font-weight: bold;
-  }
-
-  .status-text.running { color: #9098f8; }
-  .status-text.complete { color: #0acf97; }
-  .status-text.pending { color: #6b7280; }
+  /* Status Colors */
+  /* Phase 1: Blue */
+  .card.phase-1 .progress-fill { background-color: #7497d5; }
+  .card.phase-1.status-running { border-color: #7497d5; box-shadow: 0 0 8px rgba(116, 151, 213, 0.4); }
   
-  .placeholder {
-    color: #6b7280;
-    font-style: italic;
-    text-align: center;
-    margin-top: 1.5rem;
-    font-size: 0.85rem;
+  /* Phase 2: Green */
+  .card.phase-2 .progress-fill { background-color: #72b866; }
+  .card.phase-2.status-running { border-color: #72b866; box-shadow: 0 0 8px rgba(114, 184, 102, 0.4); }
+
+  /* Phase 3: Orange */
+  .card.phase-3 .progress-fill { background-color: #de8953; }
+  .card.phase-3.status-running { border-color: #de8953; box-shadow: 0 0 8px rgba(222, 137, 83, 0.4); }
+
+  /* Pending styling */
+  .card.status-pending {
+    opacity: 0.7;
+  }
+
+  .phase-label {
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 8px;
+  }
+
+  .title {
+    font-size: 1rem;
+    font-weight: 500;
+    color: #e0e0e0;
+    margin-bottom: 12px;
+  }
+
+  .progress-track {
+    height: 6px;
+    background-color: #333;
+    border-radius: 3px;
+    margin-top: auto;
+    margin-bottom: 12px;
+    overflow: hidden;
+  }
+
+  .progress-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.3s ease;
+  }
+
+  .status-label {
+    font-size: 0.75rem;
+    color: #999;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
   }
 </style>
