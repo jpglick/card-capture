@@ -24,18 +24,48 @@
     { id: 'store', name: 'Data Export', phase: 3 },
   ];
 
+  // Track exact timings from telemetry events
+  let stageStats: Record<string, { startTime: number, finished: boolean, durationMs: number }> = $state({});
+  let now = $state(Date.now());
+
+  $effect(() => {
+    const timer = setInterval(() => { now = Date.now(); }, 100);
+    return () => clearInterval(timer);
+  });
+
   const stages = $derived(ALL_STAGES.map((s) => {
       const p = progressMap[s.id];
       let status = 'pending';
       let pct = 0;
       let detail = '';
+      let elapsed = 0;
       
       if (p) {
           pct = p.pct;
           detail = p.detail;
           status = pct >= 100 ? 'complete' : 'running';
+          
+          if (status === 'running' && !stageStats[s.id]) {
+              stageStats[s.id] = { startTime: Date.now(), finished: false, durationMs: 0 };
+          }
+          
+          // Parse duration if available in detail (e.g., "elapsed_ms=1234")
+          const match = detail.match(/elapsed_ms=(\d+)/);
+          if (match) {
+              stageStats[s.id] = { 
+                  ...stageStats[s.id], 
+                  finished: true, 
+                  durationMs: parseInt(match[1]) 
+              };
+          }
+
+          if (stageStats[s.id]?.finished) {
+              elapsed = stageStats[s.id].durationMs / 1000;
+          } else if (stageStats[s.id]?.startTime) {
+              elapsed = (now - stageStats[s.id].startTime) / 1000;
+          }
       }
-      return { ...s, status, pct, detail };
+      return { ...s, status, pct, detail, elapsed };
   }));
 
 </script>
@@ -47,6 +77,7 @@
       <div class="title" title={stage.detail}>{stage.name}</div>
       
       {#if stage.status !== 'pending'}
+        <div class="timer">{stage.elapsed.toFixed(1)}s</div>
         <div class="progress-track">
           <div class="progress-fill" style="width: {stage.pct}%"></div>
         </div>
@@ -84,6 +115,7 @@
     min-height: 110px;
     border: 1px solid transparent;
     transition: all 0.2s ease;
+    position: relative;
   }
 
   /* Status Colors */
@@ -118,6 +150,15 @@
     font-weight: 500;
     color: #e0e0e0;
     margin-bottom: 12px;
+  }
+
+  .timer {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    font-size: 0.7rem;
+    font-family: monospace;
+    color: #aaa;
   }
 
   .progress-track {
