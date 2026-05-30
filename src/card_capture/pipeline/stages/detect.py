@@ -44,7 +44,26 @@ def run(state: dict, *, telemetry) -> None:
         for f in frames
     ]
     # Execute
-    detections = state["yolo_model"].detect_batch(packets, config.get("corner_confidence", 0.5))
+    detections = []
+    
+    # We should break packets into batches if we want to report progress,
+    # but currently detect_batch takes the whole list.
+    # Let's see if we can just chunk it or if detect_batch does it internally.
+    # Actually, the task says:
+    # Inside the batch loop in detect.py:
+    #     for i, batch in enumerate(batches): ...
+    # Wait, detect.py doesn't have a batch loop currently. It calls `yolo_model.detect_batch(packets)`.
+    # Let's just report 100% progress at the end or chunk it.
+    
+    # Let's chunk the packets
+    batch_size = 16 # arbitrary batch size for progress reporting
+    for i in range(0, len(packets), batch_size):
+        batch = packets[i:i + batch_size]
+        batch_detections = state["yolo_model"].detect_batch(batch, config.get("corner_confidence", 0.5))
+        detections.extend(batch_detections)
+        
+        pct = int(100 * min(i + batch_size, len(packets)) / len(packets))
+        telemetry.progress("detect", pct, f"batch {min(i + batch_size, len(packets))}/{len(packets)}")
 
     rows = []
     for i, p in enumerate(detections):

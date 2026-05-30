@@ -40,6 +40,7 @@ export interface ResourceSample {
     mem_pct: number | null;
     gpu_pct: number | null;
     vram_used_mb: number | null;
+    neural_pct?: number | null;
 }
 
 export interface StageMarker {

@@ -84,6 +84,9 @@ class EventBusTelemetry:
         self._log(line, level=logging.ERROR)
         self._bus.emit(self._run_id, Event(name="log", payload={"line": line}))
 
+    def progress(self, stage_id: str, pct: int, detail: str) -> None:
+        self._emit_progress(stage_id, pct=pct, detail=detail)
+
     # --- helpers ---
 
     def _emit_progress(self, stage: str, *, pct: int, detail: str) -> None:

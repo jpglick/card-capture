@@ -40,7 +40,7 @@ RUN_LOGS = (
 )
 RUN_RESOURCE_RANGE = "SELECT started_at, finished_at FROM pipeline_runs WHERE run_id = ?"
 RUN_RESOURCE_SAMPLES = (
-    "SELECT elapsed_s, cpu_pct, mem_used_mb, mem_pct, gpu_pct, vram_used_mb "
+    "SELECT elapsed_s, cpu_pct, mem_used_mb, mem_pct, gpu_pct, vram_used_mb, neural_pct "
     "FROM run_resource_samples WHERE run_id = ? ORDER BY elapsed_s"
 )
 RUN_STAGE_EVENTS = (

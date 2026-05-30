@@ -28,7 +28,8 @@ def run(state: dict, *, telemetry) -> None:
 
     from card_capture.fuser import MultiFrameFuser
 
-    for track in prepared_tracks:
+    total_tracks = len(prepared_tracks)
+    for i, track in enumerate(prepared_tracks):
         instance_id = track["instance_id"]
         frame_entries = track.get("frame_entries", [])
         canonical_entries = [fe for fe in frame_entries if fe.get("is_canonical")]
@@ -76,5 +77,8 @@ def run(state: dict, *, telemetry) -> None:
             "first_frame_index": int(track.get("first_frame_index", -1)),
             "reid_embedding": track.get("reid_embedding"),
         })
+
+        pct = int(100 * (i + 1) / total_tracks)
+        telemetry.progress("fuse", pct, f"track {i+1}/{total_tracks}")
 
     state["fused_canonicals"] = fused_canonicals
