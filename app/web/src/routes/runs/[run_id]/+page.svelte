@@ -59,10 +59,20 @@
                 }
                 
                 // Fallback: If we don't have stage_progress events (older runs), use stage_timings
-                if (Object.keys(newProgress).length === 0 && run.stage_timings) {
+                if (Object.keys(newProgress).length === 0 && run.stage_timings && run.stage_timings.length > 0) {
                      for (const t of run.stage_timings) {
                          newProgress[t.stage] = { stage_id: t.stage, pct: 100, detail: `elapsed_ms=${t.elapsed_ms}` };
                      }
+                }
+
+                // Fallback 2: If we don't have stage_timings either, parse the logs
+                if (Object.keys(newProgress).length === 0 && run.logs) {
+                    for (const line of run.logs) {
+                        const m = line.match(/\[stage\] (\w+) finished in (\d+)ms/);
+                        if (m) {
+                            newProgress[m[1]] = { stage_id: m[1], pct: 100, detail: `elapsed_ms=${m[2]}` };
+                        }
+                    }
                 }
                 
                 progressMap = newProgress;
