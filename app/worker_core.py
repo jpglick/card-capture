@@ -106,15 +106,20 @@ def run_pipeline(job_id: str, video_path: str, config_preset: str, output_dir: P
 
     telemetry = _WorkerCoreTelemetry(stage_cb)
     runtime = LocalPipelineRuntime(telemetry=telemetry)
+
+    from card_capture.config import load_config
+    config = load_config(Path(__file__).parent.parent / "card_capture_config.json")
+    request_config = config.to_request_config()
+    # RunPod path forces CUDA detector regardless of config file
+    request_config["detector"] = "cuda"
+    request_config["device"] = "cuda"
+
     request = PipelineRunRequest(
         run_id=job_id,
         input_video=f"artifact://local/{video_path}",
         output_root=f"artifact://local/{output_dir.resolve()}/",
-        # apply_cuda_config() flips detector/device in card_capture_config.json
-        # which the stages still read at construction time; this request stays
-        # strict_gpu so the runtime knows it's allowed to touch CUDA.
         runtime_mode="strict_gpu",
-        config={"detector": "cuda", "device": "cuda"},
+        config=request_config,
         db_path=str(db_path.resolve()),
         config_preset=config_preset,
     )

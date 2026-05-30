@@ -135,33 +135,16 @@ def _run_process(args: argparse.Namespace) -> int:
         "detector", "tracker_backend", "fast_scan_fps", "confirm_scan_fps",
         "valley_drop_ratio", "valley_min_width_frames", "delta_spike_ratio",
         "centroid_jump_ratio", "centroid_jump_frames", "reid_distance_threshold",
+        "presence_threshold",
     ):
         val = getattr(args, attr, None)
         if val is not None:
             setattr(config, attr, val)
 
-    presence_threshold = getattr(args, "presence_threshold", None) or config.presence_threshold
-    if config.detector == "fake":
-        detector = FakeCardDetector()
-        sampler = SyntheticSampler()
-    else:  # docaligner
-        device_status = probe_torch_device_status(config.device)
-        if not _confirm_cpu_fallback(device_status):
-            print("Cancelled before processing because GPU acceleration is unavailable.")
-            return 1
-        detector = CardcaptorUltralyticsDetector(
-            confidence_threshold=config.corner_confidence,
-            detection_width=config.detection_width,
-            device=config.device,
-        )
-        weights = Path("models/presence_classifier.pt")
-        sampler = AdaptivePresenceSampler(
-            video_path=args.video_path,
-            reader_backend=config.reader_backend,
-            device=config.device,
-            presence_weights_path=weights if weights.exists() else None,
-            presence_threshold=presence_threshold,
-        )
+    device_status = probe_torch_device_status(config.device)
+    if not _confirm_cpu_fallback(device_status):
+        print("Cancelled before processing because GPU acceleration is unavailable.")
+        return 1
 
     # Ensure video is registered in DB to get an ID for FK constraints
     import hashlib
@@ -180,19 +163,16 @@ def _run_process(args: argparse.Namespace) -> int:
     from card_capture.pipeline.telemetry import InMemoryTelemetry
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    runtime_mode = "strict_gpu" if config.device != "cpu" else "cpu_debug"
+    runtime_mode = "strict_gpu" if device_status.resolved != "cpu" else "cpu_debug"
     telemetry = InMemoryTelemetry()
     runtime = LocalPipelineRuntime(telemetry=telemetry)
+
     req = PipelineRunRequest(
         run_id=args.run_id or uuid.uuid4().hex[:12],
         input_video=f"artifact://local/{args.video_path.resolve()}",
         output_root=f"artifact://local/{args.output_dir.resolve()}/",
         runtime_mode=runtime_mode,
-        config={
-            "detector": config.detector,
-            "corner_confidence": config.corner_confidence,
-            "device": config.device,
-        },
+        config=config.to_request_config(),
         db_path=str(args.db.resolve()),
         video_id=video_id,
         config_preset=None,

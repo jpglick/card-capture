@@ -347,11 +347,13 @@ class BoTSORTAdapter:
             if isinstance(d, dict):
                 # Convert dict to ScoredCandidate if needed
                 from ..models import QualityScore, ScoredCandidate
+                # Use detection confidence if available, else novelty_score
+                total_score = float(d.get("confidence", d.get("novelty_score", 1.0)))
                 cand = ScoredCandidate(
                     detection_id=d.get("detection_id", str(uuid.uuid4())),
                     timestamp_ms=d.get("timestamp_ms", 0),
                     image_path=d.get("image_path", ""),
-                    score=QualityScore(total=d.get("novelty_score", 1.0), components={}),
+                    score=QualityScore(total=total_score, components={}),
                     corners=d.get("corners", []),
                     frame_index=d.get("frame_index", 0),
                 )

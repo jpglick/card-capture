@@ -105,6 +105,8 @@ class LocalPipelineRuntime:
             "video_id": request.video_id or 0,
             "config_preset": request.config_preset,
             "db_path": db_path,
+            # Phase 4 wiring — inject repositories and output_root Path
+            "output_root": Path(str(request.output_root).replace("artifact://local/", "")),
             "repos": {
                 "runs": RunsRepository(writer, db_path),
                 "events": EventsRepository(writer, db_path),
@@ -138,6 +140,6 @@ class LocalPipelineRuntime:
             cards=state.get("cards", []),
             stage_timings=timings,
             contract_violations=violations,
-            version="0.5.5+phase3",
+            version="0.5.5+phase4",
         )
         return PipelineRunResult(manifest=manifest)

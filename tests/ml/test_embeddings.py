@@ -16,11 +16,11 @@ def test_compute_reid_embedding_returns_float32_vector(monkeypatch):
     
     # Mock the DinoEmbedder class used by the helper
     mock_embedder_inst = MagicMock()
-    # Mock embed_image to return a deterministic tensor
+    # Mock embed_array to return a deterministic tensor
     def mock_embed(img):
         # vits14 returns 384-dim
         return torch.zeros((1, 384), dtype=torch.float32)
-    mock_embedder_inst.embed_image.side_effect = mock_embed
+    mock_embedder_inst.embed_array.side_effect = mock_embed
     mock_embedder_inst.variant = "vits14"
     
     monkeypatch.setattr("card_capture.ml.embeddings.DinoEmbedder", lambda **kwargs: mock_embedder_inst)
@@ -40,7 +40,7 @@ def test_compute_reid_embedding_is_deterministic(monkeypatch):
     from unittest.mock import MagicMock
     
     mock_embedder_inst = MagicMock()
-    mock_embedder_inst.embed_image.return_value = torch.ones((1, 384), dtype=torch.float32)
+    mock_embedder_inst.embed_array.return_value = torch.ones((1, 384), dtype=torch.float32)
     mock_embedder_inst.variant = "vits14"
     
     monkeypatch.setattr("card_capture.ml.embeddings.DinoEmbedder", lambda **kwargs: mock_embedder_inst)

@@ -87,6 +87,20 @@ def get_host_info() -> dict:
     return info
 
 
+def _parse_ane_pct(output: str) -> Optional[float]:
+    import re
+    # powermetrics often shows "ANE Power: X mW" or similar, but the exact string for utilization
+    # can vary. Often "ANE Power: X mW" and maybe some percentage if available.
+    # We look for something like "ANE Resampler: 25.5%" or similar per the test case,
+    # or "ANE Energy" etc. Let's just match "ANE.*?: \s*([\d\.]+)%"
+    match = re.search(r"ANE[^:]*:\s*([\d\.]+)%", output)
+    if match:
+        try:
+            return float(match.group(1))
+        except ValueError:
+            return None
+    return None
+
 class ResourceSampler:
     """Samples CPU/RAM/GPU every 2 seconds and writes to run_resource_samples."""
 
@@ -96,8 +110,22 @@ class ResourceSampler:
         self.run_id = run_id
         self.db_path = db_path
         self.start_time = start_time
+        self.current_stage: Optional[str] = None
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        
+    def _sample_ane(self) -> Optional[float]:
+        if platform.system() != "Darwin":
+            return None
+        try:
+            # Requires sudo, usually run best-effort
+            out = subprocess.check_output(
+                ["sudo", "-n", "powermetrics", "-i", "1", "--samplers", "ane_power", "-n", "1"],
+                text=True, timeout=2, stderr=subprocess.DEVNULL,
+            )
+            return _parse_ane_pct(out)
+        except Exception:
+            return None
 
     def start(self) -> None:
         self._thread = threading.Thread(
@@ -134,6 +162,7 @@ class ResourceSampler:
         decoder_pct: Optional[float] = None
         encoder_pct: Optional[float] = None
         mem_io_pct: Optional[float] = None
+        neural_pct: Optional[float] = self._sample_ane()
 
         try:
             import psutil
@@ -197,6 +226,7 @@ class ResourceSampler:
                     "decoder_pct": decoder_pct,
                     "encoder_pct": encoder_pct,
                     "mem_io_pct": mem_io_pct,
+                    "neural_pct": neural_pct,
                     "stage": self.current_stage,
                 }
                 insert_cols = [c for c in values if c in cols]
