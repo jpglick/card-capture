@@ -24,31 +24,10 @@ _PIPELINE_FIELDS = {
 
 _COMPUTE_FIELDS = {
     "pipeline_backend": str,
-    # Beam
-    "beam_api_key": str,
-    "beam_volume_id": str,
-    "beam_endpoint_id": str,
-    # RunPod
-    "runpod_api_key": str,
-    "runpod_endpoint_id": str,
-    # Cloudflare R2 (shared transfer storage for RunPod)
-    "r2_account_id": str,
-    "r2_bucket": str,
-    "r2_access_key_id": str,
-    "r2_secret_access_key": str,
 }
 
 _COMPUTE_DEFAULTS = {
     "pipeline_backend": "mps",
-    "beam_api_key": "",
-    "beam_volume_id": "",
-    "beam_endpoint_id": "",
-    "runpod_api_key": "",
-    "runpod_endpoint_id": "",
-    "r2_account_id": "",
-    "r2_bucket": "",
-    "r2_access_key_id": "",
-    "r2_secret_access_key": "",
 }
 
 from app.schemas.v1 import ConfigPlayground, ConfigPreset

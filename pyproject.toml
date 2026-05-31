@@ -45,12 +45,6 @@ app = [
   "httpx",
   "python-multipart",
 ]
-runpod = [
-  "runpod>=1.7.0",
-]
-beam = [
-  "beam-sdk>=0.8.0",
-]
 test = [
   "pytest",
   "pytest-asyncio",
