@@ -109,8 +109,8 @@ class ProcessingOptions:
     laplacian_scan_stride: int = 4
     max_corner_gap_frames: int = 15
     corner_refinement: bool = False
-    appearance_same_threshold: float = 0.15
-    appearance_change_threshold: float = 0.30
+    appearance_same_threshold: float = 0.12
+    appearance_change_threshold: float = 0.18
     appearance_confirm_frames: int = 3
     bridge_min_occurrences: int = 3
     bridge_position_ratio: float = 0.80

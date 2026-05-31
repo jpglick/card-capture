@@ -18,8 +18,8 @@ def test_to_request_config_includes_all_back_half_fields():
     assert d["laplacian_scan_stride"] == 4
     assert d["max_corner_gap_frames"] == 15
     assert d["corner_refinement"] is False
-    assert d["appearance_same_threshold"] == 0.15
-    assert d["appearance_change_threshold"] == 0.30
+    assert d["appearance_same_threshold"] == 0.12
+    assert d["appearance_change_threshold"] == 0.18
     assert d["appearance_confirm_frames"] == 3
     assert d["bridge_min_occurrences"] == 3
     assert d["bridge_position_ratio"] == 0.80
@@ -104,6 +104,6 @@ def test_to_options_maps_all_fields(tmp_path):
     # Verify a few others
     assert opts.track_confidence_floor == 0.0
     assert opts.stand_sharpness_max == 0.092
-    assert opts.appearance_same_threshold == 0.15
+    assert opts.appearance_same_threshold == 0.12
     assert opts.bridge_max_length_ratio == 0.75
 

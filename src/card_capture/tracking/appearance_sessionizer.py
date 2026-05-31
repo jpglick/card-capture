@@ -61,8 +61,8 @@ class AppearanceSessionizationResult:
 
 @dataclass
 class AppearanceSessionizer:
-    same_threshold: float = 0.15
-    change_threshold: float = 0.30
+    same_threshold: float = 0.12
+    change_threshold: float = 0.18
     confirm_frames: int = 3
     bridge_min_occurrences: int = 3
     bridge_position_ratio: float = 0.80

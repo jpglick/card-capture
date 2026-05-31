@@ -183,6 +183,27 @@ print(f"retained_presentations={len(result.retained_plateaus)}")
 print(f"suppressed_bridges={len(result.suppressed_plateaus)}")
 print(f"boundary_frames={result.boundary_frame_indices}")
 
+# Threshold sweep: the embeddings are already cached in `observations`, so this
+# is instant (no re-decode / re-embed). Find the (same, change, confirm) combo
+# that yields retained=26 (ground-truth card fronts) with ~18 bridges.
+print("\n--- THRESHOLD SWEEP (cached embeddings; target retained=26) ---")
+print(f"  {'same':>5} {'change':>6} {'confirm':>7} {'confirmed':>9} {'retained':>8} {'suppressed':>10}")
+for s in (0.12, 0.15):
+    for c in (0.16, 0.18, 0.20, 0.22, 0.25, 0.30):
+        if c <= s:
+            continue
+        for k in (2, 3):
+            r = AppearanceSessionizer(
+                same_threshold=s, change_threshold=c, confirm_frames=k
+            ).sessionize(observations)
+            ret = len(r.retained_plateaus)
+            sup = len(r.suppressed_plateaus)
+            mark = "  <== target" if ret == 26 else ""
+            print(
+                f"  {s:>5.2f} {c:>6.2f} {k:>7d} "
+                f"{ret + sup:>9d} {ret:>8d} {sup:>10d}{mark}"
+            )
+
 csv_path = OUT / "swap_signals.csv"
 with open(csv_path, "w", newline="") as f:
     cw = csv.writer(f)
