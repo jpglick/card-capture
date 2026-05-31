@@ -10,6 +10,7 @@ from typing import Literal
 
 import torch
 import torch.nn as nn
+import numpy as np
 from PIL import Image
 from torchvision import transforms
 
@@ -50,10 +51,12 @@ class DinoEmbedder:
         self.dim = 384 if variant == "vits14" else 768 if variant == "vitb14" else 1024 if variant == "vitl14" else 1536
 
     @torch.no_grad()
-    def embed_image(self, image: Image.Image | Path | str) -> torch.Tensor:
-        """Compute L2-normalized embedding for a single image."""
-        if isinstance(image, (str, Path)):
-            image = Image.open(image).convert("RGB")
+    def embed_array(self, image_array: np.ndarray | Image.Image) -> torch.Tensor:
+        """Compute L2-normalized embedding for a single numpy array (RGB) or PIL Image."""
+        if isinstance(image_array, np.ndarray):
+            image = Image.fromarray(image_array)
+        else:
+            image = image_array
 
         tensor = self.transform(image).unsqueeze(0).to(self.device)
         embedding = self.model(tensor)
@@ -61,6 +64,23 @@ class DinoEmbedder:
         # L2 Normalize for cosine similarity via inner product
         norm = embedding.norm(p=2, dim=1, keepdim=True)
         return embedding / norm
+
+    @torch.no_grad()
+    def embed_image(self, image: Image.Image | Path | str) -> torch.Tensor:
+        """Compute L2-normalized embedding for a single image."""
+        if isinstance(image, (str, Path)):
+            import cv2
+            image_array = cv2.imread(str(image))
+            if image_array is None:
+                raise FileNotFoundError(f"Could not read image at {image}")
+            image_array = cv2.cvtColor(image_array, cv2.COLOR_BGR2RGB)
+            return self.embed_array(image_array)
+
+        if isinstance(image, Image.Image):
+            return self.embed_array(np.array(image.convert("RGB")))
+        
+        # If it's already an array-like thing that self.transform can handle
+        return self.embed_array(image)
 
     @torch.no_grad()
     def embed_tensors_batch(self, tensors: torch.Tensor) -> torch.Tensor:

@@ -108,13 +108,28 @@ def test_package_results_includes_worker_database(tmp_path):
         assert "cards.sqlite" in tar.getnames()
 
 
-def test_parse_metaflow_start_stage_accepts_pid_format():
+def test_parse_metaflow_start_stage_is_legacy_noop():
+    """v5.5 removed Metaflow; the parser is kept as an import-compat shim
+    that always returns ``None``. Stage transitions now flow through the
+    ``stage_cb`` callback wired into the unified runtime's telemetry."""
     line = "2026-05-24 22:13:27.434 [1779660806748398/detect/2 (pid 1254)] Task is starting."
+    assert parse_metaflow_start_stage(line) is None
 
-    assert parse_metaflow_start_stage(line) == "detect"
 
+def test_run_pipeline_passes_full_config(tmp_path, monkeypatch):
+    from unittest.mock import patch, MagicMock
+    captured = {}
 
-def test_parse_metaflow_start_stage_accepts_legacy_format():
-    line = "2026-05-24 22:13:27.434 [1779660806748398/refine/5] Task is starting."
+    def fake_runtime_run(self, request):
+        captured["config"] = dict(request.config)
+        result = MagicMock()
+        result.manifest.contract_violations = []
+        return result
 
-    assert parse_metaflow_start_stage(line) == "refine"
+    from app.worker_core import run_pipeline
+    with patch("card_capture.pipeline.runtime_local.LocalPipelineRuntime.run",
+               new=fake_runtime_run):
+        run_pipeline("job-1", str(tmp_path / "v.mov"), "balanced", tmp_path)
+
+    assert captured["config"]["foil_threshold"] == 50.0
+    assert captured["config"]["use_fb_classifier"] is True

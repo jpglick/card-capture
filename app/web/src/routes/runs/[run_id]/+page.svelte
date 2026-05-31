@@ -1,9 +1,10 @@
 <script lang="ts">
-    import { onMount, onDestroy } from 'svelte';
+    import { onMount, onDestroy, tick } from 'svelte';
     import { page } from '$app/state';
     import { api } from '$lib/api/client';
     import type { RunDetail, RunResources, ResourceSample, StageMarker } from '$lib/api/types';
     import ResourceChart from '$lib/components/ResourceChart.svelte';
+    import PipelineSparkline from '$lib/components/PipelineSparkline.svelte';
 
     const runId = page.params.run_id!;
     let run = $state<RunDetail | null>(null);
@@ -14,6 +15,13 @@
     let progressMap = $state<Record<string, { stage_id: string; pct: number; detail: string }>>({});
     let evtSource: EventSource | null = null;
     let pollTimer: ReturnType<typeof setInterval> | null = null;
+    let logBoxElement: HTMLElement | undefined = $state();
+
+    $effect(() => {
+        if (logBoxElement && (liveLines.length > 0 || run?.logs?.length)) {
+            logBoxElement.scrollTop = logBoxElement.scrollHeight;
+        }
+    });
 
     // Stage colors — shared between the legend and chart markers
     const STAGE_COLORS: Record<string, string> = {
@@ -35,6 +43,48 @@
         try {
             loading = true;
             run = await api.runs.detail(runId);
+            
+            // Reconstruct progressMap from historical events if the run is finished
+            if (run && run.status !== 'running' && run.events) {
+                const newProgress: Record<string, { stage_id: string; pct: number; detail: string }> = {};
+                for (const ev of run.events) {
+                    if (ev.event_type === 'stage_progress' && ev.data_json) {
+                        try {
+                            const d = JSON.parse(ev.data_json);
+                            if (d.stage_id) {
+                                newProgress[d.stage_id] = d;
+                            }
+                        } catch {}
+                    } else if (ev.event_type === 'stage_finished' && ev.data_json) {
+                        try {
+                            const d = JSON.parse(ev.data_json);
+                            if (d.stage) {
+                                newProgress[d.stage] = { stage_id: d.stage, pct: 100, detail: `elapsed_ms=${d.elapsed_ms}` };
+                            }
+                        } catch {}
+                    }
+                }
+                
+                // Fallback: If we don't have stage_progress events (older runs), use stage_timings
+                if (Object.keys(newProgress).length === 0 && run.stage_timings && run.stage_timings.length > 0) {
+                     for (const t of run.stage_timings) {
+                         newProgress[t.stage] = { stage_id: t.stage, pct: 100, detail: `elapsed_ms=${t.elapsed_ms}` };
+                     }
+                }
+
+                // Fallback 2: If we don't have stage_timings either, parse the logs
+                if (Object.keys(newProgress).length === 0 && run.logs) {
+                    for (const line of run.logs) {
+                        const m = line.match(/\[stage\] (\w+) finished in (\d+)ms/);
+                        if (m) {
+                            newProgress[m[1]] = { stage_id: m[1], pct: 100, detail: `elapsed_ms=${m[2]}` };
+                        }
+                    }
+                }
+                
+                progressMap = newProgress;
+            }
+            
         } catch (e: any) {
             error = e.message;
         } finally {
@@ -131,9 +181,15 @@
             value: r.vram_used_mb != null && totalMb ? (r.vram_used_mb / totalMb) * 100 : null,
         }));
     });
+    
+    const neuralSamples = $derived.by(() => {
+        const s: ResourceSample[] = resources?.samples ?? [];
+        return s.map(r => ({ elapsed_s: r.elapsed_s, value: r.neural_pct ?? null }));
+    });
 
     const hasGpu = $derived.by(() => (resources?.samples ?? []).some((s: ResourceSample) => s.gpu_pct != null));
     const hasVram = $derived.by(() => (resources?.samples ?? []).some((s: ResourceSample) => s.vram_used_mb != null));
+    const hasNeural = $derived.by(() => (resources?.samples ?? []).some((s: ResourceSample) => s.neural_pct != null));
     const isUnified = $derived(resources?.host_info?.vram_is_unified ?? false);
     const knownStageNames = $derived([...new Set(stagesWithColor.map(s => s.name))]);
 </script>
@@ -317,30 +373,24 @@
                     noData={vramSamples.length === 0}
                 />
             {/if}
+            {#if hasNeural}
+                <ResourceChart
+                    samples={neuralSamples}
+                    stages={stagesWithColor}
+                    label="Neural Engine %"
+                    color="#8b5cf6"
+                    noData={neuralSamples.length === 0}
+                />
+            {/if}
         </div>
     {/if}
 
-    {#if run.status === 'running' && Object.keys(progressMap).length > 0}
-        <div class="multi-progress">
-            {#each Object.values(progressMap).sort((a, b) => a.stage_id.localeCompare(b.stage_id)) as p}
-                <div class="progress-container">
-                    <div class="progress-info">
-                        <span class="progress-stage">
-                            <strong>{p.stage_id.replace('.', ' ')}</strong>
-                        </span>
-                        <span class="progress-detail">{p.detail}</span>
-                        <span class="progress-pct">{p.pct}%</span>
-                    </div>
-                    <div class="progress-bar-bg">
-                        <div class="progress-bar-fill" style="width: {p.pct}%; background: {stageColor(p.stage_id.split('.')[0])}"></div>
-                    </div>
-                </div>
-            {/each}
-        </div>
+    {#if Object.keys(progressMap).length > 0}
+        <PipelineSparkline {progressMap} />
     {/if}
 
     <h2>{run.status === 'running' ? 'Live log' : 'Run log'}</h2>
-    <div class="log-box">
+    <div class="log-box" bind:this={logBoxElement}>
         {#if run.status === 'running' && liveLines.length === 0}
             <span class="muted">Waiting for pipeline output…</span>
         {:else if run.status !== 'running' && liveLines.length === 0 && (!run.logs || run.logs.length === 0) && (!run.events || run.events.length === 0)}
@@ -439,9 +489,9 @@
         border-radius: 8px;
         font-family: monospace;
         font-size: 0.82rem;
-        min-height: 120px;
-        max-height: 480px;
+        height: 480px;
         overflow-y: auto;
+        scroll-behavior: smooth;
     }
 
     .log-line { padding: 1px 0; line-height: 1.5; white-space: pre-wrap; word-break: break-all; }

@@ -21,6 +21,12 @@ class PipelineRunRequest:
     output_root: str            # artifact:// reference
     runtime_mode: RuntimeMode
     config: Mapping[str, Any] = dataclasses.field(default_factory=dict)
+    # Optional callers (UI, RunPod, training) pass these explicitly so the
+    # runtime doesn't have to infer SQLite location from output_root or guess
+    # a video_id for FK constraints. All fields stay JSON-serializable.
+    db_path: str | None = None
+    video_id: int | None = None
+    config_preset: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d = dataclasses.asdict(self)
@@ -35,6 +41,9 @@ class PipelineRunRequest:
             output_root=data["output_root"],
             runtime_mode=data["runtime_mode"],
             config=dict(data.get("config", {})),
+            db_path=data.get("db_path"),
+            video_id=data.get("video_id"),
+            config_preset=data.get("config_preset"),
         )
 
 

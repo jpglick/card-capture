@@ -264,7 +264,7 @@ class TrainingService:
             for run_id, video_id, cards_extracted in runs:
                 video_path = videos.get(video_id, "")
                 before = cards_extracted
-                after = self._rerun_video(video_path)
+                after = self._rerun_video(video_path, video_id)
                 video_name = Path(video_path).name
                 rows.append({
                     "video": video_name,
@@ -285,26 +285,46 @@ class TrainingService:
                 job.error = str(exc)
                 job.completed_at = datetime.now().isoformat()
 
-    def _rerun_video(self, video_path: str) -> int:
-        import subprocess, sys, uuid
+    def _rerun_video(self, video_path: str, video_id: int) -> int:
+        import uuid
         from pathlib import Path as _Path
+        from card_capture.pipeline.request import PipelineRunRequest
+        from card_capture.pipeline.runtime_local import LocalPipelineRuntime
+        from card_capture.pipeline.telemetry import NoopTelemetry
+
         run_id = f"benchmark-{uuid.uuid4().hex[:8]}"
         out_dir = _Path(self.db_path).parent / run_id
         out_dir.mkdir(parents=True, exist_ok=True)
-        cmd = [
-            sys.executable, "-m", "pipeline.card_capture_flow",
-            "--no-pylint", "run",
-            "--video", video_path,
-            "--output-dir", str(out_dir),
-            "--db", str(self.db_path),
-            "--detector", "docaligner",
-            "--config-preset", "balanced",
-            "--ui-run-id", run_id,
-        ]
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-        if proc.returncode != 0:
-            raise RuntimeError(f"Pipeline failed: {proc.stderr[-500:]}")
-        
+
+        # v5.5: Metaflow is gone — drive the unified runtime in-process.
+        # We use cpu_debug so this works on the local training host even
+        # without CUDA; trainers don't need GPU to score a benchmark rerun.
+        runtime = LocalPipelineRuntime(telemetry=NoopTelemetry())
+
+        from card_capture.config import load_config
+        config = load_config(_Path(__file__).parent.parent.parent / "card_capture_config.json")
+        request_config = config.to_request_config()
+        request_config["detector"] = "docaligner"
+
+        request = PipelineRunRequest(
+            run_id=run_id,
+            input_video=f"artifact://local/{_Path(video_path).resolve()}",
+            output_root=f"artifact://local/{out_dir.resolve()}/",
+            runtime_mode="cpu_debug",
+            config=request_config,
+            db_path=str(_Path(self.db_path).resolve()),
+            video_id=video_id,
+            config_preset="balanced",
+        )
+        try:
+            result = runtime.run(request)
+        except Exception as exc:
+            raise RuntimeError(f"Pipeline failed: {exc!r}") from exc
+        if result.manifest.contract_violations:
+            raise RuntimeError(
+                f"Pipeline contract violations: {result.manifest.contract_violations}"
+            )
+
         with read_connection(self.db_path) as conn:
             row = conn.execute(
                 TRAINING_RUN_CARDS_EXTRACTED, (run_id,)

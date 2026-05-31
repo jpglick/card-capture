@@ -34,19 +34,24 @@ class PipelineConfig:
     fast_scan_fps: float = 15.0
     confirm_scan_fps: float = 5.0
     target_yolo_fps: float = 3.0
-    novelty_floor: float = 0.30
-    track_confidence_floor: float = 0.0
-    stand_novelty_max: float = 0.065
-    stand_sharpness_max: float = 0.092
     opening_scan_s: float = 2.0
-    laplacian_scan_stride: int = 4
-    max_corner_gap_frames: int = 15
     valley_drop_ratio: float = 0.40
     valley_min_width_frames: int = 3
     delta_spike_ratio: float = 0.50
-    opening_scan_s: float = 2.0
-    laplacian_scan_stride: int = 4
-    max_corner_gap_frames: int = 15
+
+    # ------------------------------------------------------------------
+    # V5.5 back-half stage knobs (see docs/.../2026-05-29-v55-back-half-spec.md §4.8)
+    # ------------------------------------------------------------------
+    novelty_floor: float = 0.30
+    track_confidence_floor: float = 0.60
+    stand_novelty_max: float = 0.35
+    stand_sharpness_max: float = 0.30
+    foil_threshold: float = 50.0
+    enable_foil_aware_fusion: bool = True
+    use_fb_classifier: bool = True
+    laplacian_scan_stride: int = 5
+    max_corner_gap_frames: int = 30
+    corner_refinement: bool = False
     
     # Tracking
     tracker_backend: str = "bytetrack"
@@ -60,9 +65,6 @@ class PipelineConfig:
     rotate_180: bool = False
     reid_distance_threshold: float = 0.6
     fusion_target_frames: int = 1
-    foil_threshold: float = 50.0
-    enable_foil_aware_fusion: bool = True
-    corner_refinement: bool = False
     
     # Hardware Acceleration
     use_kornia: bool = True
@@ -71,6 +73,47 @@ class PipelineConfig:
     cuda_batch_size: int = 32
     
     debug: DebugConfig = field(default_factory=DebugConfig)
+
+    def to_request_config(self) -> dict:
+        """Return the subset of fields back-half stages consume via
+        `PipelineRunRequest.config`. Stays JSON-serializable so the
+        request can cross the runtime/transport boundary unchanged."""
+        return {
+            # Detector / device / detection
+            "detector": self.detector,
+            "device": self.device,
+            "corner_confidence": self.corner_confidence,
+            "detection_width": self.detection_width,
+            # Sampler
+            "presence_threshold": self.presence_threshold,
+            "fast_scan_fps": self.fast_scan_fps,
+            "confirm_scan_fps": self.confirm_scan_fps,
+            "valley_drop_ratio": self.valley_drop_ratio,
+            "valley_min_width_frames": self.valley_min_width_frames,
+            "delta_spike_ratio": self.delta_spike_ratio,
+            # Tracker
+            "tracker_backend": self.tracker_backend,
+            "min_track_length": self.min_track_length,
+            "centroid_jump_ratio": self.centroid_jump_ratio,
+            "centroid_jump_frames": self.centroid_jump_frames,
+            "reid_distance_threshold": self.reid_distance_threshold,
+            # Refine / fusion
+            "fusion_target_frames": self.fusion_target_frames,
+            "rotate_180": self.rotate_180,
+            "use_kornia": self.use_kornia,
+            "kornia_device": self.device,
+            # New back-half knobs
+            "novelty_floor": self.novelty_floor,
+            "track_confidence_floor": self.track_confidence_floor,
+            "stand_novelty_max": self.stand_novelty_max,
+            "stand_sharpness_max": self.stand_sharpness_max,
+            "foil_threshold": self.foil_threshold,
+            "enable_foil_aware_fusion": self.enable_foil_aware_fusion,
+            "use_fb_classifier": self.use_fb_classifier,
+            "laplacian_scan_stride": self.laplacian_scan_stride,
+            "max_corner_gap_frames": self.max_corner_gap_frames,
+            "corner_refinement": self.corner_refinement,
+        }
 
     def to_options(self, output_dir: Path) -> "card_capture.workers.ProcessingOptions":
         """Convert to legacy ProcessingOptions for the monolith path.

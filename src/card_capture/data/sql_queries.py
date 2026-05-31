@@ -40,7 +40,7 @@ RUN_LOGS = (
 )
 RUN_RESOURCE_RANGE = "SELECT started_at, finished_at FROM pipeline_runs WHERE run_id = ?"
 RUN_RESOURCE_SAMPLES = (
-    "SELECT elapsed_s, cpu_pct, mem_used_mb, mem_pct, gpu_pct, vram_used_mb "
+    "SELECT elapsed_s, cpu_pct, mem_used_mb, mem_pct, gpu_pct, vram_used_mb, neural_pct "
     "FROM run_resource_samples WHERE run_id = ? ORDER BY elapsed_s"
 )
 RUN_STAGE_EVENTS = (
@@ -631,3 +631,66 @@ HARNESS_DEDUP_CLUSTERS = "SELECT id, is_duplicate_of FROM card_instances"
 
 def harness_truth_files_with_video_filter(ph: str) -> str:
     return f"{HARNESS_TRUTH_FILES_BASE} WHERE video_id IN ({ph})"
+
+# ---------------------------------------------------------------------------
+# Phase 2 — Back-half stage writes (consumed by CardsRepository methods that
+# back the V5.5 store stage). Each constant mirrors a Storage method in
+# src/card_capture/storage.py and is kept here so import-linter's
+# no-sqlite3-outside-data contract stays green.
+# ---------------------------------------------------------------------------
+
+CARDS_ADD_INSTANCE = """
+INSERT INTO card_instances (video_id, track_id, angle, session_id,
+                            reid_embedding, run_id)
+VALUES (?, ?, ?, ?, ?, ?)
+"""
+
+CARDS_UPDATE_DEDUPLICATION = """
+UPDATE card_instances
+   SET visual_hash = ?,
+       is_duplicate_of = ?,
+       reid_embedding = COALESCE(?, reid_embedding)
+ WHERE id = ?
+"""
+
+CARDS_UPDATE_FUSION = """
+UPDATE card_instances
+   SET fused_image_path = ?
+ WHERE id = ?
+"""
+
+CARDS_ADD_VIEW = """
+INSERT INTO card_views (card_instance_id, frame_index, timestamp_ms,
+                        corners_json, confidence, rectified_path,
+                        quality_score_json, is_canonical,
+                        glare_x, glare_y, sharpness,
+                        glare_mask_b64, laplacian_heatmap_b64,
+                        initial_confidence, metadata_json)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
+
+CARDS_ADD_SAVED = """
+INSERT INTO saved_cards (detection_id, video_id, image_path, final_score,
+                         source_path, timestamp_ms, score_components_json)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+"""
+
+CARDS_ADD_TRACK_TELEMETRY = """
+INSERT INTO track_telemetry (video_id, track_id, frame_index,
+                              polygon_area, aspect_ratio, centroid_x, centroid_y)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+"""
+
+CARDS_ADD_PIPELINE_EVENT = """
+INSERT INTO pipeline_events (video_id, frame_index, timestamp_ms,
+                              event_type, data_json)
+VALUES (?, ?, ?, ?, ?)
+"""
+
+CARDS_FIND_EMBEDDINGS_EXCLUDING_VIDEO = """
+SELECT id, reid_embedding
+  FROM card_instances
+ WHERE reid_embedding IS NOT NULL
+   AND is_duplicate_of IS NULL
+   AND video_id != ?
+"""

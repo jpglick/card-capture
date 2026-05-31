@@ -47,19 +47,16 @@ class FBPredictor:
         return p.exists() and p.is_file()
 
     @torch.no_grad()
-    def predict(self, image: Union[np.ndarray, Image.Image, str, Path]) -> Tuple[str, float]:
-        """Predict if an image is the Front or Back of a card.
+    def predict_array(self, image_array: np.ndarray | Image.Image) -> Tuple[str, float]:
+        """Predict if a numpy array (RGB) or PIL Image is the Front or Back of a card.
         
         Returns:
             Tuple of (label, confidence) where label is "front" or "back".
         """
-        if isinstance(image, (str, Path)):
-            img = Image.open(image).convert("RGB")
-        elif isinstance(image, np.ndarray):
-            # Convert BGR to RGB
-            img = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+        if isinstance(image_array, np.ndarray):
+            img = Image.fromarray(image_array)
         else:
-            img = image.convert("RGB")
+            img = image_array.convert("RGB")
 
         tensor = self.transform(img).unsqueeze(0).to(self.device)
         logits = self.model(tensor)
@@ -69,3 +66,24 @@ class FBPredictor:
         label = "front" if idx.item() == 0 else "back"
         
         return label, float(conf.item())
+
+    @torch.no_grad()
+    def predict(self, image: Union[np.ndarray, Image.Image, str, Path]) -> Tuple[str, float]:
+        """Predict if an image is the Front or Back of a card.
+        
+        Returns:
+            Tuple of (label, confidence) where label is "front" or "back".
+        """
+        if isinstance(image, (str, Path)):
+            img_array = cv2.imread(str(image))
+            if img_array is None:
+                raise FileNotFoundError(f"Could not read image at {image}")
+            img_array = cv2.cvtColor(img_array, cv2.COLOR_BGR2RGB)
+            return self.predict_array(img_array)
+        elif isinstance(image, np.ndarray):
+            # Existing behavior: assume BGR for raw numpy arrays
+            img_array = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            return self.predict_array(img_array)
+        else:
+            # Assume PIL Image
+            return self.predict_array(image)

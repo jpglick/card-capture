@@ -3,13 +3,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import subprocess
-import sys
 import time
 from pathlib import Path
 from typing import Optional, Type
 
-from app.worker_core import parse_metaflow_start_stage
 from card_capture.data.connection import open_connection
 from card_capture.data.sql_queries import (
     PIPELINE_RUN_COUNT_CARDS,
@@ -22,34 +19,9 @@ from card_capture.data.sql_queries import (
 _REPO_ROOT = str(Path(__file__).parent.parent.parent)
 logger = logging.getLogger(__name__)
 
-# macOS objc runtime prints duplicate-dylib warnings when cv2 and av both ship
-# libavdevice. They're harmless noise — filter before logging or persisting.
-_NOISE_SUBSTRINGS = (
-    "objc[",
-    "implemented in both",
-    "One of the duplicates must be removed",
-    "This may cause spurious casting failures",
-)
-
-
-import re
-
-def _is_noise(line: str) -> bool:
-    return any(s in line for s in _NOISE_SUBSTRINGS)
-
-def _parse_progress(line: str) -> Optional[dict]:
-    # Expected format: [progress] detect.decoder 42% detail: Processing frame 600/1420
-    match = re.search(r"\[progress\]\s+([\w.]+)\s+(\d+)%\s+detail:\s+(.*)", line)
-    if match:
-        return {
-            "stage_id": match.group(1),
-            "pct": int(match.group(2)),
-            "detail": match.group(3)
-        }
-    return None
-
 from app.services.event_bus import Event, EventBus
 from app.services import _event_bus_registry
+from app.services.pipeline_telemetry import EventBusTelemetry
 
 
 class PipelineRunner:
@@ -108,66 +80,22 @@ class PipelineRunner:
             print(f"[{run_id}] pipeline starting — video={video}", flush=True)
 
             if self.flow_cls is not None:
+                # Tests inject a fake flow_cls; keep that hook intact.
                 self.flow_cls(
                     run_id=run_id, bus=self.bus, video=video,
                     output_dir=output_dir, db=db,
                     detector=detector, config_preset=config_preset,
                 )
             else:
-                env = os.environ.copy()
-                src_path = os.path.join(_REPO_ROOT, "src")
-                env["PYTHONPATH"] = src_path + ":" + _REPO_ROOT + (":" + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
-                # Use absolute db path so the subprocess always finds it
-                abs_db = str(Path(db).resolve())
-                abs_video = str(Path(video).resolve())
-                abs_output = str((Path(_REPO_ROOT) / output_dir).resolve())
-                cmd = [
-                    sys.executable, "-m", "pipeline.card_capture_flow",
-                    "--no-pylint", "run",
-                    "--max-num-splits", "500",
-                    "--video", abs_video,
-                    "--output-dir", abs_output,
-                    "--db", abs_db,
-                    "--detector", detector,
-                    "--config-preset", config_preset,
-                    "--ui-run-id", run_id,
-                ]
-                print(f"[{run_id}] running: {' '.join(cmd)}", flush=True)
-
-                start_time = time.time()
-                sampler = None
-                if self.db_path:
-                    from app.services.resource_sampler import ResourceSampler
-                    sampler = ResourceSampler(run_id, self.db_path, time.monotonic())
-                    sampler.start()
-                try:
-                    proc = subprocess.Popen(
-                        cmd, env=env, cwd=_REPO_ROOT,
-                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                        text=True, bufsize=1,
-                    )
-                    for line in proc.stdout:
-                        line = line.rstrip()
-                        if line and not _is_noise(line):
-                            print(f"[{run_id}] {line}", flush=True)
-                            self.bus.emit(run_id, Event(name="log", payload={"line": line}))
-                            self._persist_log(run_id, line)
-                            
-                            progress = _parse_progress(line)
-                            if progress:
-                                self.bus.emit(run_id, Event(name="stage_progress", payload=progress))
-
-                            if sampler is not None:
-                                stage = parse_metaflow_start_stage(line)
-                                if stage:
-                                    sampler.current_stage = stage
-                    proc.wait()
-                finally:
-                    if sampler is not None:
-                        sampler.stop()
-
-                if proc.returncode != 0:
-                    raise RuntimeError(f"Pipeline exited with code {proc.returncode}")
+                self._run_unified_inprocess(
+                    run_id=run_id,
+                    video_id=video_id,
+                    video=video,
+                    output_dir=output_dir,
+                    db=db,
+                    detector=detector,
+                    config_preset=config_preset,
+                )
 
             print(f"[{run_id}] pipeline completed", flush=True)
             self.bus.emit(run_id, Event(name="run_completed"))
@@ -185,6 +113,89 @@ class PipelineRunner:
             _event_bus_registry.clear(run_id)
             os.environ.pop("EVENT_BUS_RUN_ID", None)
             os.environ.pop("EVENT_BUS_INPROC", None)
+
+    def _run_unified_inprocess(
+        self,
+        *,
+        run_id: str,
+        video_id: int,
+        video: str,
+        output_dir: str,
+        db: str,
+        detector: str,
+        config_preset: str,
+    ) -> None:
+        """Drive the v5.5 in-process unified runtime.
+
+        Replaces the deleted ``pipeline.card_capture_flow`` subprocess. Stage
+        events are reported via ``EventBusTelemetry`` so the UI's SSE stream
+        keeps receiving log + stage_progress events. The resource sampler
+        still runs alongside for per-stage CPU/GPU samples.
+        """
+        from card_capture.pipeline.request import PipelineRunRequest
+        from card_capture.pipeline.runtime_local import LocalPipelineRuntime
+
+        abs_db = str(Path(db).resolve())
+        abs_video = str(Path(video).resolve())
+        abs_output = str((Path(_REPO_ROOT) / output_dir).resolve())
+        Path(abs_output).mkdir(parents=True, exist_ok=True)
+
+        telemetry = EventBusTelemetry(
+            self.bus,
+            run_id,
+            log_sink=lambda line: self._persist_log(run_id, line),
+        )
+
+        # Resource sampler is keyed by stage. We can't watch metaflow log
+        # lines anymore, so wrap the telemetry so stage_started flips the
+        # sampler's current_stage at the same instant we tell the UI.
+        sampler = None
+        if self.db_path:
+            from app.services.resource_sampler import ResourceSampler
+            sampler = ResourceSampler(run_id, self.db_path, time.monotonic())
+            sampler.start()
+            _original_stage_started = telemetry.stage_started
+
+            def _stage_started_with_sampler(stage, metadata):
+                sampler.current_stage = stage
+                _original_stage_started(stage, metadata)
+
+            telemetry.stage_started = _stage_started_with_sampler  # type: ignore[method-assign]
+
+        # Merge full PipelineConfig defaults so back-half stages read knobs
+        # like novelty_floor / foil_threshold from request.config. Caller
+        # overrides win (detector arg, etc.).
+        from card_capture.config import load_config
+        config = load_config(Path(_REPO_ROOT) / "card_capture_config.json")
+        request_config = config.to_request_config()
+        request_config["detector"] = detector
+
+        runtime = LocalPipelineRuntime(telemetry=telemetry)
+        request = PipelineRunRequest(
+            run_id=run_id,
+            input_video=f"artifact://local/{abs_video}",
+            output_root=f"artifact://local/{abs_output}/",
+            runtime_mode="cpu_debug",  # strict_gpu requires CUDA; UI host is Mac
+            config=request_config,
+            db_path=abs_db,
+            video_id=video_id,
+            config_preset=config_preset,
+        )
+
+        banner = f"running unified pipeline: video={abs_video} db={abs_db}"
+        print(f"[{run_id}] {banner}", flush=True)
+        self.bus.emit(run_id, Event(name="log", payload={"line": banner}))
+        self._persist_log(run_id, banner)
+
+        try:
+            result = runtime.run(request)
+        finally:
+            if sampler is not None:
+                sampler.stop()
+
+        violations = result.manifest.contract_violations
+        if violations:
+            raise RuntimeError(f"Pipeline contract violations: {violations}")
 
     def _record_run_start(self, run_id: str, video_id: int) -> None:
         if not self.db_path:

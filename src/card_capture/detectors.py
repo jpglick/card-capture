@@ -67,21 +67,32 @@ class FakeCornerDetector:
 
 
 class FakeCardDetector(CardDetector):
-    """Dummy detector that finds a card in the center of every frame."""
+    """Dummy detector that finds two cards in static positions matching the synthetic fixture."""
 
     def __init__(self, confidence_threshold: float = 0.25):
         self.confidence_threshold = confidence_threshold
 
-    def detect(self, frame: FrameSample) -> List[CardDetection]:
-        h, w = frame.image.shape[:2]
+    def _get_static_detections(self, w: int, h: int, frame_index: int, timestamp_ms: int) -> List[CardDetection]:
+        # Card A: (120, 80) w=210, h=300
+        # Card B: (220, 100) w=210, h=300
         return [
             CardDetection(
-                frame_index=frame.frame_index,
-                timestamp_ms=frame.timestamp_ms,
-                polygon=((w // 4, h // 4), (3 * w // 4, h // 4), (3 * w // 4, 3 * h // 4), (w // 4, 3 * h // 4)),
+                frame_index=frame_index,
+                timestamp_ms=timestamp_ms,
+                polygon=((120, 80), (330, 80), (330, 380), (120, 380)),
                 confidence=0.95,
-            )
+            ),
+            CardDetection(
+                frame_index=frame_index,
+                timestamp_ms=timestamp_ms,
+                polygon=((220, 100), (430, 100), (430, 400), (220, 400)),
+                confidence=0.95,
+            ),
         ]
+
+    def detect(self, frame: FrameSample) -> List[CardDetection]:
+        h, w = frame.image.shape[:2]
+        return self._get_static_detections(w, h, frame.frame_index, frame.timestamp_ms)
 
     def detect_batch(
         self,
@@ -90,10 +101,20 @@ class FakeCardDetector(CardDetector):
         tensor_input: Optional["torch.Tensor"] = None,
     ) -> list[DetectionPacket]:
         results = []
+        # Mimic n_frames=120 logic from conftest.py
+        # But we don't know total frames here. We'll use a heuristic.
         for f in frames:
             h, w = f.height, f.width
+            
+            # conftest.py: 4 seconds @ 30fps = 120 frames.
+            # Card A is 0-59, Card B is 60-119.
+            if f.frame_index < 60:
+                corners = ((120, 80), (330, 80), (330, 380), (120, 380))
+            else:
+                corners = ((220, 100), (430, 100), (430, 400), (220, 400))
+
             cd = CornerDetection(
-                corners=((w // 4, h // 4), (3 * w // 4, h // 4), (3 * w // 4, 3 * h // 4), (w // 4, 3 * h // 4)),
+                corners=corners,
                 confidence=0.95,
             )
             results.append(

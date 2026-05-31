@@ -222,20 +222,23 @@ class VideoSampler:
 
     @staticmethod
     def _open_pyav_container(video_path: Path):
-        """Open a PyAV container, preferring VideoToolbox hw-decode on macOS."""
+        """Open a PyAV container with the software decoder.
+
+        We previously passed ``options={"hwaccel": "videotoolbox"}`` here, but
+        ``av.open`` options are demuxer (AVFormatContext) options — ``hwaccel`` is
+        an ffmpeg-CLI concept, not a libav option key, so it was silently ignored
+        and we ran software decode anyway while logging a false "videotoolbox".
+        On Apple Silicon the multithreaded software HEVC decoder can outperform
+        single-stream VideoToolbox, so software is correct here.
+        Returns ``(container, hw_active=False)``.
+        """
         import av
-        if platform.system() == "Darwin":
-            try:
-                container = av.open(str(video_path), options={"hwaccel": "videotoolbox"})
-                return container, True
-            except Exception:
-                pass
         return av.open(str(video_path)), False
 
     def _sample_with_pyav(self, video_path: Path, sample_fps: float, pixel_format: str = "bgr24") -> Iterator[FrameSample]:
         import av
         container, hw = self._open_pyav_container(video_path)
-        print(f"[sampler] pyav decoder={'videotoolbox' if hw else 'software'} format={pixel_format}", flush=True)
+        print(f"[sampler] pyav decoder=software format={pixel_format}", flush=True)
         try:
             video_stream = next(
                 (s for s in container.streams if s.type == "video"), None

@@ -103,6 +103,11 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 
 ## Known Weaknesses (v5.5)
 
-- In-process telemetry coverage in `UnifiedRuntime` is incomplete (TODOs in code).
-- F/B classifier fallback uses longest-track heuristic (classifier needs training update).
-- Eager warping in worker thread uses CPU fallback if Kornia is not strictly enforced.
+- F/B classifier fallback uses longest-track heuristic when the classifier is unavailable (resolve stage gracefully degrades; classifier weights are an optional artifact).
+- Eager warping uses CPU fallback (`PrecisionNormalizer`) if Kornia construction fails for the requested device.
+- In-memory peak (~180 MB for the reference video) scales with concurrent active tracks; mitigation (selective spill between refine/score) is a tracked follow-up.
+
+## Recent baseline
+
+V5.5 back-half wired and verified against IMG_5872.MOV — see
+[docs/superpowers/plans/v5-5/back-half-baseline.md](docs/superpowers/plans/v5-5/back-half-baseline.md).
