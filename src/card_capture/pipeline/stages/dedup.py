@@ -12,7 +12,7 @@ from typing import Any, Dict, List
 from card_capture.pipeline.stage_metrics import emit_stage_metrics
 
 
-SAME_CARD_EMB_THRESHOLD = 0.15  # DINOv2 cosine distance, identical to V4
+SAME_CARD_EMB_THRESHOLD = 0.17  # DINOv2 cosine distance, identical to V4
 SAME_CARD_HAMMING_MAX = 8       # pHash fallback, identical to V4
 
 

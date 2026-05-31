@@ -186,7 +186,7 @@ class BoTSORTAdapter:
             track_buffer=lost_track_buffer,
             match_thresh=minimum_matching_threshold,
             cmc_method=None,  # Disable camera motion compensation (assumes static camera setup)
-            appearance_thresh=SAME_CARD_EMB_THRESHOLD,
+            appearance_thresh=0.60,
             with_reid=True,
             # The pipeline applies min_track_length after sessionization; keep
             # BoT-SORT from hiding short but valid sessions before that gate.
@@ -216,7 +216,7 @@ class BoTSORTAdapter:
             track_buffer=self._lost_track_buffer,
             match_thresh=self._minimum_matching_threshold,
             cmc_method=None,  # Disable camera motion compensation (assumes static camera setup)
-            appearance_thresh=SAME_CARD_EMB_THRESHOLD,
+            appearance_thresh=0.60,
             with_reid=True,
             # The pipeline applies min_track_length after sessionization; keep
             # BoT-SORT from hiding short but valid sessions before that gate.
@@ -433,7 +433,31 @@ class BoTSORTAdapter:
     def finalize(self) -> List[TrackState]:
         """Return all tracks (current + previously reset) above min length."""
         all_tracks = list(self._tracks.values()) + list(self._all_finalized)
-        return [t for t in all_tracks if len(t.candidates) >= self.min_track_length]
+        
+        # Merge tracks with the same session_id. AppearanceSessionizer is the
+        # ultimate authority on session boundaries; if BoTSORT fragmented a track
+        # due to proximity/IoU loss within a stable appearance plateau, we heal it here.
+        session_to_track: dict[int, TrackState] = {}
+        for t in all_tracks:
+            sid = getattr(t, "session_id", None)
+            if sid is None:
+                # If no session_id (e.g. from tests), just keep it distinct
+                session_to_track[id(t)] = t
+                continue
+            
+            if sid not in session_to_track:
+                session_to_track[sid] = t
+            else:
+                existing = session_to_track[sid]
+                existing.candidates.extend(t.candidates)
+                existing.candidates.sort(key=lambda c: c.frame_index)
+                if getattr(t, "last_frame_index", 0) > getattr(existing, "last_frame_index", 0):
+                    existing.last_frame_index = t.last_frame_index
+                if getattr(t, "reid_embedding", None) is not None:
+                    existing.reid_embedding = getattr(t, "reid_embedding", None)
+
+        merged_tracks = list(session_to_track.values())
+        return [t for t in merged_tracks if len(t.candidates) >= self.min_track_length]
 
     def assign(
         self,

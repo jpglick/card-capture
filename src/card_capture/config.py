@@ -61,8 +61,8 @@ class PipelineConfig:
     centroid_jump_ratio: float = 0.30
     centroid_jump_frames: int = 3
     # Tuned on IMG_5922 (26 fronts / 18 holder bridges) via scripts/diag_swap_signals.py.
-    appearance_same_threshold: float = 0.12
-    appearance_change_threshold: float = 0.18
+    appearance_same_threshold: float = 0.16
+    appearance_change_threshold: float = 0.16
     appearance_confirm_frames: int = 3
     bridge_min_occurrences: int = 3
     bridge_position_ratio: float = 0.80

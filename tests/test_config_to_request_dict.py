@@ -18,8 +18,8 @@ def test_to_request_config_includes_all_back_half_fields():
     assert d["laplacian_scan_stride"] == 4
     assert d["max_corner_gap_frames"] == 15
     assert d["corner_refinement"] is False
-    assert d["appearance_same_threshold"] == 0.12
-    assert d["appearance_change_threshold"] == 0.18
+    assert d["appearance_same_threshold"] == 0.16
+    assert d["appearance_change_threshold"] == 0.16
     assert d["appearance_confirm_frames"] == 3
     assert d["bridge_min_occurrences"] == 3
     assert d["bridge_position_ratio"] == 0.80
