@@ -43,27 +43,34 @@ class PipelineConfig:
     # V5.5 back-half stage knobs (see docs/.../2026-05-29-v55-back-half-spec.md §4.8)
     # ------------------------------------------------------------------
     novelty_floor: float = 0.30
-    track_confidence_floor: float = 0.60
-    stand_novelty_max: float = 0.35
-    stand_sharpness_max: float = 0.30
+    track_confidence_floor: float = 0.0
+    stand_novelty_max: float = 0.065
+    stand_sharpness_max: float = 0.092
     foil_threshold: float = 50.0
     enable_foil_aware_fusion: bool = True
     use_fb_classifier: bool = True
-    laplacian_scan_stride: int = 5
-    max_corner_gap_frames: int = 30
+    laplacian_scan_stride: int = 4
+    max_corner_gap_frames: int = 15
     corner_refinement: bool = False
     
     # Tracking
-    tracker_backend: str = "bytetrack"
+    tracker_backend: str = "botsort"
     group_gap_ms: int = 300
     spatial_variance_threshold: float = 300.0  # Consolidating to monolith's 300
     min_track_length: int = 3
     centroid_jump_ratio: float = 0.30
     centroid_jump_frames: int = 3
+    appearance_same_threshold: float = 0.15
+    appearance_change_threshold: float = 0.30
+    appearance_confirm_frames: int = 3
+    bridge_min_occurrences: int = 3
+    bridge_position_ratio: float = 0.80
+    bridge_neighbor_change_ratio: float = 0.80
+    bridge_novelty_margin: float = 0.05
+    bridge_max_length_ratio: float = 0.75
     
     # Post-Processing
     rotate_180: bool = False
-    reid_distance_threshold: float = 0.6
     fusion_target_frames: int = 1
     
     # Hardware Acceleration
@@ -96,7 +103,14 @@ class PipelineConfig:
             "min_track_length": self.min_track_length,
             "centroid_jump_ratio": self.centroid_jump_ratio,
             "centroid_jump_frames": self.centroid_jump_frames,
-            "reid_distance_threshold": self.reid_distance_threshold,
+            "appearance_same_threshold": self.appearance_same_threshold,
+            "appearance_change_threshold": self.appearance_change_threshold,
+            "appearance_confirm_frames": self.appearance_confirm_frames,
+            "bridge_min_occurrences": self.bridge_min_occurrences,
+            "bridge_position_ratio": self.bridge_position_ratio,
+            "bridge_neighbor_change_ratio": self.bridge_neighbor_change_ratio,
+            "bridge_novelty_margin": self.bridge_novelty_margin,
+            "bridge_max_length_ratio": self.bridge_max_length_ratio,
             # Refine / fusion
             "fusion_target_frames": self.fusion_target_frames,
             "rotate_180": self.rotate_180,

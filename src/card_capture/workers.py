@@ -99,6 +99,24 @@ class ProcessingOptions:
     centroid_jump_frames: int = 3
     foil_threshold: float = 50.0
     enable_foil_aware_fusion: bool = True
+    
+    # Appearance sessionization & back-half
+    novelty_floor: float = 0.30
+    track_confidence_floor: float = 0.0
+    stand_novelty_max: float = 0.065
+    stand_sharpness_max: float = 0.092
+    use_fb_classifier: bool = True
+    laplacian_scan_stride: int = 4
+    max_corner_gap_frames: int = 15
+    corner_refinement: bool = False
+    appearance_same_threshold: float = 0.15
+    appearance_change_threshold: float = 0.30
+    appearance_confirm_frames: int = 3
+    bridge_min_occurrences: int = 3
+    bridge_position_ratio: float = 0.80
+    bridge_neighbor_change_ratio: float = 0.80
+    bridge_novelty_margin: float = 0.05
+    bridge_max_length_ratio: float = 0.75
 
 
 # ---------------------------------------------------------------------------

@@ -40,7 +40,6 @@ def build_parser() -> argparse.ArgumentParser:
     process.add_argument("--delta-spike-ratio", type=float, default=None, dest="delta_spike_ratio")
     process.add_argument("--centroid-jump-ratio", type=float, default=None, dest="centroid_jump_ratio")
     process.add_argument("--centroid-jump-frames", type=int, default=None, dest="centroid_jump_frames")
-    process.add_argument("--reid-distance-threshold", type=float, default=None, dest="reid_distance_threshold")
     process.add_argument(
         "--pipeline",
         choices=["unified"],
@@ -134,7 +133,7 @@ def _run_process(args: argparse.Namespace) -> int:
     for attr in (
         "detector", "tracker_backend", "fast_scan_fps", "confirm_scan_fps",
         "valley_drop_ratio", "valley_min_width_frames", "delta_spike_ratio",
-        "centroid_jump_ratio", "centroid_jump_frames", "reid_distance_threshold",
+        "centroid_jump_ratio", "centroid_jump_frames",
         "presence_threshold",
     ):
         val = getattr(args, attr, None)

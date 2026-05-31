@@ -162,3 +162,41 @@ def test_store_marks_run_completed_with_card_count(tmp_path):
     store_stage.run(state, telemetry=MagicMock())
     runs_repo = state["repos"]["runs"]
     runs_repo.mark_completed.assert_called_once_with("r1", cards_extracted=1)
+
+
+def test_store_intra_run_duplicates_both_written_to_db(tmp_path):
+    request = MagicMock()
+    request.config = {}
+    request.run_id = "r1"
+    repo = _StubRepo()
+    state = {
+        "request": request,
+        "video_id": 42,
+        "output_root": tmp_path,
+        "fused_canonicals": [_fused("physical-a"), _fused("physical-b")],
+        "prepared_tracks": [_prepared("physical-a"), _prepared("physical-b")],
+        "dedup_groups": [{
+            "canonical_instance_id": "physical-a",
+            "duplicate_instance_ids": ["physical-b"],
+            "hamming_distances": {},
+            "embedding_distances": {"physical-b": 0.01},
+            "cross_video_parent_id": None,
+        }],
+        "repos": {"cards": repo, "runs": MagicMock()},
+    }
+    store_stage.run(state, telemetry=MagicMock())
+    
+    # We expect BOTH physical instances to be in the database
+    assert len(repo.added_instances) == 2
+    track_ids = [kw["track_id"] for _, kw in repo.added_instances]
+    assert "physical-a" in track_ids
+    assert "physical-b" in track_ids
+    
+    # physical-b should have a parent_id set to physical-a's DB row id
+    # physical-a row_id was the first one added
+    parent_row_id = repo.added_instances[0][0] 
+    
+    # Find physical-b's update (the one with a parent)
+    b_update = [u for u in repo.dedup_updates if u.get("cross_video_parent") == parent_row_id][0]
+    # In store.py: cards_repo.update_instance_deduplication(..., cross_video_parent=canonical_row_id)
+    # Note: store.py uses 'cross_video_parent' parameter name for intra-run parent too.

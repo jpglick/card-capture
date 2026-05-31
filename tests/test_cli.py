@@ -232,7 +232,6 @@ def test_cli_process_accepts_new_segmentation_flags():
         "--delta-spike-ratio", "0.6",
         "--centroid-jump-ratio", "0.3",
         "--centroid-jump-frames", "3",
-        "--reid-distance-threshold", "0.6",
     ])
     assert args.tracker_backend == "botsort"
     assert args.fast_scan_fps == 15.0
@@ -242,7 +241,6 @@ def test_cli_process_accepts_new_segmentation_flags():
     assert args.delta_spike_ratio == 0.6
     assert args.centroid_jump_ratio == 0.3
     assert args.centroid_jump_frames == 3
-    assert args.reid_distance_threshold == 0.6
 
 
 def test_cli_process_tracker_backend_choices():
@@ -255,7 +253,7 @@ def test_cli_process_tracker_backend_choices():
 def test_pipeline_config_has_new_fields():
     from card_capture.config import PipelineConfig
     cfg = PipelineConfig()
-    assert cfg.tracker_backend == "bytetrack"
+    assert cfg.tracker_backend == "botsort"
     assert cfg.centroid_jump_ratio == 0.30
 
     assert cfg.confirm_scan_fps == 5.0
@@ -264,7 +262,6 @@ def test_pipeline_config_has_new_fields():
     assert cfg.delta_spike_ratio == 0.50
     assert cfg.centroid_jump_ratio == 0.30
     assert cfg.centroid_jump_frames == 3
-    assert cfg.reid_distance_threshold == 0.6
 
 
 def test_sampler_sessions_diagnostic_output_contains_valley_splits(capsys, tmp_path):

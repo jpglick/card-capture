@@ -71,8 +71,8 @@ class CentroidJumpDetector:
 
         threshold = self.jump_ratio * frame_width
         jumped = any(
-            abs(cx - hx) > threshold
-            for hx, _hy in self._history
+            abs(cx - hx) > threshold or abs(cy - hy) > threshold
+            for hx, hy in self._history
         )
 
         self._history.append(centroid)
