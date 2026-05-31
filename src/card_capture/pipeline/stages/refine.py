@@ -197,17 +197,21 @@ def run(state: dict, *, telemetry) -> None:
         best_canonical_img = best["normalized"]
 
         # ReID embedding (v5.5: array variant, no temp file)
-        reid_embedding: Optional[List[float]] = None
-        embedder = _get_embedder()
-        if embedder is not None:
-            try:
-                emb_tensor = embedder.embed_array(best_canonical_img)
-                reid_embedding = emb_tensor.cpu().numpy().tolist()[0]
-            except Exception as exc:
-                telemetry.resource_sample(
-                    {"event": "reid_embedding_failed",
-                     "instance_id": instance_id, "error": repr(exc)}
-                )
+        reid_embedding: Optional[List[float]] = track_dict.get("reid_embedding")
+        if reid_embedding is not None and isinstance(reid_embedding, np.ndarray):
+            reid_embedding = reid_embedding.tolist()
+            
+        if reid_embedding is None:
+            embedder = _get_embedder()
+            if embedder is not None:
+                try:
+                    emb_tensor = embedder.embed_array(best_canonical_img)
+                    reid_embedding = emb_tensor.cpu().numpy().tolist()[0]
+                except Exception as exc:
+                    telemetry.resource_sample(
+                        {"event": "reid_embedding_failed",
+                         "instance_id": instance_id, "error": repr(exc)}
+                    )
 
         # Track telemetry — per canonical entry. Repo is injected into
         # state by the runtime; tests can stub via state["repos"]["cards"].

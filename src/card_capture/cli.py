@@ -121,6 +121,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
 
 def _run_process(args: argparse.Namespace) -> int:
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    args.db.parent.mkdir(parents=True, exist_ok=True)
+
+    from migrations.run_migrations import apply_migrations
+    apply_migrations(args.db)
+
     storage = Storage(args.db)
     storage.initialize()
 

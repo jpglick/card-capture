@@ -36,7 +36,7 @@ class RuntimeWorker:
             raise RuntimeError("RuntimeWorker is not running")
         result: _Result[T] = _Result()
         self._work_queue.put((func, args, kwargs, result))
-        return result.get()
+        return result.get(timeout=600.0)  # 10 minute absolute maximum
 
     def _run(self) -> None:
         while True:
@@ -49,8 +49,8 @@ class RuntimeWorker:
             try:
                 val = func(*args, **kwargs)
                 result.set_value(val)
-            except Exception as e:
-                result.set_exception(e)
+            except BaseException as e:
+                result.set_exception(e if isinstance(e, Exception) else RuntimeError(f"BaseException: {e}"))
             finally:
                 self._work_queue.task_done()
 
@@ -69,8 +69,9 @@ class _Result:
         self._exception = exception
         self._event.set()
 
-    def get(self) -> Any:
-        self._event.wait()
+    def get(self, timeout: float | None = None) -> Any:
+        if not self._event.wait(timeout=timeout):
+            raise TimeoutError("RuntimeWorker._Result.get() timed out")
         if self._exception:
             raise self._exception
         return self._value

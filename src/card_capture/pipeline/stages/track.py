@@ -82,6 +82,7 @@ def run(state: dict, *, telemetry) -> None:
             "session_id": int(getattr(ts, "session_id", 0) or 0),
             "first_frame_index": int(getattr(ts, "first_frame_index", -1) or -1),
             "candidates": candidates,
+            "reid_embedding": getattr(ts, "reid_embedding", None),
         })
     state["tracks_data"] = tracks_data
     metrics = {"tracks_final": len(track_states), "tracks_data": len(tracks_data)}
