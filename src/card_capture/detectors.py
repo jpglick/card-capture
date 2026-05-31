@@ -317,24 +317,6 @@ class CardcaptorUltralyticsDetector(CardDetector):
         self._device = self._resolve_device()
         model_path = _resolve_model_path(self.repo_id, self.filename)
 
-        # TensorRT fast path (CUDA only)
-        if self._device == "cuda":
-            import os
-            engine_path = os.path.splitext(model_path)[0] + ".engine"
-            try:
-                if not os.path.exists(engine_path):
-                    exporter = YOLO(model_path, task="obb")
-                    out = exporter.export(format="engine", half=True, dynamic=True,
-                                          imgsz=self.detection_width, device=0, verbose=False,
-                                          task="obb")
-                    engine_path = str(out) if out else engine_path
-                self._model = YOLO(engine_path, task="obb")
-                print(f"[detector] backend=tensorrt engine={engine_path}", flush=True)
-                self._half = True
-                return self._model
-            except Exception as e:
-                print(f"[detector] TensorRT unavailable ({e}); falling back to .pt FP16", flush=True)
-
         # CoreML fast path (Apple Silicon only)
         if self._device == "mps" and platform.system() == "Darwin" and platform.machine() == "arm64":
             import os
@@ -357,12 +339,6 @@ class CardcaptorUltralyticsDetector(CardDetector):
         self._model = YOLO(model_path, task="obb")
         self._model.to(self._device)
         self._half = False
-        if self._device == "cuda":
-            try:
-                self._model.half()
-                self._half = True
-            except Exception:
-                pass
         print(f"[detector] backend={self._device} half={self._half}", flush=True)
         return self._model
 

@@ -72,9 +72,7 @@ pythonpath = ["src", "."]
 asyncio_mode = "auto"
 markers = [
   "quarantine: known-broken test, must reference an issue and disposition; excluded from default CI lane",
-  "cuda: requires NVIDIA CUDA hardware",
   "mps: requires Apple Silicon MPS",
-  "provider: requires external provider credentials",
   "benchmark: real-video performance benchmark",
   "slow: takes >5s; excluded from fast PR lane",
 ]
