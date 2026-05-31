@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
+from card_capture.pipeline.stage_metrics import emit_stage_metrics
+
 
 def run(state: dict, *, telemetry) -> None:
     config = state["request"].config
@@ -82,3 +84,4 @@ def run(state: dict, *, telemetry) -> None:
         telemetry.progress("fuse", pct, f"track {i+1}/{total_tracks}")
 
     state["fused_canonicals"] = fused_canonicals
+    emit_stage_metrics(state, stage="fuse", metrics={"fused_canonicals": len(fused_canonicals)})

@@ -18,6 +18,8 @@ from typing import Any, Dict, List
 
 import numpy as np
 
+from card_capture.pipeline.stage_metrics import emit_stage_metrics
+
 
 def _novelty_gate_useful(scores: list) -> bool:
     """Mirrors V4 _novelty_gate_useful: ≥5 detections, std > 0.15, min < 0.35."""
@@ -105,3 +107,8 @@ def run(state: dict, *, telemetry) -> None:
 
     state["scored_tracks"] = scored_tracks
     state["pruned_instance_ids"] = pruned_instance_ids
+    emit_stage_metrics(
+        state,
+        stage="score",
+        metrics={"scored_tracks": len(scored_tracks), "pruned_tracks": len(pruned_instance_ids)},
+    )

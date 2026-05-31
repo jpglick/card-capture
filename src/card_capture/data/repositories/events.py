@@ -61,6 +61,24 @@ class EventsRepository:
             data=data,
         )
 
+    def record_stage_metrics(
+        self,
+        *,
+        run_id: str,
+        video_id: int | None,
+        stage: str,
+        metrics: Mapping[str, object],
+    ) -> None:
+        self.record(
+            run_id=run_id,
+            video_id=video_id,
+            stage_id=stage,
+            frame_index=0,
+            timestamp_ms=0,
+            event_type="stage_metrics",
+            data=dict(metrics),
+        )
+
     def list_for_run(self, run_id: str) -> list[dict]:
         with read_connection(self._db_path) as conn:
             rows = conn.execute(

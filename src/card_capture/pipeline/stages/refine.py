@@ -22,6 +22,7 @@ from card_capture.deduplicator import VisualDeduplicator
 from card_capture.fuser import find_glare_centroid
 from card_capture.gpu_refinement import KorniaNormalizer
 from card_capture.models import FrameSample
+from card_capture.pipeline.stage_metrics import emit_stage_metrics
 from card_capture.pipeline_utils import (
     _compress_array,
     _glare_mask,
@@ -35,7 +36,7 @@ from card_capture.selector import ScoredCandidate
 _EMBEDDER_SINGLETON: object = None
 
 
-def _get_embedder():
+def get_shared_embedder():
     """Return a DinoEmbedder singleton, or None if weights are missing.
 
     Cached at module scope so we don't reload the model per pipeline run."""
@@ -48,6 +49,11 @@ def _get_embedder():
     except Exception:
         _EMBEDDER_SINGLETON = None
     return _EMBEDDER_SINGLETON
+
+
+def _get_embedder():
+    # Backwards-compatible alias for existing tests/patches.
+    return get_shared_embedder()
 
 
 def _frame_index_lookup(frames) -> Dict[int, np.ndarray]:
@@ -245,3 +251,4 @@ def run(state: dict, *, telemetry) -> None:
         telemetry.progress("refine", pct, f"track {i+1}/{total_tracks}")
 
     state["refined_tracks"] = refined_tracks
+    emit_stage_metrics(state, stage="refine", metrics={"refined_tracks": len(refined_tracks)})

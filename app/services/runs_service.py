@@ -126,6 +126,7 @@ class RunService:
 
             # Stage markers from pipeline_events (if table exists)
             stage_markers = []
+            stage_metrics: dict[str, dict[str, float | int]] = {}
             if started:
                 try:
                     from datetime import datetime
@@ -143,6 +144,16 @@ class RunService:
                                 })
                             except Exception:
                                 pass
+                        if ev[1] == "stage_metrics" and ev[0] and ev[3]:
+                            try:
+                                parsed = json.loads(ev[3])
+                            except Exception:
+                                parsed = {}
+                            if isinstance(parsed, dict):
+                                stage_metrics[str(ev[0])] = {
+                                    str(k): v for k, v in parsed.items()
+                                    if isinstance(v, (int, float))
+                                }
                 except Exception:
                     pass
 
@@ -161,4 +172,5 @@ class RunService:
                     for s in samples
                 ],
                 "stage_markers": stage_markers,
+                "stage_metrics": stage_metrics,
             }

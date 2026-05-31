@@ -65,6 +65,7 @@ export interface RunResources {
     host_info: HostInfo | null;
     samples: ResourceSample[];
     stage_markers: StageMarker[];
+    stage_metrics?: Record<string, Record<string, number>>;
 }
 
 export interface DetectTelemetry {
