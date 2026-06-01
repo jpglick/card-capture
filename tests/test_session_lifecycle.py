@@ -2,7 +2,7 @@ import pytest
 import unittest
 from unittest.mock import MagicMock
 from pathlib import Path
-from card_capture.storage import Storage
+from card_capture.stages.store.storage import Storage
 from card_capture.stages.detect.detectors import CardDetector
 import numpy as np
 

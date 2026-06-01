@@ -77,7 +77,7 @@ def test_cli_run_process_passes_full_config(tmp_path, monkeypatch):
         setattr(args, f, None)
 
     # Storage.initialize and add_video need to succeed
-    with patch("card_capture.storage.Storage") as MockStorage, \
+    with patch("card_capture.stages.store.storage.Storage") as MockStorage, \
          patch("card_capture.pipeline.runtime_local.LocalPipelineRuntime.run",
                new=fake_runtime_run):
         MockStorage.return_value.add_video.return_value = 1

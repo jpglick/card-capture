@@ -60,7 +60,7 @@ def run_pipeline_for_video(
     if rc != 0:
         raise RuntimeError(f"pipeline returned non-zero exit code {rc} for {video_path}")
 
-    from card_capture.storage import Storage
+    from card_capture.stages.store.storage import Storage
     import json as _json
 
     storage = Storage(db_path)

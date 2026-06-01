@@ -39,7 +39,7 @@ def create_app(db_path: Optional[Path] = None) -> FastAPI:
         open_connection(db_path).close()
 
     # 1. Initialise storage tables (creates pipeline_events, card_instances, etc. if needed)
-    from card_capture.storage import Storage
+    from card_capture.stages.store.storage import Storage
     storage = Storage(db_path)
     storage.initialize()
 

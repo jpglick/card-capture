@@ -17,7 +17,7 @@ from card_capture.data.sql_queries import (
     REVIEW_VIDEOS_LIST,
     REVIEW_VIDEO_SOURCE_BY_ID,
 )
-from .storage import Storage
+from card_capture.stages.store.storage import Storage
 
 def create_app(db_path: Path):
     try:

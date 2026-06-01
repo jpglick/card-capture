@@ -1,6 +1,6 @@
 import pytest
 from pathlib import Path
-from card_capture.storage import Storage
+from card_capture.stages.store.storage import Storage
 
 def test_storage_fusion_columns(tmp_path: Path):
     storage = Storage(tmp_path / "cards.sqlite")

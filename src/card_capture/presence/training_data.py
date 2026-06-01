@@ -66,7 +66,7 @@ def export_dataset(
 
     Returns (positive_count, negative_count).
     """
-    from card_capture.storage import Storage
+    from card_capture.stages.store.storage import Storage
     storage = Storage(db_path)
     storage.initialize()
     out_pos = out_dir / "positives"

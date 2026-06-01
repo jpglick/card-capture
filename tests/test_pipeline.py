@@ -19,7 +19,7 @@ from card_capture.core.workers import (
     _put_with_retry,
 )
 from card_capture.stages.dedup.deduplicator import VisualDeduplicator
-from card_capture.storage import Storage
+from card_capture.stages.store.storage import Storage
 
 
 class FakeSampler:
@@ -813,7 +813,7 @@ class SingleDetectionDetector:
 def test_pipeline_integrates_novelty_score(tmp_path):
     """Pipeline must compute novelty and store it in card_views quality_score_json."""
     from card_capture.shared.pipeline_utils import VideoProcessor, ProcessingOptions
-    from card_capture.storage import Storage
+    from card_capture.stages.store.storage import Storage
     import cv2
     import json
 

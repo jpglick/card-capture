@@ -14,7 +14,7 @@ from typing import Optional, Sequence
 
 from card_capture.stages.detect.detectors import CardcaptorUltralyticsDetector, FakeCardDetector, probe_torch_device_status
 from card_capture.stages.sample.sampler import AdaptivePresenceSampler
-from .storage import Storage
+from card_capture.stages.store.storage import Storage
 from card_capture.core.config import load_config, save_config
 
 def build_parser() -> argparse.ArgumentParser:

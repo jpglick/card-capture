@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from card_capture.core.models import CornerDetection
-from card_capture.storage import Storage
+from card_capture.stages.store.storage import Storage
 
 
 def test_storage_v21_records_instance_view_and_evidence(tmp_path: Path):

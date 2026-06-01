@@ -260,7 +260,7 @@ class PipelineRunner:
         if not self.db_path:
             return
         try:
-            from card_capture.storage import Storage
+            from card_capture.stages.store.storage import Storage
             Storage(self.db_path).update_video_status(video_id, status)
         except Exception as exc:
             logger.warning("Could not update video %s status to %s: %s", video_id, status, exc)
