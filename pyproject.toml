@@ -108,4 +108,4 @@ allowed_export_helpers = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-card_capture = ["templates/*.html"]
+card_capture = ["review/templates/*.html"]
