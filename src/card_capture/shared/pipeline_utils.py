@@ -2,7 +2,7 @@
 
 These functions were previously part of the retired pipeline.py monolith.
 They live here so individual step modules can import them without depending
-on the worker subsystem (card_capture.workers).
+on the worker subsystem (card_capture.core.workers).
 """
 from __future__ import annotations
 
