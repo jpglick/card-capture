@@ -122,7 +122,7 @@ def report_robustness_metrics(
         - multi_card_survival: recall in multi-card scenes
         - foil_survival: recall for foil/holo cards
     """
-    from card_capture.metrics.robustness_pack import RobustnessMetrics
+    from harness.metrics.robustness_pack import RobustnessMetrics
 
     metrics = RobustnessMetrics(
         matched=matched,
