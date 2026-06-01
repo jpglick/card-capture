@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from card_capture.pipeline.stage_metrics import emit_stage_metrics
+from card_capture.shared.stage_metrics import emit_stage_metrics
 
 
 SAME_CARD_EMB_THRESHOLD = 0.17  # DINOv2 cosine distance, identical to V4

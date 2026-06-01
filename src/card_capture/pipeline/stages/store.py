@@ -12,7 +12,7 @@ from typing import Any, Dict, List
 import cv2
 import numpy as np
 
-from card_capture.pipeline.stage_metrics import emit_stage_metrics
+from card_capture.shared.stage_metrics import emit_stage_metrics
 
 
 def run(state: dict, *, telemetry) -> None:

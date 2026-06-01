@@ -22,8 +22,8 @@ from card_capture.deduplicator import VisualDeduplicator
 from card_capture.fuser import find_glare_centroid
 from card_capture.gpu_refinement import KorniaNormalizer
 from card_capture.core.models import FrameSample
-from card_capture.pipeline.stage_metrics import emit_stage_metrics
-from card_capture.pipeline_utils import (
+from card_capture.shared.stage_metrics import emit_stage_metrics
+from card_capture.shared.pipeline_utils import (
     _compress_array,
     _glare_mask,
     _laplacian_heatmap,

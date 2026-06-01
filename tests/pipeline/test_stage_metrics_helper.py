@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from card_capture.pipeline.stage_metrics import emit_stage_metrics
+from card_capture.shared.stage_metrics import emit_stage_metrics
 
 
 class _EventsRepo:

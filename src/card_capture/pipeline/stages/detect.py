@@ -12,7 +12,7 @@ from card_capture.detectors import (
     probe_torch_device_status,
 )
 from card_capture.core.models import FramePacket
-from card_capture.pipeline.stage_metrics import emit_stage_metrics
+from card_capture.shared.stage_metrics import emit_stage_metrics
 
 
 def run(state: dict, *, telemetry) -> None:

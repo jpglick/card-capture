@@ -18,7 +18,7 @@ import torch
 # _open_capture is imported at module level so it can be monkeypatched in tests.
 # _laplacian_select_frames references this name.
 try:
-    from .ingestion import _open_capture
+    from card_capture.ingestion import _open_capture
 except Exception:  # pragma: no cover — only fails in incomplete test environments
     _open_capture = None  # type: ignore[assignment]
 
@@ -73,7 +73,7 @@ def _laplacian_variance_batch(images: List[Union[np.ndarray, "torch.Tensor"]]) -
         return []
 
     try:
-        from .detectors import probe_torch_device_status
+        from card_capture.detectors import probe_torch_device_status
         resolved_device = probe_torch_device_status("auto").resolved
         if resolved_device == "cpu":
             raise RuntimeError("no acceleration")

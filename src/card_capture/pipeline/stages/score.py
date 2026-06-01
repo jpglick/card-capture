@@ -18,7 +18,7 @@ from typing import Any, Dict, List
 
 import numpy as np
 
-from card_capture.pipeline.stage_metrics import emit_stage_metrics
+from card_capture.shared.stage_metrics import emit_stage_metrics
 
 
 def _novelty_gate_useful(scores: list) -> bool:

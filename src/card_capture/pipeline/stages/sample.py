@@ -10,7 +10,7 @@ from pathlib import Path
 
 import cv2
 
-from card_capture.pipeline.stage_metrics import emit_stage_metrics
+from card_capture.shared.stage_metrics import emit_stage_metrics
 from card_capture.sampler import StrideSampler
 from card_capture.sampler.frame_producer import FrameProducer
 

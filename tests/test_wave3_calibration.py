@@ -120,7 +120,7 @@ class TestCrossVideoDedup:
         - pHash match (Hamming ≤ 22) → candidates
         - Embeddings available and similar (distance < 0.5) → confirm same card
         """
-        from card_capture.pipeline_utils import _is_reid_duplicate
+        from card_capture.shared.pipeline_utils import _is_reid_duplicate
         from card_capture.deduplicator import VisualDeduplicator
 
         deduplicator = VisualDeduplicator()
@@ -161,7 +161,7 @@ class TestCrossVideoDedup:
         - pHash collision (could match) → candidates
         - Embeddings available but dissimilar (distance > 0.5) → NOT same card
         """
-        from card_capture.pipeline_utils import _is_reid_duplicate
+        from card_capture.shared.pipeline_utils import _is_reid_duplicate
         from card_capture.deduplicator import VisualDeduplicator
 
         deduplicator = VisualDeduplicator()
@@ -454,7 +454,7 @@ class TestAdaptiveThresholds:
         and later through _prune_empty_workspace_tracks (reads threshold but does NOT collect).
         Verify len(context.observed_novelty_scores) == N (not 2N).
         """
-        from card_capture.pipeline_utils import (
+        from card_capture.shared.pipeline_utils import (
             PipelineContext,
             _filter_candidates_by_novelty,
             _prune_empty_workspace_tracks,

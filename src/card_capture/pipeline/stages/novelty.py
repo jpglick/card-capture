@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 
 from card_capture.presence.background_novelty import BackgroundModel, quad_novelty
-from card_capture.pipeline.stage_metrics import emit_stage_metrics
+from card_capture.shared.stage_metrics import emit_stage_metrics
 
 
 def run(state: dict, *, telemetry) -> None:

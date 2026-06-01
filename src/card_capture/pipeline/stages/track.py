@@ -7,7 +7,7 @@ can consume the richer per-candidate dicts the V4 refine step expects.
 """
 from __future__ import annotations
 
-from card_capture.pipeline.stage_metrics import emit_stage_metrics
+from card_capture.shared.stage_metrics import emit_stage_metrics
 from card_capture.tracking.botsort_adapter import BoTSORTAdapter
 from card_capture.tracking.bytetrack_adapter import ByteTrackAdapter
 

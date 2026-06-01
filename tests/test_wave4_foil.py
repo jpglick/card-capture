@@ -238,7 +238,7 @@ def test_fused_canonical_persisted_for_best_only():
     3. During storage writing, fused_canonical is used for best_canonical
     4. Other canonical entries use raw normalized frames
     """
-    from card_capture.pipeline_utils import _PreparedTrack
+    from card_capture.shared.pipeline_utils import _PreparedTrack
 
     # Create mock canonical entries with different detection IDs
     candidate1 = Mock(detection_id=101)
@@ -302,7 +302,7 @@ def test_fused_canonical_none_fallback_behavior():
     The fallback at line 719 ensures fused_canonical is never None in practice,
     but the type annotation is Optional. This test documents the contract.
     """
-    from card_capture.pipeline_utils import _PreparedTrack
+    from card_capture.shared.pipeline_utils import _PreparedTrack
 
     # Create minimal mock objects
     candidate = Mock(detection_id=101)
@@ -342,7 +342,7 @@ def test_fused_canonical_write_conditional_behavior():
     - Other entries use entry["normalized"]
     """
     from unittest.mock import patch, call
-    from card_capture.pipeline_utils import _PreparedTrack
+    from card_capture.shared.pipeline_utils import _PreparedTrack
 
     # Create mock candidates with different detection IDs
     candidate1 = Mock(detection_id=101)

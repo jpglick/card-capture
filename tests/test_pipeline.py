@@ -7,7 +7,7 @@ import pytest
 from queue import Empty, Full
 
 from card_capture.core.models import CardDetection, CornerDetection, DetectionPacket, FramePacket, FrameSample, QualityScore, ScoredCandidate, TrackState
-from card_capture.pipeline_utils import (
+from card_capture.shared.pipeline_utils import (
     _appearance_vector,
     _side_textiness_score,
     _select_canonical_entries,
@@ -446,7 +446,7 @@ def test_adaptive_hamming_threshold_flips_dedup_decision(tmp_path):
     where H > 22 but fits within the clipping range, OR we pre-populate the
     context to raise the threshold high enough.
     """
-    from card_capture.pipeline_utils import PipelineContext, _side_textiness_score, _appearance_vector
+    from card_capture.shared.pipeline_utils import PipelineContext, _side_textiness_score, _appearance_vector
     import cv2
 
     deduplicator = VisualDeduplicator()
@@ -656,7 +656,7 @@ def test_pyproject_declares_legacy_tracking_runtime_dependencies():
 def test_candidate_filter_drops_background_quads(tmp_path):
     """_filter_candidates_by_novelty must remove candidates whose quad interior
     matches the workspace baseline."""
-    from card_capture.pipeline_utils import _filter_candidates_by_novelty
+    from card_capture.shared.pipeline_utils import _filter_candidates_by_novelty
     from card_capture.presence.background_novelty import BackgroundModel
     import cv2
 
@@ -696,7 +696,7 @@ def test_candidate_filter_drops_background_quads(tmp_path):
 
 @pytest.mark.skip(reason="_collect_candidate_novelty_scores retired with monolith")
 def test_candidate_novelty_collection_does_not_drop_pre_tracking_candidates(tmp_path):
-    from card_capture.pipeline_utils import _collect_candidate_novelty_scores, PipelineContext
+    from card_capture.shared.pipeline_utils import _collect_candidate_novelty_scores, PipelineContext
     from card_capture.presence.background_novelty import BackgroundModel
     import cv2
 
@@ -735,7 +735,7 @@ def test_candidate_novelty_collection_does_not_drop_pre_tracking_candidates(tmp_
 @pytest.mark.skip(reason="_PreparedTrack retired with monolith")
 def test_prune_empty_workspace_tracks_drops_low_novelty_tracks(tmp_path):
     """A finalized track whose medoid frame's quad matches the background is removed."""
-    from card_capture.pipeline_utils import _prune_empty_workspace_tracks, _PreparedTrack
+    from card_capture.shared.pipeline_utils import _prune_empty_workspace_tracks, _PreparedTrack
     from card_capture.core.models import TrackState
     from card_capture.presence.background_novelty import BackgroundModel
     import cv2
@@ -812,7 +812,7 @@ class SingleDetectionDetector:
 @pytest.mark.skip(reason="VideoProcessor retired with monolith")
 def test_pipeline_integrates_novelty_score(tmp_path):
     """Pipeline must compute novelty and store it in card_views quality_score_json."""
-    from card_capture.pipeline_utils import VideoProcessor, ProcessingOptions
+    from card_capture.shared.pipeline_utils import VideoProcessor, ProcessingOptions
     from card_capture.storage import Storage
     import cv2
     import json
