@@ -1,6 +1,6 @@
 import numpy as np
 import pytest
-from card_capture.deduplicator import VisualDeduplicator
+from card_capture.stages.dedup.deduplicator import VisualDeduplicator
 from card_capture.core.models import TrackState
 
 

@@ -18,7 +18,7 @@ from card_capture.core.workers import (
     _drain_detection_queue,
     _put_with_retry,
 )
-from card_capture.deduplicator import VisualDeduplicator
+from card_capture.stages.dedup.deduplicator import VisualDeduplicator
 from card_capture.storage import Storage
 
 

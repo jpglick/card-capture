@@ -218,7 +218,7 @@ def test_front_back_assignment_uses_side_score(tmp_path):
     from card_capture.shared.pipeline_utils import _resolve_session_tracks, _PreparedTrack
     from card_capture.core.models import TrackState, ScoredCandidate
     from card_capture.core.models import QualityScore
-    from card_capture.deduplicator import VisualDeduplicator
+    from card_capture.stages.dedup.deduplicator import VisualDeduplicator
 
     # Helper to create a track with specified side_score
     def make_track_with_score(instance_id, num_frames, side_score_val):
@@ -316,7 +316,7 @@ def test_quality_weighted_track_selection(tmp_path):
     from card_capture.shared.pipeline_utils import _resolve_session_tracks, _PreparedTrack
     from card_capture.core.models import TrackState, ScoredCandidate
     from card_capture.core.models import QualityScore
-    from card_capture.deduplicator import VisualDeduplicator
+    from card_capture.stages.dedup.deduplicator import VisualDeduplicator
 
     def make_track_with_quality(instance_id, num_frames, quality_val, side_score_val=0.5):
         ts = TrackState(instance_id=instance_id)

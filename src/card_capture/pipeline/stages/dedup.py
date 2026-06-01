@@ -18,7 +18,7 @@ SAME_CARD_HAMMING_MAX = 8       # pHash fallback, identical to V4
 
 def run(state: dict, *, telemetry) -> None:
     import numpy as np
-    from card_capture.deduplicator import VisualDeduplicator
+    from card_capture.stages.dedup.deduplicator import VisualDeduplicator
 
     deduplicator = VisualDeduplicator()
     fused_canonicals = state.get("fused_canonicals") or []

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from card_capture.deduplicator import VisualDeduplicator
+from card_capture.stages.dedup.deduplicator import VisualDeduplicator
 from card_capture.shared.stage_metrics import emit_stage_metrics
 from card_capture.shared.pipeline_utils import _resolve_session_tracks
 

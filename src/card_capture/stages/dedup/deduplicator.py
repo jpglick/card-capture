@@ -18,7 +18,7 @@ class VisualDeduplicator:
 
     def _get_dino(self):
         if self._dino_deduper is None:
-            from .ml.inference.dino_dedup import DinoDeduplicator
+            from card_capture.ml.inference.dino_dedup import DinoDeduplicator
             self._dino_deduper = DinoDeduplicator(
                 variant=self.dino_variant, 
                 threshold=self.dino_threshold

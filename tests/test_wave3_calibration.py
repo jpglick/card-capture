@@ -6,7 +6,7 @@ import pytest
 import tempfile
 from pathlib import Path
 
-from card_capture.identity.embedding_distance import (
+from card_capture.stages.dedup.embedding_distance import (
     compute_embedding_distance,
     embedding_same_card_score,
 )
@@ -121,7 +121,7 @@ class TestCrossVideoDedup:
         - Embeddings available and similar (distance < 0.5) → confirm same card
         """
         from card_capture.shared.pipeline_utils import _is_reid_duplicate
-        from card_capture.deduplicator import VisualDeduplicator
+        from card_capture.stages.dedup.deduplicator import VisualDeduplicator
 
         deduplicator = VisualDeduplicator()
 
@@ -162,7 +162,7 @@ class TestCrossVideoDedup:
         - Embeddings available but dissimilar (distance > 0.5) → NOT same card
         """
         from card_capture.shared.pipeline_utils import _is_reid_duplicate
-        from card_capture.deduplicator import VisualDeduplicator
+        from card_capture.stages.dedup.deduplicator import VisualDeduplicator
 
         deduplicator = VisualDeduplicator()
 

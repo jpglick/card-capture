@@ -17,7 +17,7 @@ def test_phash_batch_matches_reference():
     img = (np.random.rand(1050,750,3)*255).astype(np.uint8)
     batch = torch.from_numpy(np.stack([img, img, 255-img]))   # (3,H,W,3) BGR uint8
     hashes = gpu_ops.phash_batch(batch)                       # list[str] of 64 bits
-    from card_capture.deduplicator import VisualDeduplicator
+    from card_capture.stages.dedup.deduplicator import VisualDeduplicator
     d = VisualDeduplicator()
     assert d.hamming_distance(hashes[0], hashes[1]) == 0
     assert d.hamming_distance(hashes[0], hashes[2]) > 10
