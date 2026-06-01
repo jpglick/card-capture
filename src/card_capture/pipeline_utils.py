@@ -1,4 +1,4 @@
-"""Algorithmic helpers used by Metaflow pipeline steps.
+"""Algorithmic helpers used by the in-process pipeline stages.
 
 These functions were previously part of the retired pipeline.py monolith.
 They live here so individual step modules can import them without depending
