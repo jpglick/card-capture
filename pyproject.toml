@@ -24,7 +24,7 @@ dependencies = [
 legacy_tracking = [
   "av",
   "onnxruntime",
-  "boxmot>=0.14.0",
+  "boxmot>=10.0.0,<18.0.0",
 ]
 model = [
   "huggingface-hub",
