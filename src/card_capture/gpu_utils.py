@@ -255,7 +255,7 @@ def compute_edge_density_gpu(frame: np.ndarray, device: Union[str, torch.device]
     return edge_density, is_high
 
 
-def estimate_batch_size(device: str = "auto", frame_shape: tuple = (1080, 1920), safety_margin: float = 0.4) -> int:
+def estimate_batch_size(device: str = "auto", safety_margin: float = 0.4) -> int:
     """Estimate safe GPU batch size for sharpness scoring based on available VRAM.
     
     Queries GPU memory and estimates how many frames can be processed simultaneously
@@ -263,7 +263,6 @@ def estimate_batch_size(device: str = "auto", frame_shape: tuple = (1080, 1920),
     
     Args:
         device: torch device ("mps", "cpu", or "auto")
-        frame_shape: Expected frame dimensions (height, width) in pixels (default: (1080, 1920))
         safety_margin: Fraction of VRAM to reserve (0.4 = 40% reserved, 60% usable)
     
     Returns:
@@ -314,7 +313,7 @@ def estimate_batch_size(device: str = "auto", frame_shape: tuple = (1080, 1920),
 
 
 def score_sharpness_batched(frames: list[np.ndarray], device: str = "auto", 
-                            batch_size: int = 32, variance_only: bool = True) -> list[float]:
+                            batch_size: int = 32) -> list[float]:
     """Score sharpness (Laplacian variance) for a batch of frames on GPU.
     
     Processes multiple frames in parallel on GPU for efficient batched computation.
@@ -324,7 +323,6 @@ def score_sharpness_batched(frames: list[np.ndarray], device: str = "auto",
         frames: List of frames, each (H, W) grayscale or (H, W, C) color, uint8
         device: torch device ("mps", "cpu", or "auto")
         batch_size: Frames to process simultaneously, clamped to [1, 128]
-        variance_only: If True (default), compute only Laplacian. If False, for future expansion.
     
     Returns:
         List of float variance scores in original frame order, same length as input frames.
