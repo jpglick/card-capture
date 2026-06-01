@@ -75,11 +75,12 @@ src/card_capture/
   _warnings.py                  # import-time warning filters (stays at root)
   cli.py                        # console entrypoint (stays at root)
 
-  core/                         # leaf layer — no internal deps; imported by all
+  core/                         # foundation layer — leaf utilities + types; imported by all
     models.py                   # FrameSample, TrackState, QualityScore, Point…
     config.py                   # PipelineConfig
     interfaces.py               # Protocols (CardDetector, FrameSampler)
-    device.py                   # pure device probing (split out of gpu_utils)
+    gpu_utils.py                # device selection + torch image metrics (leaf; no internal deps)
+    workers.py                  # multiprocessing producer/consumer (leaf; no internal deps)
 
   stages/                       # ◀ VERTICAL SLICES — one package per arch stage
     __init__.py                 #   registry: exposes each stage's run() callable
@@ -103,17 +104,17 @@ src/card_capture/
     models/  inference/  embeddings.py  registry.py  scaffolding.py
     errors.py  synthetic_eval.py  gpu_ops.py
 
-  training/                     # ◀ ALL offline training, consolidated
-    presence.py                 # ← train/presence.py + presence/training_data.py
-    fb.py                       # ← training/fb_trainer.py + ml/train_fb.py
-    presence_trainer.py         # ← training/presence_trainer.py
+  training/                     # ◀ ALL offline training, consolidated (modules moved as-is)
+    presence.py                 # ← train/presence.py
+    training_data.py            # ← presence/training_data.py
+    fb_trainer.py               # ← training/fb_trainer.py (already here)
+    train_fb.py                 # ← ml/train_fb.py
+    presence_trainer.py         # ← training/presence_trainer.py (already here)
     dedup_calibrate.py          # ← ml/training/dedup_calibrate.py
     hard_case_capture.py        # ← analysis/hard_case_capture.py
 
-  runtime/                      # GPU session + execution infra (top layer)
+  runtime/                      # GPU session orchestration (top layer; unchanged by reorg)
     gpu_session.py  strict_gpu.py  batches.py  guards.py  cpu_debug.py
-    gpu_utils.py                # GPU session/tensor ops (device.py split to core)
-    workers.py                  # ← multiprocessing producer/consumer (from root)
 
   pipeline/                     # orchestration (keeps the name for the layer)
     request.py  runner.py  telemetry.py
@@ -148,15 +149,18 @@ src/card_capture/
 | `storage.py` | `stages/store/` |
 | `pipeline/stages/<stage>.py` (the `run()` fns) | `stages/<stage>/` — `run` exposed from the slice's `__init__.py`; algorithm modules are siblings |
 | `models.py`, `config.py`, `interfaces.py` | `core/` |
-| device-probing helpers split from `gpu_utils.py` | `core/device.py` |
+| `workers.py`, `gpu_utils.py` | `core/` (leaf utilities; no internal `card_capture` imports) |
 | `pipeline_utils.py` | `shared/pipeline_utils.py` |
 | `pipeline/stage_metrics.py` | `shared/stage_metrics.py` |
-| `workers.py`, remainder of `gpu_utils.py` | `runtime/` |
-| `train/presence.py`, `presence/training_data.py` | `training/presence.py` |
-| `training/fb_trainer.py`, `ml/train_fb.py` | `training/fb.py` |
-| `training/presence_trainer.py` | `training/presence_trainer.py` |
+| `train/presence.py` | `training/presence.py` |
+| `presence/training_data.py` | `training/training_data.py` |
+| `ml/train_fb.py` | `training/train_fb.py` |
+| `training/{fb_trainer,presence_trainer}.py` | unchanged (already in `training/`) |
 | `ml/training/dedup_calibrate.py` | `training/dedup_calibrate.py` |
 | `analysis/hard_case_capture.py` | `training/hard_case_capture.py` |
+
+(Modules are relocated as-is; **no content merging** — merging the two presence and two
+fb-training modules is a deferred follow-up, not part of this mechanical cut.)
 | `review.py` | `review/app.py` |
 | `timeline_data.py`, `templates/*.html` | `review/` |
 | `pipeline/{request,runner,telemetry,runtime_local,runtime_worker}.py` | `pipeline/` (unchanged names) |
@@ -232,11 +236,13 @@ Two non-mechanical adjustments make the new dependency graph acyclic:
    imports them, so a stage importing `pipeline` would be a backward edge. Moving the one
    shared helper down into `shared/` makes the graph clean.
 
-2. **Split GPU primitives from GPU session.** `gpu_utils.py` mixes pure device probing
-   (`get_device`, leaf-safe for any stage) with session/tensor machinery. Pure probing →
-   `core/device.py`; session orchestration stays in `runtime/`. This keeps stages from
-   importing the `runtime` layer (which would violate both the layering and the strict-GPU
-   boundary).
+2. **`workers.py` and `gpu_utils.py` go to `core/`, not `runtime/`.** Both are leaf utilities
+   with **no internal `card_capture` imports**, and both are imported widely from below the
+   top layer (`config` → `workers`; `scoring`/`foil_detection`/`sampler`/trainers →
+   `gpu_utils`). Placing them in the bottom `core` layer lets every higher layer import them
+   freely; placing them in `runtime` (the top layer) would make every one of those a
+   lower→higher violation. `runtime/` therefore keeps only the GPU **session** orchestration
+   (`gpu_session`, `strict_gpu`, batches, guards) that genuinely depends on `pipeline`.
 
 **New `.importlinter` layered contract** (top imports lower; replaces the 3-layer one):
 
@@ -272,8 +278,8 @@ truth** and gating on the full suite + import-linter.
 **Execution order (one branch, landed once green):**
 
 1. **Skeleton & moves** — create new package dirs + `__init__.py`s; `git mv` every module
-   to its destination, including the `stage_metrics → shared` and
-   `gpu_utils → core/device.py` splits.
+   to its destination, including the `stage_metrics → shared` move and the leaf-utility
+   relocation (`workers`, `gpu_utils` → `core`).
 2. **Materialize the import map** — the deterministic old→new dotted-path table from §3.1.
 3. **Rewrite references** — drive LibCST `RenameCommand` from the map (one rename per row)
    across `src/ app/ tests/ harness/ scripts/`, plus the `stages/__init__.py` registry that
