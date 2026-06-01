@@ -29,8 +29,8 @@ from card_capture.shared.pipeline_utils import (
     _laplacian_heatmap,
     _select_canonical_entries,
 )
-from card_capture.scoring import QualityScorer
-from card_capture.selector import ScoredCandidate
+from card_capture.stages.score.scoring import QualityScorer
+from card_capture.stages.score.selector import ScoredCandidate
 
 
 _EMBEDDER_SINGLETON: object = None
@@ -221,7 +221,7 @@ def run(state: dict, *, telemetry) -> None:
                 sc = entry["candidate"]
                 if sc.corners:
                     try:
-                        from card_capture.selector import _get_polygon_area, _aspect_ratio
+                        from card_capture.stages.score.selector import _get_polygon_area, _aspect_ratio
                         area = _get_polygon_area(sc.corners)
                         aspect = _aspect_ratio(sc.corners)
                         cx = sum(p[0] for p in sc.corners) / 4.0

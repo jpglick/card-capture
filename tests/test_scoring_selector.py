@@ -1,8 +1,8 @@
 import numpy as np
 
 from card_capture.core.models import CardDetection, CropResult, QualityScore, ScoredCandidate
-from card_capture.scoring import QualityScorer
-from card_capture.selector import CandidateSelector
+from card_capture.stages.score.scoring import QualityScorer
+from card_capture.stages.score.selector import CandidateSelector
 
 
 def test_quality_scorer_ranks_sharp_image_above_blurry_image():

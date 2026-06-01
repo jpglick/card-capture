@@ -723,7 +723,7 @@ def test_spatial_glare_distinguishes_scattered_from_blob():
     - Frame B (blob): low glare score (~0.0)
     """
     import cv2
-    from card_capture.scoring import QualityScorer
+    from card_capture.stages.score.scoring import QualityScorer
 
     # Create frame A: scattered 1×1 white pixels (10% coverage)
     frame_a = np.zeros((480, 640, 3), dtype=np.uint8)

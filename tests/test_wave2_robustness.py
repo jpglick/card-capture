@@ -5,7 +5,7 @@ import pytest
 import cv2
 
 from card_capture.stages.refine.occlusion_residual import compute_occlusion_residual_score
-from card_capture.scoring import QualityScorer
+from card_capture.stages.score.scoring import QualityScorer
 from card_capture.ecc_registration import compute_ecc_warp, register_frames_via_ecc
 from card_capture.fuser import MultiFrameFuser
 from card_capture.core.models import ScoredCandidate

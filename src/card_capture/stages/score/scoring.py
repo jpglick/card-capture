@@ -10,7 +10,7 @@ import torch
 from card_capture.core.models import QualityScore
 from card_capture.stages.refine.occlusion_residual import compute_occlusion_residual_score
 from card_capture.core import gpu_utils
-from .ml import gpu_ops
+from card_capture.ml import gpu_ops
 
 CARD_ASPECT_RATIO: float = 63.5 / 88.9  # ≈ 0.714 (width / height, standard trading card)
 ASPECT_TOLERANCE: float = 0.15

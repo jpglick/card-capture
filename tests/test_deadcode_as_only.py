@@ -3,7 +3,8 @@ import torch
 import inspect
 
 from card_capture.core import gpu_utils
-from card_capture import fuser, scoring
+from card_capture import fuser
+from card_capture.stages.score import scoring
 from card_capture.core.config import PipelineConfig
 
 

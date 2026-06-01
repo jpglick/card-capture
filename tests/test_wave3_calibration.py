@@ -371,7 +371,7 @@ class TestAdaptiveThresholds:
 
     def test_adaptive_novelty_threshold_from_distribution(self):
         """Novelty threshold from p50 of in-video candidate distribution, clipped ±20%."""
-        from card_capture.calibration.per_video_adaptive import AdaptiveThresholdComputer
+        from card_capture.stages.score.per_video_adaptive import AdaptiveThresholdComputer
 
         computer = AdaptiveThresholdComputer()
         global_threshold = 0.08
@@ -395,7 +395,7 @@ class TestAdaptiveThresholds:
 
     def test_adaptive_hamming_threshold_from_intra_track_distances(self):
         """Hamming threshold from p75 of intra-track pHash distances, clipped ±10%."""
-        from card_capture.calibration.per_video_adaptive import AdaptiveThresholdComputer
+        from card_capture.stages.score.per_video_adaptive import AdaptiveThresholdComputer
 
         computer = AdaptiveThresholdComputer()
         global_threshold = 22  # _SAME_CARD_HAMMING_MAX
@@ -420,7 +420,7 @@ class TestAdaptiveThresholds:
 
     def test_adaptive_novelty_threshold_fallback_to_global(self):
         """Fallback to global threshold when fewer than 10 samples."""
-        from card_capture.calibration.per_video_adaptive import AdaptiveThresholdComputer
+        from card_capture.stages.score.per_video_adaptive import AdaptiveThresholdComputer
 
         computer = AdaptiveThresholdComputer()
         global_threshold = 0.08
@@ -434,7 +434,7 @@ class TestAdaptiveThresholds:
 
     def test_adaptive_hamming_threshold_fallback_to_global(self):
         """Fallback to global threshold when fewer than 10 samples."""
-        from card_capture.calibration.per_video_adaptive import AdaptiveThresholdComputer
+        from card_capture.stages.score.per_video_adaptive import AdaptiveThresholdComputer
 
         computer = AdaptiveThresholdComputer()
         global_threshold = 22
