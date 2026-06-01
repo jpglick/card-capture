@@ -2,9 +2,9 @@ import cv2
 import numpy as np
 from typing import List, Tuple, Optional
 
-from card_capture.ecc_registration import register_frames_via_ecc
-from card_capture.fusion.foil_detection import detect_foil_card
-from card_capture.fusion.median_fusion import glare_rejection_fusion
+from card_capture.stages.fuse.ecc_registration import register_frames_via_ecc
+from card_capture.stages.fuse.foil_detection import detect_foil_card
+from card_capture.stages.fuse.median_fusion import glare_rejection_fusion
 
 
 def find_glare_centroid(image: np.ndarray) -> Optional[Tuple[float, float]]:

@@ -69,7 +69,7 @@ def test_fuse_passes_foil_threshold_when_enabled():
             captured["foil_threshold"] = foil_threshold
             return images[0]
 
-    with patch("card_capture.fuser.MultiFrameFuser", _StubFuser):
+    with patch("card_capture.stages.fuse.fuser.MultiFrameFuser", _StubFuser):
         state = {"request": request, "prepared_tracks": [_prepared_track("d")]}
         fuse_stage.run(state, telemetry=MagicMock())
 
@@ -87,7 +87,7 @@ def test_fuse_skips_foil_when_disabled():
             captured["foil_threshold"] = foil_threshold
             return images[0]
 
-    with patch("card_capture.fuser.MultiFrameFuser", _StubFuser):
+    with patch("card_capture.stages.fuse.fuser.MultiFrameFuser", _StubFuser):
         state = {"request": request, "prepared_tracks": [_prepared_track("e")]}
         fuse_stage.run(state, telemetry=MagicMock())
 

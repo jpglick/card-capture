@@ -14,7 +14,7 @@ from typing import Dict, List, Optional
 import cv2
 import numpy as np
 
-from card_capture.fusion.foil_detection import compute_laplacian_variance
+from card_capture.stages.fuse.foil_detection import compute_laplacian_variance
 
 
 @dataclass(frozen=True)

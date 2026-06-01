@@ -3,7 +3,7 @@
 V5.5 change: was a Metaflow ``foreach`` (one subprocess per track, ~4–6
 minutes overhead on the reference video). Now runs the fusion loop
 in-process with a plain ``for``. Algorithm unchanged — see
-:mod:`card_capture.fuser`.
+:mod:`card_capture.stages.fuse.fuser`.
 
 Substitutions vs V4 ``pipeline/steps/fuse.py``:
 - ``cv2.imread(fe['image_path'])`` -> ``fe['normalized']``
@@ -28,7 +28,7 @@ def run(state: dict, *, telemetry) -> None:
 
     fused_canonicals: List[Dict[str, Any]] = []
 
-    from card_capture.fuser import MultiFrameFuser
+    from card_capture.stages.fuse.fuser import MultiFrameFuser
 
     total_tracks = len(prepared_tracks)
     for i, track in enumerate(prepared_tracks):

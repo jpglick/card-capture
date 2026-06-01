@@ -2,7 +2,7 @@ import pytest
 import numpy as np
 import cv2
 from unittest.mock import Mock
-from card_capture.fusion.foil_detection import detect_foil_card, compute_laplacian_variance
+from card_capture.stages.fuse.foil_detection import detect_foil_card, compute_laplacian_variance
 
 def test_foil_detection_high_variance_across_frames():
     """Verify foil cards show high Laplacian variance across frames."""
@@ -52,7 +52,7 @@ def test_foil_detection_edge_cases():
 
 def test_glare_rejection_fusion_preserves_luminance():
     """Verify glare-rejection fusion picks closest-to-median pixels."""
-    from card_capture.fusion.median_fusion import glare_rejection_fusion
+    from card_capture.stages.fuse.median_fusion import glare_rejection_fusion
 
     # Three frames: one bright (glare), two nominal
     frames = [
@@ -71,7 +71,7 @@ def test_glare_rejection_fusion_preserves_luminance():
 
 def test_glare_rejection_fusion_shape():
     """Verify glare-rejection fusion returns same shape as input frames."""
-    from card_capture.fusion.median_fusion import glare_rejection_fusion
+    from card_capture.stages.fuse.median_fusion import glare_rejection_fusion
 
     frames = [
         np.random.randint(50, 200, (750, 1050, 3), dtype=np.uint8),
@@ -107,7 +107,7 @@ def test_glare_rejection_fusion_prefers_luminance_over_color_shift():
     and ignores the color shift. Frame 2 correctly picks frame 0 (median luminance),
     not itself (glaring).
     """
-    from card_capture.fusion.median_fusion import glare_rejection_fusion
+    from card_capture.stages.fuse.median_fusion import glare_rejection_fusion
 
     # Create three frames where pixels are identical except for variations we control
     height, width = 100, 100
@@ -159,7 +159,7 @@ def test_enable_foil_aware_fusion_disabled():
     that disabling the flag causes the median path to be used instead.
     """
     from unittest.mock import patch
-    from card_capture.fuser import MultiFrameFuser
+    from card_capture.stages.fuse.fuser import MultiFrameFuser
 
     # Create test frames: two nominal, one with high glare
     frames = [
@@ -171,11 +171,11 @@ def test_enable_foil_aware_fusion_disabled():
     fuser = MultiFrameFuser()
 
     # Baseline: with foil_threshold, should use glare-rejection (if detected as foil)
-    with patch('card_capture.fuser.detect_foil_card', return_value=True):
+    with patch('card_capture.stages.fuse.fuser.detect_foil_card', return_value=True):
         fused_with_foil = fuser.fuse(frames, foil_threshold=50.0)
 
     # With foil_threshold=None (disable flag), should use median regardless
-    with patch('card_capture.fuser.detect_foil_card', return_value=True):
+    with patch('card_capture.stages.fuse.fuser.detect_foil_card', return_value=True):
         fused_no_foil = fuser.fuse(frames, foil_threshold=None)
 
     # Both should not be None
@@ -204,7 +204,7 @@ def test_enable_foil_aware_fusion_disabled():
 
 def test_pipeline_uses_glare_rejection_fusion_for_foils():
     """Verify MultiFrameFuser selects glare-rejection fusion for foil cards."""
-    from card_capture.fuser import MultiFrameFuser
+    from card_capture.stages.fuse.fuser import MultiFrameFuser
 
     # Create mock frames
     regular_frames = [np.random.randint(100, 150, (750, 1050, 3), dtype=np.uint8) for _ in range(4)]
