@@ -133,7 +133,7 @@ def compute_motion_gpu(frame1: np.ndarray, frame2: np.ndarray, device: Union[str
         ValueError: If frame shapes don't match
     """
     if device == "auto":
-        device = get_device()
+        device = get_device(allow_cpu_fallback=_env_cpu_ok())
     
     # Validate frame shapes match
     if frame1.shape != frame2.shape:
@@ -210,7 +210,7 @@ def compute_edge_density_gpu(frame: np.ndarray, device: Union[str, torch.device]
         - is_high_edge: True if edge_density_fraction > edge_density_threshold
     """
     if device == "auto":
-        device = get_device()
+        device = get_device(allow_cpu_fallback=_env_cpu_ok())
     
     # Convert to grayscale if needed
     if len(frame.shape) == 3:
@@ -276,7 +276,7 @@ def estimate_batch_size(device: str = "auto", safety_margin: float = 0.4) -> int
     try:
         # Convert device string to torch.device if needed
         if device == "auto":
-            device_obj = get_device()
+            device_obj = get_device(allow_cpu_fallback=_env_cpu_ok())
         else:
             device_obj = torch.device(device)
         
@@ -337,7 +337,7 @@ def score_sharpness_batched(frames: list[np.ndarray], device: str = "auto",
     
     # Convert device string to torch.device if needed
     if device == "auto":
-        device = get_device()
+        device = get_device(allow_cpu_fallback=_env_cpu_ok())
     elif isinstance(device, str):
         device = torch.device(device)
     
@@ -416,7 +416,7 @@ def compute_presence_metrics_batched(
         return []
 
     if device == "auto":
-        device = get_device()
+        device = get_device(allow_cpu_fallback=_env_cpu_ok())
     elif isinstance(device, str):
         device = torch.device(device)
 
