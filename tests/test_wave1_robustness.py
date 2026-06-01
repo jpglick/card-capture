@@ -19,7 +19,7 @@ from card_capture.core.models import (
     QualityScore,
 )
 from card_capture.core.models import ScoredCandidate
-from card_capture.tracking.botsort_adapter import BoTSORTAdapter
+from card_capture.stages.track.botsort_adapter import BoTSORTAdapter
 
 
 def _candidate_with_frame_path(
@@ -83,14 +83,14 @@ def mock_botsort_adapter():
         "boxmot.trackers.botsort.botsort": MagicMock(),
         "supervision": mock_supervision,
     }):
-        with patch("card_capture.tracking.botsort_adapter._import_botsort") as mock_import:
+        with patch("card_capture.stages.track.botsort_adapter._import_botsort") as mock_import:
             MockBoTSORT = MagicMock()
             mock_tracker = MagicMock()
             mock_tracker.update = mock_update
             MockBoTSORT.return_value = mock_tracker
             mock_import.return_value = MockBoTSORT
 
-            from card_capture.tracking.botsort_adapter import BoTSORTAdapter
+            from card_capture.stages.track.botsort_adapter import BoTSORTAdapter
 
             adapter = BoTSORTAdapter(min_track_length=1)
             adapter._captured_frames = captured_frames  # Expose for testing
@@ -410,7 +410,7 @@ def test_obb_centroid_invariant_under_rotation():
     This ensures in-place rotation doesn't trigger spurious session resets
     due to false positive centroid jumps.
     """
-    from card_capture.tracking.centroid_jump import centroid_from_obb
+    from card_capture.stages.track.centroid_jump import centroid_from_obb
 
     # Axis-aligned OBB: corners at (100, 100), (300, 100), (300, 300), (100, 300)
     # Center should be at (200, 200)

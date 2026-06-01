@@ -10,7 +10,7 @@ from card_capture.ecc_registration import compute_ecc_warp, register_frames_via_
 from card_capture.fuser import MultiFrameFuser
 from card_capture.core.models import ScoredCandidate
 from card_capture.core.models import QualityScore
-from card_capture.tracking.botsort_adapter import rotated_iou, axis_aligned_iou_from_corners
+from card_capture.stages.track.botsort_adapter import rotated_iou, axis_aligned_iou_from_corners
 
 
 def _clean_card(h=1050, w=750):

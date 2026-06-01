@@ -44,9 +44,9 @@ def _frame(frame_index: int):
 
 def test_centroid_jump_is_telemetry_only():
     with patch.dict("sys.modules", {"supervision": SimpleNamespace(Detections=object)}):
-        with patch("card_capture.tracking.botsort_adapter._import_botsort", return_value=_FakeBoTSORT):
-            with patch("card_capture.tracking.botsort_adapter._get_shared_embedder", return_value=None):
-                from card_capture.tracking.botsort_adapter import BoTSORTAdapter
+        with patch("card_capture.stages.track.botsort_adapter._import_botsort", return_value=_FakeBoTSORT):
+            with patch("card_capture.stages.track.botsort_adapter._get_shared_embedder", return_value=None):
+                from card_capture.stages.track.botsort_adapter import BoTSORTAdapter
 
                 adapter = BoTSORTAdapter(min_track_length=1, centroid_jump_ratio=0.30, centroid_jump_frames=3)
                 tracks = adapter.assign(

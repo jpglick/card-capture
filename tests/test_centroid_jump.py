@@ -1,6 +1,6 @@
 import numpy as np
 import pytest
-from card_capture.tracking.centroid_jump import CentroidJumpDetector
+from card_capture.stages.track.centroid_jump import CentroidJumpDetector
 
 
 def test_large_jump_triggers_split():

@@ -6,7 +6,7 @@ from unittest.mock import patch
 import numpy as np
 
 from card_capture.core.models import ScoredCandidate, QualityScore
-import card_capture.tracking.botsort_adapter as botsort_mod
+import card_capture.stages.track.botsort_adapter as botsort_mod
 
 class _FakeBoTSORT:
     def __init__(self, **kwargs):
@@ -49,7 +49,7 @@ def test_direct_appearance_replacement_resets_once_after_confirmation():
     
     with patch.dict("sys.modules", {"supervision": SimpleNamespace(Detections=object)}):
         with patch.object(botsort_mod, "_import_botsort", return_value=_FakeBoTSORT):
-            from card_capture.tracking.botsort_adapter import BoTSORTAdapter
+            from card_capture.stages.track.botsort_adapter import BoTSORTAdapter
             adapter = BoTSORTAdapter(min_track_length=1)
             
             with patch.object(adapter, "_embed_candidates") as mock_embed:
@@ -81,7 +81,7 @@ def test_recurrent_holder_plateaus_are_not_emitted_as_sessions():
     
     with patch.dict("sys.modules", {"supervision": SimpleNamespace(Detections=object)}):
         with patch.object(botsort_mod, "_import_botsort", return_value=_FakeBoTSORT):
-            from card_capture.tracking.botsort_adapter import BoTSORTAdapter
+            from card_capture.stages.track.botsort_adapter import BoTSORTAdapter
             adapter = BoTSORTAdapter(min_track_length=1)
             
             with patch.object(adapter, "_embed_candidates") as mock_embed:
@@ -110,7 +110,7 @@ def test_identical_fronts_in_distinct_plateaus_remain_distinct_sessions():
     
     with patch.dict("sys.modules", {"supervision": SimpleNamespace(Detections=object)}):
         with patch.object(botsort_mod, "_import_botsort", return_value=_FakeBoTSORT):
-            from card_capture.tracking.botsort_adapter import BoTSORTAdapter
+            from card_capture.stages.track.botsort_adapter import BoTSORTAdapter
             adapter = BoTSORTAdapter(min_track_length=1)
             
             with patch.object(adapter, "_embed_candidates") as mock_embed:

@@ -6,7 +6,7 @@ from unittest.mock import patch
 import numpy as np
 
 from card_capture.core.models import QualityScore, ScoredCandidate
-import card_capture.tracking.botsort_adapter as botsort_mod
+import card_capture.stages.track.botsort_adapter as botsort_mod
 
 
 class _FakeTensor:
@@ -83,7 +83,7 @@ def _make_adapter():
 def test_assign_passes_real_frame_and_embeddings_to_boxmot():
     adapter = _make_adapter()
     with patch.dict("sys.modules", {"supervision": SimpleNamespace(Detections=object)}):
-        with patch("card_capture.tracking.botsort_adapter._get_shared_embedder", return_value=_StubEmbedder()):
+        with patch("card_capture.stages.track.botsort_adapter._get_shared_embedder", return_value=_StubEmbedder()):
             tracks = adapter.assign(
                 [_cand(1, 0, 2, 2), _cand(2, 0, 30, 2)],
                 [_frame(0)],
@@ -98,7 +98,7 @@ def test_assign_passes_real_frame_and_embeddings_to_boxmot():
 def test_assign_locks_down_one_embedding_pass_per_frame():
     adapter = _make_adapter()
     with patch.dict("sys.modules", {"supervision": SimpleNamespace(Detections=object)}):
-        with patch("card_capture.tracking.botsort_adapter._get_shared_embedder", return_value=_StubEmbedder()):
+        with patch("card_capture.stages.track.botsort_adapter._get_shared_embedder", return_value=_StubEmbedder()):
             with patch.object(adapter, "_embed_candidates", wraps=adapter._embed_candidates) as mock_embed:
                 tracks = adapter.assign(
                     [_cand(1, 0, 2, 2), _cand(2, 0, 30, 2), _cand(3, 1, 2, 2)],

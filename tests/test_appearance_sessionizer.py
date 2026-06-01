@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from card_capture.tracking.appearance_sessionizer import (
+from card_capture.stages.track.appearance_sessionizer import (
     AppearanceObservation,
     AppearanceSessionizer,
 )

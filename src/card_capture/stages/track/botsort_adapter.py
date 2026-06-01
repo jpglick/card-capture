@@ -8,7 +8,7 @@ import numpy as np
 import torch
 
 from card_capture.core.models import ScoredCandidate, TrackState, FramePacket
-from ..pipeline.stages.dedup import SAME_CARD_EMB_THRESHOLD
+from card_capture.pipeline.stages.dedup import SAME_CARD_EMB_THRESHOLD
 from .bytetrack_adapter import _AdaptedDetection, _xyxy_from_corners
 from .centroid_jump import CentroidJumpDetector
 from .appearance_sessionizer import AppearanceObservation, AppearanceSessionizer
@@ -133,7 +133,7 @@ def _get_default_reid_weights() -> Path:
 
 
 def _get_shared_embedder():
-    from ..pipeline.stages.refine import get_shared_embedder
+    from card_capture.pipeline.stages.refine import get_shared_embedder
 
     return get_shared_embedder()
 

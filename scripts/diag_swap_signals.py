@@ -40,7 +40,7 @@ from card_capture.data.repositories.cards import CardsRepository
 from card_capture.data.repositories.videos import VideosRepository
 from migrations.run_migrations import apply_migrations
 from card_capture.ml.models.dino_embedder import DinoEmbedder
-from card_capture.tracking.appearance_sessionizer import (
+from card_capture.stages.track.appearance_sessionizer import (
     AppearanceObservation,
     AppearanceSessionizer,
 )
