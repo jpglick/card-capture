@@ -203,11 +203,12 @@ def create_app(db_path: Path):
 
         corpus_root = Path("tests/fixtures/golden_corpus")
         truth_count = len(list(corpus_root.glob("*/*.truth.json"))) if corpus_root.exists() else 0
-        reports_dir = Path("reports")
-        any_report = any(
+        reports_dir = Path("var/reports")
+        report_files = (
             p for p in reports_dir.glob("*.json") if p.name != ".gitkeep"
         ) if reports_dir.exists() else False
-        has_baseline = Path("reports/baseline_v3.json").exists()
+        has_baseline = Path("var/reports/baseline_v3.json").exists()
+
 
         return templates.TemplateResponse(
             request, "setup.html",

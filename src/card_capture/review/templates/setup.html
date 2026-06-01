@@ -57,7 +57,7 @@
         </div>
         <div class="step-body">
           <p>Run the pipeline on a video file to populate the database with card instances.</p>
-          <p><code>card-capture process &lt;video.mp4&gt; --output-dir card_capture_output</code></p>
+          <p><code>card-capture process &lt;video.mp4&gt; --output-dir var/output</code></p>
           {% if video_count > 0 %}
           <div class="links">
             {% for v in videos %}<a href="/label/{{ v.id }}">#{{ v.id }}: {{ v.name }}</a>{% endfor %}

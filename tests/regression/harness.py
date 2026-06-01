@@ -21,7 +21,7 @@ class HarnessConfig:
     output_dir: Path
     git_sha: str
     tolerance_ms: int = 500
-    db_path: Path = Path("card_capture_output/cards.sqlite")
+    db_path: Path = Path("var/db/cards.sqlite")
     presence_threshold: float = 0.5
 
 

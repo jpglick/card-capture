@@ -25,8 +25,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     process = subparsers.add_parser("process", help="Process a local video file")
     process.add_argument("video_path", type=Path)
-    process.add_argument("--output-dir", type=Path, default=Path("card_capture_output"))
-    process.add_argument("--db", type=Path, default=Path("card_capture_output/cards.sqlite"))
+    process.add_argument("--output-dir", type=Path, default=Path("var/output"))
+    process.add_argument("--db", type=Path, default=Path("var/db/cards.sqlite"))
     process.add_argument("--config", type=Path, default=Path("card_capture_config.json"))
     process.add_argument("--detector", choices=["docaligner", "fake"], default=None, help="Detector backend")
     process.add_argument(
@@ -58,7 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     review = subparsers.add_parser("review", help="Start the local review UI")
-    review.add_argument("--db", type=Path, default=Path("card_capture_output/cards.sqlite"))
+    review.add_argument("--db", type=Path, default=Path("var/db/cards.sqlite"))
     review.add_argument("--host", default="127.0.0.1")
     review.add_argument("--port", type=int, default=8000)
 
@@ -69,7 +69,7 @@ def build_parser() -> argparse.ArgumentParser:
     dataset_p = subparsers.add_parser("dataset", help="Training dataset utilities")
     dataset_sub = dataset_p.add_subparsers(dest="dataset_command", required=True)
     ds_export = dataset_sub.add_parser("export", help="Mine positives and negatives from processed videos")
-    ds_export.add_argument("--db", type=Path, default=Path("card_capture_output/cards.sqlite"))
+    ds_export.add_argument("--db", type=Path, default=Path("var/db/cards.sqlite"))
     ds_export.add_argument("--out-dir", type=Path, default=Path("data/presence_dataset"))
     ds_export.add_argument("--confidence-floor", type=float, default=0.7)
     ds_export.add_argument("--negatives-per-frame", type=int, default=2)

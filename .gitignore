@@ -10,12 +10,8 @@ dist/
 *.egg-info/
 
 # Pipeline Output & Artifacts
-card_capture_output/
 card_capture_output_detection/
 v3_output/
-sample_run_*/
-*.sqlite
-*.sqlite3
 # but allow committed test fixtures
 !tests/**/*.sqlite
 !tests/**/*.sqlite3
@@ -44,11 +40,6 @@ __pycache__/
 .claude/
 .pytest_cache/
 
-# Harness reports — track only baselines
-reports/*
-!reports/.gitkeep
-!reports/baseline_*
-
 # Harness runtime config (use harness/config.example.json as template)
 harness_config.json
 card_capture_config.json
@@ -58,9 +49,6 @@ Video_Codec_SDK*.zip
 
 # Golden set generated artifacts
 golden_set/**/reference_frames/
-
-# Training data
-/data/
 
 models/*
 !models/.gitkeep
