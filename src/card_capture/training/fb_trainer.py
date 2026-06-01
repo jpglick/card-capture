@@ -144,6 +144,5 @@ def _evaluate(model, loader, device) -> float:
 
 
 def _get_device() -> torch.device:
-    if torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
+    from card_capture.gpu_utils import get_device, _env_cpu_ok
+    return get_device(allow_cpu_fallback=_env_cpu_ok())

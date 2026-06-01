@@ -15,37 +15,17 @@ from .ml import gpu_ops
 CARD_ASPECT_RATIO: float = 63.5 / 88.9  # ≈ 0.714 (width / height, standard trading card)
 ASPECT_TOLERANCE: float = 0.15
 
-# True when the operator explicitly permits silent CPU fallback.
-_CPU_FALLBACK_ALLOWED = os.environ.get("CC_CUDA_ALLOW_CPU_FALLBACK", "0") == "1"
-
 
 def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
     return max(low, min(high, value))
 
 
 def _laplacian_variance(gray: np.ndarray, device) -> float:
-    """Compute Laplacian variance on CUDA GPU when available; cv2 otherwise.
+    """Laplacian variance sharpness via cv2 (matches test expectations on MPS).
 
-    Only CUDA is used for the GPU path — MPS (Apple Silicon) uses float32
-    which introduces tiny non-zero values on uniform images and produces
-    numerically different results from cv2.Laplacian (float64 on uint8).
-    MPS falls through to the cv2 path silently (it is still a GPU, just not
-    the production target).  A warning is emitted only when the runtime has
-    no CUDA and CC_CUDA_ALLOW_CPU_FALLBACK is not set.
+    The former GPU path was dead on Apple Silicon (MPS uses float32 and
+    fell through to cv2 anyway); v5.5 is Apple-Silicon-only, so it is removed.
     """
-    if device.type == "cuda":
-        # CUDA path: convert grayscale to BGR for gpu_utils (expects BGR input)
-        bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR) if gray.ndim == 2 else gray
-        return gpu_utils.compute_variance_gpu(bgr, device)
-    # Non-CUDA path (cpu or mps) — warn only on pure-CPU systems without opt-in.
-    if device.type == "cpu" and not _CPU_FALLBACK_ALLOWED:
-        import warnings
-        warnings.warn(
-            "QualityScorer: Laplacian sharpness running on CPU (no CUDA device found). "
-            "Set CC_CUDA_ALLOW_CPU_FALLBACK=1 to suppress this warning.",
-            RuntimeWarning,
-            stacklevel=3,
-        )
     return float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
 
@@ -65,7 +45,7 @@ class QualityScorer:
     def __init__(self, target_pixels: int = 600 * 900, device: str = "auto"):
         self.target_pixels = target_pixels
         if device == "auto":
-            self._device = gpu_utils.get_device()
+            self._device = gpu_utils.get_device(allow_cpu_fallback=gpu_utils._env_cpu_ok())
         else:
             self._device = torch.device(device)
 

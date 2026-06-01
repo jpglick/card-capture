@@ -11,12 +11,9 @@ import torch.nn.functional as F
 # separation across the range 10.0-80.0, selecting 50.0 as a robust midpoint.
 DEFAULT_FOIL_THRESHOLD = 50.0
 
-# Resolve GPU device once at module load time (CUDA > MPS > CPU).
+# Resolve GPU device once at module load time (MPS > CPU).
 from card_capture import gpu_utils as _gpu_utils
-_device = _gpu_utils.get_device()
-
-# True when the operator explicitly permits silent CPU fallback.
-_CPU_FALLBACK_ALLOWED = os.environ.get("CC_CUDA_ALLOW_CPU_FALLBACK", "0") == "1"
+_device = _gpu_utils.get_device(allow_cpu_fallback=_gpu_utils._env_cpu_ok())
 
 
 def _compute_laplacian_variance_gpu(frames: list[np.ndarray]) -> float:

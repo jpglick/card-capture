@@ -76,6 +76,9 @@ class PipelineConfig:
     
     # Hardware Acceleration
     use_kornia: bool = True
+    # When MPS is unavailable, the pipeline hard-fails unless this is set.
+    # CPU execution is a debug-only escape hatch (v5.5 is Apple-Silicon-only).
+    allow_cpu_fallback: bool = False
     telemetry_scope: str = "canonical"
     
     debug: DebugConfig = field(default_factory=DebugConfig)

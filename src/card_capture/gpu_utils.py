@@ -14,21 +14,28 @@ import numpy as np
 import cv2
 
 
-def get_device() -> torch.device:
-    """
-    Detect and return the best available device for PyTorch computation.
+import os
 
-    Priority order:
-    1. MPS (Metal Performance Shaders) - for M-series Apple Silicon Macs
-    2. CPU - fallback
+def _env_cpu_ok() -> bool:
+    return os.environ.get("CC_ALLOW_CPU_FALLBACK", "0") == "1"
 
-    Returns:
-        torch.device: The selected device for PyTorch operations.
+
+def get_device(allow_cpu_fallback: bool = False) -> torch.device:
+    """Return the MPS device, or hard-fail if MPS is unavailable.
+
+    v5.5 is Apple-Silicon-only. CPU is returned ONLY when the caller explicitly
+    opts in via `allow_cpu_fallback` (mapped from PipelineConfig.allow_cpu_fallback
+    / RuntimeMode 'cpu_debug').
     """
     if torch.backends.mps.is_available():
         return torch.device("mps")
-    else:
+    if allow_cpu_fallback:
         return torch.device("cpu")
+    raise RuntimeError(
+        "MPS GPU unavailable and allow_cpu_fallback is False. v5.5 is "
+        "Apple-Silicon-only; set PipelineConfig.allow_cpu_fallback=True "
+        "(or RuntimeMode 'cpu_debug') for CPU debug runs."
+    )
 
 
 def _frame_to_tensor(frame: np.ndarray, device: torch.device) -> torch.Tensor:

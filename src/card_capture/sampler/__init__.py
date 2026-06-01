@@ -384,8 +384,8 @@ class ContrastBasedSampler:
         self.detection_metrics = detection_metrics if detection_metrics is not None else ["variance"]
         if device == "auto":
             try:
-                from ..gpu_utils import get_device
-                self.device = get_device()
+                from ..gpu_utils import get_device, _env_cpu_ok
+                self.device = get_device(allow_cpu_fallback=_env_cpu_ok())
             except ImportError: self.device = torch.device("cpu")
         else: self.device = torch.device(device)
 
@@ -681,9 +681,9 @@ class AdaptivePresenceSampler:
             resolved_device = torch.device(device) if device != "auto" else torch.device("cpu")
             if device == "auto":
                 try:
-                    from ..gpu_utils import get_device
+                    from ..gpu_utils import get_device, _env_cpu_ok
 
-                    resolved_device = get_device()
+                    resolved_device = get_device(allow_cpu_fallback=_env_cpu_ok())
                 except Exception:
                     resolved_device = torch.device("cpu")
             if resolved_device.type == "cpu":
