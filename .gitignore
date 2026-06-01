@@ -72,3 +72,6 @@ models/*
 scripts/deadcode/findings.json
 scripts/deadcode/manifest.json
 scripts/deadcode/report.md
+
+# consolidated scratch (run outputs, uploads, working DBs, reports)
+var/
