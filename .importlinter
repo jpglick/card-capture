@@ -2,7 +2,6 @@
 root_packages =
     card_capture
     app
-    pipeline
 include_external_packages = True
 
 [importlinter:contract:no-sqlite3-outside-data]

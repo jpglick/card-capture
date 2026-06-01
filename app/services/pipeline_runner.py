@@ -146,9 +146,9 @@ class PipelineRunner:
             log_sink=lambda line: self._persist_log(run_id, line),
         )
 
-        # Resource sampler is keyed by stage. We can't watch metaflow log
-        # lines anymore, so wrap the telemetry so stage_started flips the
-        # sampler's current_stage at the same instant we tell the UI.
+        # Resource sampler is keyed by stage. Wrap the telemetry so
+        # stage_started flips the sampler's current_stage at the
+        # same instant we tell the UI.
         sampler = None
         if self.db_path:
             from app.services.resource_sampler import ResourceSampler
