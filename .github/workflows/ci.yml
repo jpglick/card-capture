@@ -9,6 +9,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      CC_ALLOW_CPU_FALLBACK: "1"
     steps:
     - uses: actions/checkout@v4
 
