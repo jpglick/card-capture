@@ -9,9 +9,7 @@ import numpy as np
 from typing import List, Tuple, Optional
 
 try:
-    import objc
     from Quartz import CIImage, CIContext, CIVector, CIFilter
-    import CoreFoundation
 except ImportError:
     CIImage = None
 
