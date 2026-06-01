@@ -186,7 +186,7 @@ class BoTSORTAdapter:
             track_buffer=lost_track_buffer,
             match_thresh=minimum_matching_threshold,
             cmc_method=None,  # Disable camera motion compensation (assumes static camera setup)
-            appearance_thresh=0.60,
+            appearance_thresh=SAME_CARD_EMB_THRESHOLD,
             with_reid=True,
             # The pipeline applies min_track_length after sessionization; keep
             # BoT-SORT from hiding short but valid sessions before that gate.
@@ -216,7 +216,7 @@ class BoTSORTAdapter:
             track_buffer=self._lost_track_buffer,
             match_thresh=self._minimum_matching_threshold,
             cmc_method=None,  # Disable camera motion compensation (assumes static camera setup)
-            appearance_thresh=0.60,
+            appearance_thresh=SAME_CARD_EMB_THRESHOLD,
             with_reid=True,
             # The pipeline applies min_track_length after sessionization; keep
             # BoT-SORT from hiding short but valid sessions before that gate.

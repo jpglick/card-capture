@@ -104,6 +104,6 @@ def test_to_options_maps_all_fields(tmp_path):
     # Verify a few others
     assert opts.track_confidence_floor == 0.0
     assert opts.stand_sharpness_max == 0.092
-    assert opts.appearance_same_threshold == 0.12
+    assert opts.appearance_same_threshold == 0.16
     assert opts.bridge_max_length_ratio == 0.75
 
