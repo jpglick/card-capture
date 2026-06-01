@@ -95,8 +95,11 @@ class LocalPipelineRuntime:
             output_dir_str = str(request.output_root).replace("artifact://local/", "")
             db_path = Path(output_dir_str) / "cards.sqlite"
 
+        # Tracker inference is guarded here. Refinement GPU-boundary decomposition is
+        # separate architectural debt; do not add new main-thread Torch calls.
+        from card_capture.pipeline.runtime_worker import RuntimeWorker
+        runtime_worker = RuntimeWorker()
         writer = Writer(db_path)
-        writer.start()
 
         # State carried across stages — frames, detections, tracks, crops, scores, etc.
         # The actual shape grows as Tasks 3.3-3.8 wire stages.
@@ -105,6 +108,7 @@ class LocalPipelineRuntime:
             "video_id": request.video_id or 0,
             "config_preset": request.config_preset,
             "db_path": db_path,
+            "runtime_worker": runtime_worker,
             # Phase 4 wiring — inject repositories and output_root Path
             "output_root": Path(str(request.output_root).replace("artifact://local/", "")),
             "repos": {
@@ -115,6 +119,9 @@ class LocalPipelineRuntime:
         }
 
         try:
+            runtime_worker.start()
+            writer.start()
+
             for name, module in _STAGES:
                 self._telemetry.stage_started(name, {})
                 start = time.perf_counter()
@@ -130,6 +137,7 @@ class LocalPipelineRuntime:
                 timings.append(StageTiming(stage=name, elapsed_ms=elapsed_ms))
                 self._telemetry.stage_finished(name, elapsed_ms, {})
         finally:
+            runtime_worker.stop()
             writer.stop()
 
         manifest = RunManifest(

@@ -12,6 +12,7 @@ from card_capture.detectors import (
     probe_torch_device_status,
 )
 from card_capture.models import FramePacket
+from card_capture.pipeline.stage_metrics import emit_stage_metrics
 
 
 def run(state: dict, *, telemetry) -> None:
@@ -93,3 +94,4 @@ def run(state: dict, *, telemetry) -> None:
         )
 
     state["detections"] = rows
+    emit_stage_metrics(state, stage="detect", metrics={"detections": len(rows)})

@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 
 from card_capture.presence.background_novelty import BackgroundModel, quad_novelty
+from card_capture.pipeline.stage_metrics import emit_stage_metrics
 
 
 def run(state: dict, *, telemetry) -> None:
@@ -48,3 +49,4 @@ def run(state: dict, *, telemetry) -> None:
         scored_rows.append(scored_row)
 
     state["novelty_scored_detections"] = scored_rows
+    emit_stage_metrics(state, stage="novelty", metrics={"scored": len(scored_rows)})

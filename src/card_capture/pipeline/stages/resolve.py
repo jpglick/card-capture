@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from card_capture.deduplicator import VisualDeduplicator
+from card_capture.pipeline.stage_metrics import emit_stage_metrics
 from card_capture.pipeline_utils import _resolve_session_tracks
 
 
@@ -85,3 +86,8 @@ def run(state: dict, *, telemetry) -> None:
 
     state["resolved_sessions"] = resolved_sessions
     state["prepared_tracks"] = prepared_tracks
+    emit_stage_metrics(
+        state,
+        stage="resolve",
+        metrics={"sessions": len(resolved_sessions), "prepared_tracks": len(prepared_tracks)},
+    )

@@ -12,6 +12,8 @@ from typing import Any, Dict, List
 import cv2
 import numpy as np
 
+from card_capture.pipeline.stage_metrics import emit_stage_metrics
+
 
 def run(state: dict, *, telemetry) -> None:
     request = state["request"]
@@ -170,3 +172,4 @@ def run(state: dict, *, telemetry) -> None:
     state["cards"] = final_cards
     state["output_artifacts"] = [str(crops_dir / "*.jpg")]
     runs_repo.mark_completed(run_id, cards_extracted=len(final_cards))
+    emit_stage_metrics(state, stage="store", metrics={"final_cards": len(final_cards)})

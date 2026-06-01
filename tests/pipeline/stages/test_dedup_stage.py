@@ -95,3 +95,28 @@ def test_dedup_cross_video_match_sets_parent_id():
 class _StubRepoNoCrossVideo:
     def find_embeddings_excluding_video(self, *, video_id):
         return []
+
+
+def test_intra_run_visual_duplicates_remain_in_final_cards():
+    request = MagicMock()
+    # Identical embeddings -> should be grouped
+    e = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    state = {
+        "request": request,
+        "fused_canonicals": [
+            _fused("physical-a", e),
+            _fused("physical-b", e),
+        ],
+        "video_id": 1,
+        "repos": {"cards": _StubRepoNoCrossVideo()},
+    }
+    dedup_stage.run(state, telemetry=MagicMock())
+    
+    # Check they are grouped
+    assert len(state["dedup_groups"]) == 1
+    assert "physical-b" in state["dedup_groups"][0]["duplicate_instance_ids"]
+    
+    # Check they BOTH remain in final_cards (the invariant we are testing)
+    instance_ids = [card["instance_id"] for card in state["final_cards"]]
+    assert "physical-a" in instance_ids
+    assert "physical-b" in instance_ids

@@ -22,6 +22,7 @@ from card_capture.deduplicator import VisualDeduplicator
 from card_capture.fuser import find_glare_centroid
 from card_capture.gpu_refinement import KorniaNormalizer
 from card_capture.models import FrameSample
+from card_capture.pipeline.stage_metrics import emit_stage_metrics
 from card_capture.pipeline_utils import (
     _compress_array,
     _glare_mask,
@@ -35,7 +36,7 @@ from card_capture.selector import ScoredCandidate
 _EMBEDDER_SINGLETON: object = None
 
 
-def _get_embedder():
+def get_shared_embedder():
     """Return a DinoEmbedder singleton, or None if weights are missing.
 
     Cached at module scope so we don't reload the model per pipeline run."""
@@ -48,6 +49,11 @@ def _get_embedder():
     except Exception:
         _EMBEDDER_SINGLETON = None
     return _EMBEDDER_SINGLETON
+
+
+def _get_embedder():
+    # Backwards-compatible alias for existing tests/patches.
+    return get_shared_embedder()
 
 
 def _frame_index_lookup(frames) -> Dict[int, np.ndarray]:
@@ -191,17 +197,21 @@ def run(state: dict, *, telemetry) -> None:
         best_canonical_img = best["normalized"]
 
         # ReID embedding (v5.5: array variant, no temp file)
-        reid_embedding: Optional[List[float]] = None
-        embedder = _get_embedder()
-        if embedder is not None:
-            try:
-                emb_tensor = embedder.embed_array(best_canonical_img)
-                reid_embedding = emb_tensor.cpu().numpy().tolist()[0]
-            except Exception as exc:
-                telemetry.resource_sample(
-                    {"event": "reid_embedding_failed",
-                     "instance_id": instance_id, "error": repr(exc)}
-                )
+        reid_embedding: Optional[List[float]] = track_dict.get("reid_embedding")
+        if reid_embedding is not None and isinstance(reid_embedding, np.ndarray):
+            reid_embedding = reid_embedding.tolist()
+            
+        if reid_embedding is None:
+            embedder = _get_embedder()
+            if embedder is not None:
+                try:
+                    emb_tensor = embedder.embed_array(best_canonical_img)
+                    reid_embedding = emb_tensor.cpu().numpy().tolist()[0]
+                except Exception as exc:
+                    telemetry.resource_sample(
+                        {"event": "reid_embedding_failed",
+                         "instance_id": instance_id, "error": repr(exc)}
+                    )
 
         # Track telemetry — per canonical entry. Repo is injected into
         # state by the runtime; tests can stub via state["repos"]["cards"].
@@ -245,3 +255,4 @@ def run(state: dict, *, telemetry) -> None:
         telemetry.progress("refine", pct, f"track {i+1}/{total_tracks}")
 
     state["refined_tracks"] = refined_tracks
+    emit_stage_metrics(state, stage="refine", metrics={"refined_tracks": len(refined_tracks)})

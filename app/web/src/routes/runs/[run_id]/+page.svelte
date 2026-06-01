@@ -237,13 +237,20 @@
         <h2>Stage timings</h2>
         <table class="timings-table">
             <thead>
-                <tr><th>Stage</th><th>Elapsed</th></tr>
+                <tr><th>Stage</th><th>Elapsed</th><th>Diagnostics</th></tr>
             </thead>
             <tbody>
                 {#each run.stage_timings as t}
                     <tr>
                         <td class="stage-name">{t.stage}</td>
                         <td class="stage-time">{fmt(t.elapsed_ms)}</td>
+                        <td class="stage-diag">
+                            {#if resources?.stage_metrics?.[t.stage]}
+                                {#each Object.entries(resources.stage_metrics[t.stage]) as [k, v]}
+                                    <span class="diag-chip">{k}={v}</span>
+                                {/each}
+                            {:else}—{/if}
+                        </td>
                     </tr>
                 {/each}
             </tbody>
@@ -524,6 +531,17 @@
     .timings-table td { padding: 0.45rem 1rem; border-top: 1px solid #f0f1f9; }
     .stage-name { font-weight: 600; color: #313a46; text-transform: capitalize; }
     .stage-time { color: #727cf5; font-family: monospace; }
+    .stage-diag { display: flex; flex-wrap: wrap; gap: 0.3rem; min-width: 220px; }
+    .diag-chip {
+        display: inline-block;
+        background: #f0f1f9;
+        border: 1px solid #dfe3f2;
+        border-radius: 999px;
+        padding: 0.1rem 0.5rem;
+        font-size: 0.72rem;
+        color: #495057;
+        font-family: monospace;
+    }
 
     .diag-grid {
         display: flex;

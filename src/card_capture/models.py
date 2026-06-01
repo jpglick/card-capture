@@ -66,6 +66,7 @@ class TrackState:
     active: bool = True
     angle: str = "Front"
     reid_embedding: Optional[np.ndarray] = None
+    session_id: int = 0
 
 
 @dataclass(frozen=True)

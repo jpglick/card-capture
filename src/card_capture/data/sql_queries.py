@@ -44,7 +44,7 @@ RUN_RESOURCE_SAMPLES = (
     "FROM run_resource_samples WHERE run_id = ? ORDER BY elapsed_s"
 )
 RUN_STAGE_EVENTS = (
-    "SELECT stage_id, event_type, created_at FROM pipeline_events "
+    "SELECT stage_id, event_type, created_at, data_json FROM pipeline_events "
     "WHERE run_id = ? AND event_type LIKE 'stage_%' ORDER BY created_at"
 )
 

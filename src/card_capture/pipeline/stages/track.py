@@ -7,13 +7,14 @@ can consume the richer per-candidate dicts the V4 refine step expects.
 """
 from __future__ import annotations
 
+from card_capture.pipeline.stage_metrics import emit_stage_metrics
 from card_capture.tracking.botsort_adapter import BoTSORTAdapter
 from card_capture.tracking.bytetrack_adapter import ByteTrackAdapter
 
 
 def run(state: dict, *, telemetry) -> None:
     cfg = state["request"].config
-    backend = cfg.get("tracker_backend", "bytetrack")
+    backend = cfg.get("tracker_backend", "botsort")
     
     # Common tracker args - extracted from cfg to match adapter signatures
     kwargs = {
@@ -24,14 +25,31 @@ def run(state: dict, *, telemetry) -> None:
     }
 
     if backend == "botsort":
-        kwargs["reid_distance_threshold"] = cfg.get("reid_distance_threshold", 0.6)
+        kwargs["centroid_jump_ratio"] = cfg.get("centroid_jump_ratio", 0.30)
+        kwargs["centroid_jump_frames"] = cfg.get("centroid_jump_frames", 3)
+        # Appearance sessionization settings
+        kwargs["same_threshold"] = cfg.get("appearance_same_threshold", 0.15)
+        kwargs["change_threshold"] = cfg.get("appearance_change_threshold", 0.30)
+        kwargs["confirm_frames"] = cfg.get("appearance_confirm_frames", 3)
+        kwargs["bridge_min_occurrences"] = cfg.get("bridge_min_occurrences", 3)
+        kwargs["bridge_position_ratio"] = cfg.get("bridge_position_ratio", 0.80)
+        kwargs["bridge_neighbor_change_ratio"] = cfg.get("bridge_neighbor_change_ratio", 0.80)
+        kwargs["bridge_novelty_margin"] = cfg.get("bridge_novelty_margin", 0.05)
+        kwargs["bridge_max_length_ratio"] = cfg.get("bridge_max_length_ratio", 0.75)
+        
         tracker = BoTSORTAdapter(**kwargs)
     else:
         tracker = ByteTrackAdapter(**kwargs)
 
     detections = state["novelty_scored_detections"]
     frames = state["sampled_frames"]
-    track_states = tracker.assign(detections, frames)
+    
+    runtime_worker = state.get("runtime_worker")
+    if runtime_worker is None:
+        track_states = tracker.assign(detections, frames)
+    else:
+        track_states = runtime_worker.call(tracker.assign, detections, frames)
+
     state["tracks"] = track_states
 
     # Build V4-shape tracks_data: List[Dict] with rich per-candidate dicts.
@@ -64,5 +82,9 @@ def run(state: dict, *, telemetry) -> None:
             "session_id": int(getattr(ts, "session_id", 0) or 0),
             "first_frame_index": int(getattr(ts, "first_frame_index", -1) or -1),
             "candidates": candidates,
+            "reid_embedding": getattr(ts, "reid_embedding", None),
         })
     state["tracks_data"] = tracks_data
+    metrics = {"tracks_final": len(track_states), "tracks_data": len(tracks_data)}
+    metrics.update(getattr(tracker, "sessionization_metrics", {}))
+    emit_stage_metrics(state, stage="track", metrics=metrics)

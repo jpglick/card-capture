@@ -10,6 +10,7 @@ from pathlib import Path
 
 import cv2
 
+from card_capture.pipeline.stage_metrics import emit_stage_metrics
 from card_capture.sampler import StrideSampler
 from card_capture.sampler.frame_producer import FrameProducer
 
@@ -47,4 +48,9 @@ def run(state: dict, *, telemetry) -> None:
     state["sampled_frames"] = []  # filled by the detect stage as it drains
     state["estimated_frame_total"] = _estimate_selected_count(
         video_path, sampler.target_yolo_fps
+    )
+    emit_stage_metrics(
+        state,
+        stage="sample",
+        metrics={"estimated_frames": int(state["estimated_frame_total"])},
     )
