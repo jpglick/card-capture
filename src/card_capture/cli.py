@@ -256,7 +256,7 @@ def _run_harness(args: argparse.Namespace) -> int:
 def _run_dataset(args: argparse.Namespace) -> int:
     from card_capture.data.connection import read_connection
     from card_capture.data.sql_queries import CLI_VIDEO_IDS
-    from .presence.training_data import export_dataset
+    from .training.training_data import export_dataset
 
     db_path: Path = args.db
     if not db_path.exists():
@@ -413,7 +413,7 @@ def _run_sampler_sessions(args: argparse.Namespace) -> int:
 
 def _run_train(args: argparse.Namespace) -> int:
     if args.train_command == "presence":
-        from .train.presence import train
+        from .training.presence import train
         if not args.data.exists():
             print(f"Dataset not found: {args.data}", file=sys.stderr)
             print("Run `card-capture dataset export` first.", file=sys.stderr)

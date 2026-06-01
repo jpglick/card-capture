@@ -4,7 +4,7 @@ Usage (via CLI):
     card-capture train presence --data data/presence_dataset --out models/presence_classifier.pt
 
 Usage (direct):
-    python -m card_capture.train.presence \
+    python -m card_capture.training.presence \
         --data data/presence_dataset --out models/presence_classifier.pt \
         --epochs 8 --batch-size 64
 """

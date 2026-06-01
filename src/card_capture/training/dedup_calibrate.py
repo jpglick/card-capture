@@ -13,7 +13,7 @@ from PIL import Image
 
 from card_capture.data.connection import read_connection
 from card_capture.data.sql_queries import DEDUP_CONFIRMED_CLUSTERS, DEDUP_INSTANCE_FUSED_BY_TRACK
-from ..inference.dino_dedup import DinoDeduplicator
+from card_capture.ml.inference.dino_dedup import DinoDeduplicator
 
 
 def calibrate(*, db_path: Path, variant: str = "vits14") -> dict:

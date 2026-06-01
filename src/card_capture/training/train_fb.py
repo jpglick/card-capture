@@ -10,7 +10,7 @@ from PIL import Image
 from torch.utils.data import Dataset, DataLoader
 from card_capture.data.connection import read_connection
 from card_capture.data.sql_queries import ML_TRAIN_FB_DATASET
-from .fb_classifier import FBClassifier, get_transforms
+from card_capture.ml.fb_classifier import FBClassifier, get_transforms
 
 
 class FBDataset(Dataset):
@@ -70,7 +70,7 @@ def train_fb(*, db_path: Path, out_path: Path, epochs: int = 10, lr: float = 0.0
     print(f"Model saved to {out_path}")
     
     # Register in DB
-    from .registry import register_model
+    from card_capture.ml.registry import register_model
     register_model(
         db_path=db_path,
         model_name="fb_classifier",

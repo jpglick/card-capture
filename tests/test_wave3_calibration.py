@@ -324,7 +324,7 @@ class TestHardCaseCapture:
 
     def test_hard_case_multiple_fronts(self):
         """Detect >2 Fronts as hard case."""
-        from card_capture.analysis.hard_case_capture import is_hard_case
+        from card_capture.training.hard_case_capture import is_hard_case
 
         # Session with 3 Fronts (multiple_fronts)
         session = {
@@ -346,7 +346,7 @@ class TestHardCaseCapture:
 
     def test_hard_case_borderline_hamming(self):
         """Detect borderline Hamming distance (within 4 of 22) as hard case."""
-        from card_capture.analysis.hard_case_capture import is_hard_case
+        from card_capture.training.hard_case_capture import is_hard_case
 
         # Session with borderline Hamming (within range [18, 26])
         session = {
