@@ -13,3 +13,4 @@ For the current design, see [`docs/architecture/arch-5.5.md`](../architecture/ar
 | `0004-v4-modular-pipeline.md` | v4 | ADR: modular pipeline decision |
 | `pipeline-v3-overview.md` | v3 | v3 pipeline overview |
 | `V4_CONCERNS.md`, `V4_CONCERNS_PASS2.md` | v4 | v4 design concern reviews |
+| `refine-optimizations.md` | v4.1 | CUDA/RunPod optimization plan |

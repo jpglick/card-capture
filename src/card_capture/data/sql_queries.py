@@ -534,21 +534,10 @@ def resource_samples_insert(columns_sql: str, placeholders_sql: str) -> str:
 
 # Misc app/src leftovers
 WORKER_CORE_CARD_EXPORT = "SELECT track_id, session_id, fused_image_path, angle FROM card_instances WHERE run_id=?"
-RUNPOD_HANDLER_TABLES = "SELECT name FROM sqlite_master WHERE type='table'"
-RUNPOD_HANDLER_EVENTS_BY_TYPE = (
-    "SELECT event_type, COUNT(*) as n FROM pipeline_events WHERE run_id=? GROUP BY event_type ORDER BY n DESC"
-)
-RUNPOD_HANDLER_PIPELINE_EVENTS_PRAGMA = "PRAGMA table_info(pipeline_events)"
-RUNPOD_HANDLER_STAGE_EVENTS = "SELECT event_type, data_json FROM pipeline_events WHERE run_id=? AND event_type LIKE 'stage_%'"
-RUNPOD_HANDLER_RUN_TELEMETRY = "SELECT detect_telemetry_json FROM pipeline_runs WHERE run_id=?"
 MAIN_BOOTSTRAP_VIDEO = "SELECT id FROM videos ORDER BY id LIMIT 1"
 CONFIG_PRESETS_LIST = "SELECT preset_name, description, config_json, created_at FROM config_presets ORDER BY created_at DESC"
 CONFIG_PRESET_BY_NAME = "SELECT preset_name, description, config_json, created_at FROM config_presets WHERE preset_name = ?"
 
-
-def runpod_handler_count_query(table: str, where: str = "") -> str:
-    suffix = f" WHERE {where}" if where else ""
-    return f"SELECT COUNT(*) FROM {table}{suffix}"
 
 TIMELINE_EVENTS_BY_FRAME = "SELECT * FROM pipeline_events ORDER BY frame_index"
 TIMELINE_INSTANCES_SUMMARY = """

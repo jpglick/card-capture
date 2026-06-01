@@ -2,7 +2,7 @@
 
 Bridges stage events emitted by ``card_capture.pipeline.runtime_local`` to the
 UI's SSE EventBus. Also funnels them to ``logging`` so the existing log
-persistence path (which scrapes stdout in the metaflow days) still gets
+persistence path still gets
 something useful written to ``pipeline_run_logs``.
 
 All emit calls are thread-safe — EventBus.emit handles the thread→loop hop

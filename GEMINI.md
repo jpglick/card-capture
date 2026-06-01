@@ -14,9 +14,8 @@
 
 ## Architecture & Conventions
 
-### 1. Unified In-Process Runtime
-- The pipeline MUST run within a single process using `UnifiedRuntime` to minimize IPC overhead and redundant I/O.
-- Metaflow is relegated to remote orchestration and historical baseline tracking; local development and high-performance production runs use the in-process loop.
+### 1. Local Pipeline Runtime
+- The pipeline MUST run within a single process using `LocalPipelineRuntime` to minimize IPC overhead and redundant I/O.
 
 ### 2. Strict GPU Boundary
 - All PyTorch, Kornia, and model inference MUST happen within the guarded `_worker` thread context of the runtime.

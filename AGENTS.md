@@ -19,10 +19,10 @@ This file defines foundational rules and architectural standards for all AI agen
 
 ## 3. Architecture & Conventions (v5.5+)
 
-- **UNIFIED RUNTIME:** The pipeline MUST run within a single process using `UnifiedRuntime`. Metaflow is relegated to remote orchestration and historical tracking.
+- **LOCAL RUNTIME:** The pipeline MUST run within a single process using `LocalPipelineRuntime`.
 - **STRICT GPU BOUNDARY:** All PyTorch/Kornia operations MUST happen within the guarded `_worker` thread context of the runtime. CPU tasks (decoding, metadata) MUST remain on producer/main threads.
 - **CENTRALIZED MODELS:** Use `card_capture.models` for all domain objects. Do not define redundant dataclasses in local modules.
-- **DATA ACCESS LAYER (DAL):** ALL database writes MUST go through the `SingleWriterDAL` in `card_capture.dal` to prevent SQLite concurrency locks. No direct `sqlite3` calls in pipeline logic.
+- **DATA ACCESS LAYER (DAL):** ALL database writes MUST go through the `SingleWriterDAL` in `card_capture.data.writer` to prevent SQLite concurrency locks. No direct `sqlite3` calls in pipeline logic.
 - **SESSION-ANCHORED LOGIC:** The pipeline relies on discrete temporal sessions to group card presentations. Tracking and deduplication use these as logical boundaries.
 
 ## 4. Engineering Standards

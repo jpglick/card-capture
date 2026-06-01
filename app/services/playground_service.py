@@ -1,6 +1,6 @@
 """Service layer for the Threshold Playground.
 
-Allows recomputing pipeline stages in-memory using persisted Metaflow artifacts.
+Allows recomputing pipeline stages in-memory using v5.5 local state.
 """
 from __future__ import annotations
 
