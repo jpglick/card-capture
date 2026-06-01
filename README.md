@@ -8,10 +8,10 @@ Extract high-quality sports card stills from local video files.
 pip install -e .
 ```
 
-Install the v2.1 pipeline runtime dependencies:
+Install the legacy tracking (BoT-SORT) and PyAV fallback dependencies:
 
 ```bash
-pip install -e ".[pipeline_v21]"
+pip install -e ".[legacy_tracking]"
 ```
 
 To use the ML-based card detection features, also install the optional model dependencies:
@@ -32,7 +32,7 @@ pip install -e ".[review]"
 
 On Apple Silicon, if PyTorch reports that MPS is unavailable at runtime, the CLI now stops and asks whether to continue on CPU. That keeps GPU fallback explicit instead of silently degrading performance.
 
-`decord` is installed separately from `.[pipeline_v21]` because PyPI does not publish wheels for Apple Silicon macOS, and its macOS PyPI wheels are limited to older Intel CPython builds.
+`decord` is installed separately from `.[legacy_tracking]` because PyPI does not publish wheels for Apple Silicon macOS, and its macOS PyPI wheels are limited to older Intel CPython builds.
 
 Install `decord` with one of these paths:
 
@@ -50,7 +50,7 @@ cd .tools
 curl -L https://micro.mamba.pm/api/micromamba/osx-arm64/latest | tar -xj
 cd ..
 .tools/bin/micromamba create -y -p "$PWD/.decord-env" -c conda-forge python=3.11 decord ffmpeg pip
-.tools/bin/micromamba run -p "$PWD/.decord-env" pip install -e ".[pipeline_v21,model,review,test]"
+.tools/bin/micromamba run -p "$PWD/.decord-env" pip install -e ".[legacy_tracking,model,review,test]"
 ```
 
 Then run the app through that environment:

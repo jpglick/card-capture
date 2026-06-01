@@ -21,7 +21,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-pipeline_v21 = [
+legacy_tracking = [
   "av",
   "onnxruntime",
   "boxmot>=0.14.0",

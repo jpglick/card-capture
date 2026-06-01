@@ -9,7 +9,7 @@ loop. Assumes you are in the repo root with the virtualenv active.
 
 ```bash
 # Install all dependencies (pipeline + app + models)
-pip install -e ".[pipeline_v21,model,app]"
+pip install -e ".[legacy_tracking,model,app]"
 
 # Confirm the CLI works
 card-capture --help

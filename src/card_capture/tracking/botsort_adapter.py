@@ -105,7 +105,7 @@ def _import_botsort():
     except ImportError as exc:
         raise ImportError(
             "BoT-SORT backend requires the 'boxmot' package. "
-            "Install it with: pip install 'card-capture[pipeline_v21]'"
+            "Install it with: pip install 'card-capture[legacy_tracking]'"
         ) from exc
 
 

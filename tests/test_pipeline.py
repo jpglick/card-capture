@@ -640,10 +640,10 @@ def test_pipeline_processing_options_accepts_bytetrack():
     assert opts.tracker_backend == "bytetrack"
 
 
-def test_pyproject_declares_pipeline_v21_runtime_dependencies():
+def test_pyproject_declares_legacy_tracking_runtime_dependencies():
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     pyproject = pyproject_path.read_text(encoding="utf-8")
-    match = re.search(r"pipeline_v21\s*=\s*\[(.*?)\]", pyproject, re.DOTALL)
+    match = re.search(r"legacy_tracking\s*=\s*\[(.*?)\]", pyproject, re.DOTALL)
 
     assert match is not None
     runtime_block = match.group(1)
