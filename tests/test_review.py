@@ -5,7 +5,7 @@ import cv2
 from fastapi.testclient import TestClient
 
 from card_capture.core.models import CardDetection, CornerDetection, QualityScore
-from card_capture.review import create_app
+from card_capture.review.app import create_app
 from card_capture.stages.store.storage import Storage
 
 

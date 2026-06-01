@@ -223,7 +223,7 @@ def _run_review(args: argparse.Namespace) -> int:
     except ImportError as exc:
         raise RuntimeError("Review UI requires: pip install '.[review]'") from exc
 
-    from .review import create_app
+    from .review.app import create_app
 
     app = create_app(args.db)
     uvicorn.run(app, host=args.host, port=args.port)
