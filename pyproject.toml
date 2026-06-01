@@ -63,6 +63,8 @@ dev = [
   "import-linter>=2.0",
   "pytest>=7.0",
   "vulture>=2.11",
+  "libcst>=1.1",
+  "rope>=1.11",
 ]
 
 [project.scripts]
