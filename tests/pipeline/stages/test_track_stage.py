@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from card_capture.pipeline.stages import track as track_stage
+from card_capture.stages import track
 
 
 def _detection(frame_index, det_id, confidence=0.9):
@@ -28,7 +28,7 @@ def test_track_stage_writes_tracks_data_list_of_dicts():
         "sampled_frames": [],
         "novelty_scored_detections": [_detection(i, i) for i in range(5)],
     }
-    track_stage.run(state, telemetry=MagicMock())
+    track.run(state, telemetry=MagicMock())
     assert "tracks_data" in state
     assert isinstance(state["tracks_data"], list)
     for t in state["tracks_data"]:

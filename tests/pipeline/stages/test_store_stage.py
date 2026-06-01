@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from card_capture.pipeline.stages import store as store_stage
+from card_capture.stages import store
 
 
 def _fused(instance_id, image=None):
@@ -115,7 +115,7 @@ def _state(tmp_path, instance_id="t-aaaaaaaa"):
 
 def test_store_writes_fused_image_to_crops_dir(tmp_path):
     state = _state(tmp_path)
-    store_stage.run(state, telemetry=MagicMock())
+    store.run(state, telemetry=MagicMock())
     crops_dir = tmp_path / "crops"
     assert crops_dir.exists()
     fused_files = list(crops_dir.glob("instance_*_fused.jpg"))
@@ -124,7 +124,7 @@ def test_store_writes_fused_image_to_crops_dir(tmp_path):
 
 def test_store_writes_rectified_jpeg_per_frame_entry(tmp_path):
     state = _state(tmp_path)
-    store_stage.run(state, telemetry=MagicMock())
+    store.run(state, telemetry=MagicMock())
     crops_dir = tmp_path / "crops"
     rectified = list(crops_dir.glob("track_*_det_*_rectified.jpg"))
     assert len(rectified) == 1
@@ -132,7 +132,7 @@ def test_store_writes_rectified_jpeg_per_frame_entry(tmp_path):
 
 def test_store_calls_add_card_instance_with_run_id(tmp_path):
     state = _state(tmp_path)
-    store_stage.run(state, telemetry=MagicMock())
+    store.run(state, telemetry=MagicMock())
     repo = state["repos"]["cards"]
     assert len(repo.added_instances) == 1
     rid, kw = repo.added_instances[0]
@@ -143,7 +143,7 @@ def test_store_calls_add_card_instance_with_run_id(tmp_path):
 def test_store_best_view_points_to_fused_path(tmp_path):
     """V4 line 98 (A1): canonical best view's rectified_path = fused_image_path."""
     state = _state(tmp_path)
-    store_stage.run(state, telemetry=MagicMock())
+    store.run(state, telemetry=MagicMock())
     repo = state["repos"]["cards"]
     best_view_kw = [kw for _, kw in repo.added_views if kw["is_canonical"]][0]
     fusion_kw = repo.fusion_updates[0]
@@ -152,14 +152,14 @@ def test_store_best_view_points_to_fused_path(tmp_path):
 
 def test_store_populates_final_cards_in_state(tmp_path):
     state = _state(tmp_path)
-    store_stage.run(state, telemetry=MagicMock())
+    store.run(state, telemetry=MagicMock())
     assert len(state["cards"]) == 1
     assert state["cards"][0]["instance_id"] == "t-aaaaaaaa"
 
 
 def test_store_marks_run_completed_with_card_count(tmp_path):
     state = _state(tmp_path)
-    store_stage.run(state, telemetry=MagicMock())
+    store.run(state, telemetry=MagicMock())
     runs_repo = state["repos"]["runs"]
     runs_repo.mark_completed.assert_called_once_with("r1", cards_extracted=1)
 
@@ -184,7 +184,7 @@ def test_store_intra_run_duplicates_both_written_to_db(tmp_path):
         }],
         "repos": {"cards": repo, "runs": MagicMock()},
     }
-    store_stage.run(state, telemetry=MagicMock())
+    store.run(state, telemetry=MagicMock())
     
     # We expect BOTH physical instances to be in the database
     assert len(repo.added_instances) == 2

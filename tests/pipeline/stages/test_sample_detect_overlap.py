@@ -1,8 +1,8 @@
 """sample+detect overlap: frame parity vs a direct sampler pass; one det/frame."""
 from unittest.mock import MagicMock
 
-from card_capture.pipeline.stages import detect as detect_stage
-from card_capture.pipeline.stages import sample as sample_stage
+from card_capture.stages import detect
+from card_capture.stages import sample
 from card_capture.stages.sample.sampler import StrideSampler
 
 
@@ -12,8 +12,8 @@ def test_sample_detect_overlap_parity(synthetic_two_cards_mov):
     request.config = {"detector": "fake"}
     state = {"request": request}
 
-    sample_stage.run(state, telemetry=MagicMock())
-    detect_stage.run(state, telemetry=MagicMock())
+    sample.run(state, telemetry=MagicMock())
+    detect.run(state, telemetry=MagicMock())
 
     sampled = state["sampled_frames"]
     detections = state["detections"]

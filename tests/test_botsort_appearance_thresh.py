@@ -3,7 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from card_capture.pipeline.stages.dedup import SAME_CARD_EMB_THRESHOLD
+from card_capture.stages.dedup import SAME_CARD_EMB_THRESHOLD
 
 
 class _FakeBoTSORT:
