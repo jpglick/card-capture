@@ -1,6 +1,6 @@
 import numpy as np
 
-from card_capture.cropper import CardCropper, _orient_for_target_canvas, order_points_clockwise
+from card_capture.stages.refine.cropper import CardCropper, _orient_for_target_canvas, order_points_clockwise
 
 
 def test_order_points_clockwise_returns_top_left_first():

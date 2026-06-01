@@ -17,10 +17,10 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from card_capture.cropper import PrecisionNormalizer
+from card_capture.stages.refine.cropper import PrecisionNormalizer
 from card_capture.deduplicator import VisualDeduplicator
 from card_capture.fuser import find_glare_centroid
-from card_capture.gpu_refinement import KorniaNormalizer
+from card_capture.stages.refine.gpu_refinement import KorniaNormalizer
 from card_capture.core.models import FrameSample
 from card_capture.shared.stage_metrics import emit_stage_metrics
 from card_capture.shared.pipeline_utils import (

@@ -78,7 +78,7 @@ class PrecisionNormalizer:
 
     def normalize(self, image: np.ndarray, corners: Sequence[Point], rotate_180: bool = True) -> np.ndarray:
         # 1. Try vImage (macOS native)
-        from .ml.inference.vimage_warp import vimage_warp_perspective
+        from card_capture.ml.inference.vimage_warp import vimage_warp_perspective
         vimg = vimage_warp_perspective(image, corners, (self.width, self.height))
         if vimg is not None:
             if rotate_180:
