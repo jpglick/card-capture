@@ -128,8 +128,9 @@ src/card_capture/
     templates/                  # labeling/review/setup/timeline .html
 
   platforms/  local.py          # platform abstraction seam (kept)
-  metrics/    robustness_pack.py # eval metrics (kept; candidate to move to harness/)
 ```
+
+(`metrics/` leaves the package entirely — see §3.1 / §4.3.)
 
 ### 3.1 Module → home mapping (the full move map)
 
@@ -161,7 +162,8 @@ src/card_capture/
 | `pipeline/{request,runner,telemetry,runtime_local,runtime_worker}.py` | `pipeline/` (unchanged names) |
 | `data/*` | `data/` (unchanged) |
 | `ml/{models,inference,embeddings,registry,scaffolding,errors,synthetic_eval,gpu_ops}` | `ml/` (unchanged, minus the training files above) |
-| `platforms/local.py`, `metrics/robustness_pack.py`, `_warnings.py`, `cli.py`, `__init__.py` | unchanged |
+| `metrics/robustness_pack.py` | `harness/metrics/robustness_pack.py` (eval-only; removes the `metrics/` micro-package) |
+| `platforms/local.py`, `_warnings.py`, `cli.py`, `__init__.py` | unchanged |
 
 ### 3.2 The ML boundary principle
 
@@ -211,6 +213,11 @@ docs/
 - `harness/` stays a **top-level** package (dev/eval-only, not shipped runtime). Only its
   `card_capture.*` imports are rewritten. Moving it under `src/` would wrongly make it an
   installed artifact.
+- `harness/metrics/` gains `robustness_pack.py`, moved out of `card_capture/metrics/`
+  (which is then deleted). This is eval-only code — it is imported only by
+  `tests/regression/*` and itself imports `tests.regression.pipeline_runner`, so it does
+  not belong in the runtime package. Its `tests.regression.*` import is left as-is (only
+  `card_capture.*` paths are rewritten).
 - `scripts/` stays the home for diagnostic/calibration/generation scripts
   (incl. `scripts/deadcode/`).
 - `migrations/` stays at root (deploy concern; import-linter already special-cases it for
@@ -316,4 +323,3 @@ python -m libcst.tool codemod rename.RenameCommand \
 - Split oversized modules, starting with `sampler/__init__.py` (1048 lines) and
   `workers.py` (724 lines).
 - Decide whether the legacy `review/` Jinja UI should be retired in favor of `app/`.
-- Consider relocating `metrics/robustness_pack.py` into `harness/` (eval-only).
