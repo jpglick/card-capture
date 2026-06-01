@@ -6,7 +6,7 @@ import pytest
 
 from card_capture.cli import build_parser, main
 from card_capture.core.workers import ProcessingOptions
-from card_capture.detectors import TorchDeviceStatus
+from card_capture.stages.detect.detectors import TorchDeviceStatus
 
 
 def test_parser_rejects_missing_process_video_path():

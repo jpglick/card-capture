@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from unittest.mock import MagicMock, patch
 
-from card_capture.detectors import (
+from card_capture.stages.detect.detectors import (
     CardcaptorUltralyticsDetector,
     FakeCornerDetector,
     probe_torch_device_status,
@@ -285,7 +285,7 @@ def test_null_state_detector_sequential_warmup():
 @pytest.mark.quarantine
 def test_detector_skips_hf_download_when_cached(tmp_path, monkeypatch):
     """If hf_hub_download finds the file in the local cache, no network call is needed."""
-    from card_capture import detectors as det_mod
+    from card_capture.stages.detect import detectors as det_mod
 
     fake_path = tmp_path / "cached_model.onnx"
     fake_path.write_bytes(b"weights")

@@ -6,7 +6,7 @@ downstream stages, batches them, and runs the detector. Loads the model once.
 """
 from __future__ import annotations
 
-from card_capture.detectors import (
+from card_capture.stages.detect.detectors import (
     CardcaptorUltralyticsDetector,
     FakeCardDetector,
     probe_torch_device_status,

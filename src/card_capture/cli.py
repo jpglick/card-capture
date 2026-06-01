@@ -12,7 +12,7 @@ import uuid
 from pathlib import Path
 from typing import Optional, Sequence
 
-from .detectors import CardcaptorUltralyticsDetector, FakeCardDetector, probe_torch_device_status
+from card_capture.stages.detect.detectors import CardcaptorUltralyticsDetector, FakeCardDetector, probe_torch_device_status
 from .sampler import AdaptivePresenceSampler
 from .storage import Storage
 from card_capture.core.config import load_config, save_config

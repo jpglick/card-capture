@@ -7,7 +7,7 @@ import pytest
 
 pytestmark = pytest.mark.quarantine
 
-from card_capture.detectors import CardcaptorUltralyticsDetector, TorchDeviceStatus
+from card_capture.stages.detect.detectors import CardcaptorUltralyticsDetector, TorchDeviceStatus
 
 @pytest.fixture
 def mock_yolo():
@@ -30,12 +30,12 @@ def mock_device_mps():
         cuda_available=False,
         reason="auto_mps"
     )
-    with patch("card_capture.detectors.probe_torch_device_status", return_value=status):
+    with patch("card_capture.stages.detect.detectors.probe_torch_device_status", return_value=status):
         yield status
 
 @pytest.fixture
 def mock_resolve_model_path():
-    with patch("card_capture.detectors._resolve_model_path", return_value="/models/model.pt"):
+    with patch("card_capture.stages.detect.detectors._resolve_model_path", return_value="/models/model.pt"):
         yield "/models/model.pt"
 
 pytestmark = pytest.mark.quarantine
@@ -94,7 +94,7 @@ def test_load_model_no_coreml_on_non_mac(mock_yolo, mock_resolve_model_path):
         reason="no_accelerator"
     )
     with patch("platform.system", return_value="Linux"), \
-         patch("card_capture.detectors.probe_torch_device_status", return_value=status), \
+         patch("card_capture.stages.detect.detectors.probe_torch_device_status", return_value=status), \
          patch("os.path.exists", return_value=False):
         
         detector = CardcaptorUltralyticsDetector(device="auto")

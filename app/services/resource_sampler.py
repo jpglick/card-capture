@@ -46,7 +46,7 @@ def get_host_info() -> dict:
     # GPU device
     gpu_device = "cpu"
     try:
-        from card_capture.detectors import probe_torch_device_status
+        from card_capture.stages.detect.detectors import probe_torch_device_status
         status = probe_torch_device_status()
         gpu_device = status.resolved
     except Exception:

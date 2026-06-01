@@ -73,7 +73,7 @@ def _laplacian_variance_batch(images: List[Union[np.ndarray, "torch.Tensor"]]) -
         return []
 
     try:
-        from card_capture.detectors import probe_torch_device_status
+        from card_capture.stages.detect.detectors import probe_torch_device_status
         resolved_device = probe_torch_device_status("auto").resolved
         if resolved_device == "cpu":
             raise RuntimeError("no acceleration")
