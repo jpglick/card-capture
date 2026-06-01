@@ -4,7 +4,7 @@ import numpy as np
 import cv2
 from fastapi.testclient import TestClient
 
-from card_capture.models import CardDetection, CornerDetection, QualityScore
+from card_capture.core.models import CardDetection, CornerDetection, QualityScore
 from card_capture.review import create_app
 from card_capture.storage import Storage
 

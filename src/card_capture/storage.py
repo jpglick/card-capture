@@ -31,7 +31,7 @@ from card_capture.data.sql_queries import (
     storage_alter_table_add_column,
     storage_pragma_table_info,
 )
-from .models import CardDetection, CornerDetection, PerformanceTelemetry, QualityScore
+from card_capture.core.models import CardDetection, CornerDetection, PerformanceTelemetry, QualityScore
 
 
 class Storage:

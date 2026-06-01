@@ -2,8 +2,8 @@ import numpy as np
 import pytest
 from unittest.mock import MagicMock, patch
 
-from card_capture.models import ScoredCandidate
-from card_capture.models import QualityScore
+from card_capture.core.models import ScoredCandidate
+from card_capture.core.models import QualityScore
 
 
 def _candidate(detection_id, frame_index, x, y, conf=0.9, w=200, h=300):

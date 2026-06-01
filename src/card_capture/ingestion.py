@@ -7,7 +7,7 @@ from typing import Iterator, Protocol
 import cv2
 import numpy as np
 
-from .models import FramePacket
+from card_capture.core.models import FramePacket
 
 
 class FrameReader(Protocol):

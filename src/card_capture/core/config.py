@@ -131,7 +131,7 @@ class PipelineConfig:
             "corner_refinement": self.corner_refinement,
         }
 
-    def to_options(self, output_dir: Path) -> "card_capture.workers.ProcessingOptions":
+    def to_options(self, output_dir: Path) -> "card_capture.core.workers.ProcessingOptions":
         """Convert to legacy ProcessingOptions for the monolith path.
 
         Generated programmatically to prevent silent drift: any field added to

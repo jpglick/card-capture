@@ -1,4 +1,4 @@
-from card_capture.models import TrackState
+from card_capture.core.models import TrackState
 
 
 def test_trackstate_session_id_defaults_zero():

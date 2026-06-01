@@ -2,8 +2,9 @@ import pytest
 import torch
 import inspect
 
-from card_capture import gpu_utils, fuser, scoring
-from card_capture.config import PipelineConfig
+from card_capture.core import gpu_utils
+from card_capture import fuser, scoring
+from card_capture.core.config import PipelineConfig
 
 
 def test_config_has_allow_cpu_fallback_default_false():

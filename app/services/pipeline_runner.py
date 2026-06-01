@@ -165,7 +165,7 @@ class PipelineRunner:
         # Merge full PipelineConfig defaults so back-half stages read knobs
         # like novelty_floor / foil_threshold from request.config. Caller
         # overrides win (detector arg, etc.).
-        from card_capture.config import load_config
+        from card_capture.core.config import load_config
         config = load_config(Path(_REPO_ROOT) / "card_capture_config.json")
         request_config = config.to_request_config()
         request_config["detector"] = detector

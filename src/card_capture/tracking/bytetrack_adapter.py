@@ -6,7 +6,7 @@ from typing import List, Optional
 
 import numpy as np
 
-from ..models import ScoredCandidate, TrackState, FramePacket
+from card_capture.core.models import ScoredCandidate, TrackState, FramePacket
 
 
 def _xyxy_from_corners(corners) -> np.ndarray:
@@ -134,7 +134,7 @@ class ByteTrackAdapter:
         for d in detections:
             if isinstance(d, dict):
                 # Convert dict to ScoredCandidate if needed
-                from ..models import QualityScore, ScoredCandidate
+                from card_capture.core.models import QualityScore, ScoredCandidate
                 # Use detection confidence if available, else novelty_score
                 total_score = float(d.get("confidence", d.get("novelty_score", 1.0)))
                 cand = ScoredCandidate(

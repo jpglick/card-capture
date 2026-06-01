@@ -1,7 +1,7 @@
 import numpy as np
 import cv2
 from typing import List, Tuple, Union
-from .models import Point
+from card_capture.core.models import Point
 from .cropper import _orient_for_target_canvas, order_points_clockwise
 from .detectors import probe_torch_device_status
 

@@ -21,7 +21,7 @@ from card_capture.cropper import PrecisionNormalizer
 from card_capture.deduplicator import VisualDeduplicator
 from card_capture.fuser import find_glare_centroid
 from card_capture.gpu_refinement import KorniaNormalizer
-from card_capture.models import FrameSample
+from card_capture.core.models import FrameSample
 from card_capture.pipeline.stage_metrics import emit_stage_metrics
 from card_capture.pipeline_utils import (
     _compress_array,
@@ -61,7 +61,7 @@ def _frame_index_lookup(frames) -> Dict[int, np.ndarray]:
 
 
 def _scored_candidate_from_dict(c: dict) -> ScoredCandidate:
-    from card_capture.models import QualityScore
+    from card_capture.core.models import QualityScore
     return ScoredCandidate(
         detection_id=int(c["detection_id"]),
         timestamp_ms=int(c.get("timestamp_ms", 0)),

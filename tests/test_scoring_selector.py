@@ -1,6 +1,6 @@
 import numpy as np
 
-from card_capture.models import CardDetection, CropResult, QualityScore, ScoredCandidate
+from card_capture.core.models import CardDetection, CropResult, QualityScore, ScoredCandidate
 from card_capture.scoring import QualityScorer
 from card_capture.selector import CandidateSelector
 

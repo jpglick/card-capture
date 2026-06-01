@@ -9,8 +9,8 @@ from card_capture.detectors import (
     FakeCornerDetector,
     probe_torch_device_status,
 )
-from card_capture.workers import NullStateDetector
-from card_capture.models import DetectionPacket, FramePacket, FrameSample
+from card_capture.core.workers import NullStateDetector
+from card_capture.core.models import DetectionPacket, FramePacket, FrameSample
 
 
 def _make_frame(height: int, width: int) -> FrameSample:

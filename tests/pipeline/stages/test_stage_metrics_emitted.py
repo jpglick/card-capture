@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from card_capture.models import QualityScore, ScoredCandidate, TrackState
+from card_capture.core.models import QualityScore, ScoredCandidate, TrackState
 from card_capture.pipeline.stages import detect as detect_stage
 from card_capture.pipeline.stages import novelty as novelty_stage
 from card_capture.pipeline.stages import track as track_stage

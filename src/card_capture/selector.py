@@ -6,7 +6,7 @@ from typing import Iterable, List, Tuple, Optional
 
 import numpy as np
 
-from .models import QualityScore, ScoredCandidate, TrackState
+from card_capture.core.models import QualityScore, ScoredCandidate, TrackState
 
 
 @dataclass

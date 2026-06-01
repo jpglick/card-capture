@@ -15,7 +15,7 @@ from typing import Optional, Sequence
 from .detectors import CardcaptorUltralyticsDetector, FakeCardDetector, probe_torch_device_status
 from .sampler import AdaptivePresenceSampler
 from .storage import Storage
-from .config import load_config, save_config
+from card_capture.core.config import load_config, save_config
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="card-capture")
@@ -307,7 +307,7 @@ def _run_sampler_sessions(args: argparse.Namespace) -> int:
     decoding) so it completes in ~35 s instead of the full pipeline's 2+ min.
     """
     from .adaptive_gap import compute_session_gap_frames
-    from .config import load_config
+    from card_capture.core.config import load_config
 
     config = load_config(args.config)
     video_path = args.video_path.resolve()

@@ -301,7 +301,7 @@ class TrainingService:
         # trainers don't need GPU to score a benchmark rerun.
         runtime = LocalPipelineRuntime(telemetry=NoopTelemetry())
 
-        from card_capture.config import load_config
+        from card_capture.core.config import load_config
         config = load_config(_Path(__file__).parent.parent.parent / "card_capture_config.json")
         request_config = config.to_request_config()
         request_config["detector"] = "docaligner"

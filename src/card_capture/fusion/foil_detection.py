@@ -12,7 +12,7 @@ import torch.nn.functional as F
 DEFAULT_FOIL_THRESHOLD = 50.0
 
 # Resolve GPU device once at module load time (MPS > CPU).
-from card_capture import gpu_utils as _gpu_utils
+from card_capture.core import gpu_utils as _gpu_utils
 _device = _gpu_utils.get_device(allow_cpu_fallback=_gpu_utils._env_cpu_ok())
 
 

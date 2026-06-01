@@ -7,7 +7,7 @@ from typing import List, Optional, Tuple
 import numpy as np
 import torch
 
-from ..models import ScoredCandidate, TrackState, FramePacket
+from card_capture.core.models import ScoredCandidate, TrackState, FramePacket
 from ..pipeline.stages.dedup import SAME_CARD_EMB_THRESHOLD
 from .bytetrack_adapter import _AdaptedDetection, _xyxy_from_corners
 from .centroid_jump import CentroidJumpDetector
@@ -485,7 +485,7 @@ class BoTSORTAdapter:
         for d in detections:
             if isinstance(d, dict):
                 # Convert dict to ScoredCandidate if needed
-                from ..models import QualityScore, ScoredCandidate
+                from card_capture.core.models import QualityScore, ScoredCandidate
                 # Use detection confidence if available, else novelty_score
                 total_score = float(d.get("confidence", d.get("novelty_score", 1.0)))
                 cand = ScoredCandidate(

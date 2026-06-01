@@ -7,7 +7,7 @@ import math
 from typing import List, Sequence, Tuple
 import numpy as np
 
-from .models import Point
+from card_capture.core.models import Point
 
 # Card canonical short:long ratio (750x1050).
 _TARGET_RATIO = 750.0 / 1050.0

@@ -323,7 +323,7 @@ def _select_canonical_entries(frame_entries: list[dict], deduplicator: Any) -> l
 
 def _build_candidates(rows: list) -> list:
     """Build ScoredCandidate list from _DetectionEnvelope rows."""
-    from .models import ScoredCandidate, QualityScore
+    from card_capture.core.models import ScoredCandidate, QualityScore
 
     candidates = []
     for index, row in enumerate(rows):

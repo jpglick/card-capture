@@ -5,7 +5,7 @@ from typing import Sequence
 import cv2
 import numpy as np
 
-from .models import CropResult, Point, Polygon
+from card_capture.core.models import CropResult, Point, Polygon
 
 
 def order_points_clockwise(points: Sequence[Point]) -> Polygon:

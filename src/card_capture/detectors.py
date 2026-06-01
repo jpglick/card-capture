@@ -10,8 +10,8 @@ import cv2
 import numpy as np
 import torch
 
-from .interfaces import CardDetector
-from .models import (
+from card_capture.core.interfaces import CardDetector
+from card_capture.core.models import (
     CardDetection,
     CornerDetection,
     DetectionPacket,

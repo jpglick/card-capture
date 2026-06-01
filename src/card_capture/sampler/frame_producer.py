@@ -11,7 +11,7 @@ import queue
 import threading
 from typing import Iterator, Optional, Protocol
 
-from card_capture.models import FrameSample
+from card_capture.core.models import FrameSample
 
 
 class _Samplerish(Protocol):

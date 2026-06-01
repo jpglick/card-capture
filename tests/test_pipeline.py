@@ -6,13 +6,13 @@ import numpy as np
 import pytest
 from queue import Empty, Full
 
-from card_capture.models import CardDetection, CornerDetection, DetectionPacket, FramePacket, FrameSample, QualityScore, ScoredCandidate, TrackState
+from card_capture.core.models import CardDetection, CornerDetection, DetectionPacket, FramePacket, FrameSample, QualityScore, ScoredCandidate, TrackState
 from card_capture.pipeline_utils import (
     _appearance_vector,
     _side_textiness_score,
     _select_canonical_entries,
 )
-from card_capture.workers import (
+from card_capture.core.workers import (
     ProcessingOptions,
     _SENTINEL,
     _drain_detection_queue,
@@ -625,7 +625,7 @@ def test_adaptive_hamming_threshold_flips_dedup_decision(tmp_path):
         assert prepared_with_context[0].duplicate_track_index is None
 
 def test_pipeline_processing_options_has_tracker_backend():
-    from card_capture.workers import ProcessingOptions
+    from card_capture.core.workers import ProcessingOptions
     from pathlib import Path
     opts = ProcessingOptions(output_dir=Path("/tmp"))
     assert opts.tracker_backend == "bytetrack"
@@ -634,7 +634,7 @@ def test_pipeline_processing_options_has_tracker_backend():
 
 
 def test_pipeline_processing_options_accepts_bytetrack():
-    from card_capture.workers import ProcessingOptions
+    from card_capture.core.workers import ProcessingOptions
     from pathlib import Path
     opts = ProcessingOptions(output_dir=Path("/tmp"), tracker_backend="bytetrack")
     assert opts.tracker_backend == "bytetrack"
@@ -736,7 +736,7 @@ def test_candidate_novelty_collection_does_not_drop_pre_tracking_candidates(tmp_
 def test_prune_empty_workspace_tracks_drops_low_novelty_tracks(tmp_path):
     """A finalized track whose medoid frame's quad matches the background is removed."""
     from card_capture.pipeline_utils import _prune_empty_workspace_tracks, _PreparedTrack
-    from card_capture.models import TrackState
+    from card_capture.core.models import TrackState
     from card_capture.presence.background_novelty import BackgroundModel
     import cv2
 

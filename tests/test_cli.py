@@ -5,7 +5,7 @@ from unittest.mock import patch
 import pytest
 
 from card_capture.cli import build_parser, main
-from card_capture.workers import ProcessingOptions
+from card_capture.core.workers import ProcessingOptions
 from card_capture.detectors import TorchDeviceStatus
 
 
@@ -251,7 +251,7 @@ def test_cli_process_tracker_backend_choices():
 
 
 def test_pipeline_config_has_new_fields():
-    from card_capture.config import PipelineConfig
+    from card_capture.core.config import PipelineConfig
     cfg = PipelineConfig()
     assert cfg.tracker_backend == "botsort"
     assert cfg.centroid_jump_ratio == 0.30
@@ -295,7 +295,7 @@ def test_sampler_sessions_diagnostic_output_contains_valley_splits(capsys, tmp_p
 def test_to_options_rotate_180_matches_pipeline_config():
     """PipelineConfig().to_options() must propagate rotate_180 — default must agree."""
     from pathlib import Path
-    from card_capture.config import PipelineConfig
+    from card_capture.core.config import PipelineConfig
     cfg = PipelineConfig()
     opts = cfg.to_options(Path("/tmp"))
     assert opts.rotate_180 == cfg.rotate_180, (
@@ -309,8 +309,8 @@ def test_to_options_covers_all_processing_options_fields():
     a rename, or the explicit extras dict) — no silent drift."""
     import dataclasses
     from pathlib import Path
-    from card_capture.config import PipelineConfig
-    from card_capture.workers import ProcessingOptions
+    from card_capture.core.config import PipelineConfig
+    from card_capture.core.workers import ProcessingOptions
 
     cfg = PipelineConfig()
     opts = cfg.to_options(Path("/tmp"))

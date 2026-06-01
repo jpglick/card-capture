@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from card_capture.models import ScoredCandidate, QualityScore
+from card_capture.core.models import ScoredCandidate, QualityScore
 import card_capture.tracking.botsort_adapter as botsort_mod
 
 class _FakeBoTSORT:

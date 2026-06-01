@@ -12,10 +12,10 @@ import cv2
 import numpy as np
 import torch
 
-from ..models import FrameSample
+from card_capture.core.models import FrameSample
 from ..ingestion import _resolve_reader_backend, _open_capture
 from ..presence.classifier import PresenceClassifier as _PresenceClassifier
-from ..gpu_utils import (
+from card_capture.core.gpu_utils import (
     compute_variance_gpu,
     compute_sharpness_gpu,
     compute_motion_gpu,
@@ -365,7 +365,7 @@ class ContrastBasedSampler:
         self.detection_metrics = detection_metrics if detection_metrics is not None else ["variance"]
         if device == "auto":
             try:
-                from ..gpu_utils import get_device, _env_cpu_ok
+                from card_capture.core.gpu_utils import get_device, _env_cpu_ok
                 self.device = get_device(allow_cpu_fallback=_env_cpu_ok())
             except ImportError: self.device = torch.device("cpu")
         else: self.device = torch.device(device)
@@ -662,7 +662,7 @@ class AdaptivePresenceSampler:
             resolved_device = torch.device(device) if device != "auto" else torch.device("cpu")
             if device == "auto":
                 try:
-                    from ..gpu_utils import get_device, _env_cpu_ok
+                    from card_capture.core.gpu_utils import get_device, _env_cpu_ok
 
                     resolved_device = get_device(allow_cpu_fallback=_env_cpu_ok())
                 except Exception:

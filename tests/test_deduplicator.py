@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 from card_capture.deduplicator import VisualDeduplicator
-from card_capture.models import TrackState
+from card_capture.core.models import TrackState
 
 
 def test_track_state_has_reid_embedding_field():

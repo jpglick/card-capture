@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import torch
 
-from card_capture.gpu_utils import (
+from card_capture.core.gpu_utils import (
     get_device, 
     compute_variance_gpu, 
     compute_sharpness_gpu, 

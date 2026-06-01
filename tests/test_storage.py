@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from card_capture.models import CornerDetection
+from card_capture.core.models import CornerDetection
 from card_capture.storage import Storage
 
 
@@ -98,7 +98,7 @@ def test_storage_v21_serializes_card_view_and_evidence_json(tmp_path: Path):
 
 
 def test_storage_records_performance_telemetry(tmp_path: Path):
-    from card_capture.models import PerformanceTelemetry
+    from card_capture.core.models import PerformanceTelemetry
 
     storage = Storage(tmp_path / "cards.sqlite")
     storage.initialize()

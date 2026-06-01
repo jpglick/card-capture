@@ -8,8 +8,8 @@ from card_capture.occlusion_residual import compute_occlusion_residual_score
 from card_capture.scoring import QualityScorer
 from card_capture.ecc_registration import compute_ecc_warp, register_frames_via_ecc
 from card_capture.fuser import MultiFrameFuser
-from card_capture.models import ScoredCandidate
-from card_capture.models import QualityScore
+from card_capture.core.models import ScoredCandidate
+from card_capture.core.models import QualityScore
 from card_capture.tracking.botsort_adapter import rotated_iou, axis_aligned_iou_from_corners
 
 

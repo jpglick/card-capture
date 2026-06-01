@@ -11,7 +11,7 @@ from card_capture.detectors import (
     FakeCardDetector,
     probe_torch_device_status,
 )
-from card_capture.models import FramePacket
+from card_capture.core.models import FramePacket
 from card_capture.pipeline.stage_metrics import emit_stage_metrics
 
 

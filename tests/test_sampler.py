@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 import pytest
 
-from card_capture.models import FrameSample
+from card_capture.core.models import FrameSample
 from card_capture.sampler import (
     StabilityBasedSampler,
     StableWindow,
