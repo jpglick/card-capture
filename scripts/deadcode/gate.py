@@ -85,6 +85,9 @@ def stage_video_smoke() -> GateResult:
     return GateResult(True, "video_smoke", "all sample videos produced cards")
 
 
+BASELINE = {"card_recall": 0.6667, "card_precision": 0.5714, "ssim": 0.0}
+
+
 def stage_metric_regression() -> GateResult:
     """Compare harness metrics to the recorded v5.5 baseline within tolerance.
 
@@ -95,7 +98,68 @@ def stage_metric_regression() -> GateResult:
     truth_dir = REPO / "tests/fixtures/golden_corpus"
     if not truth_dir.exists():
         return GateResult(False, "metric_regression", "golden corpus missing")
-    return GateResult(True, "metric_regression", "metric stage stub (see Task 4b)")
+
+    # Use the golden video for metric regression
+    golden_video = REPO / "tests/fixtures/golden_corpus/IMG_5872/IMG_5872.MOV"
+    if not golden_video.exists():
+        return GateResult(False, "metric_regression", f"missing golden sample: {golden_video.name}")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db = Path(tmp) / "cards.sqlite"
+        report_json = Path(tmp) / "report.json"
+
+        # 1. Process the golden video (using fake detector for speed/env compatibility)
+        proc = subprocess.run(
+            [VENV_PY, "-m", "card_capture.cli", "process", str(golden_video),
+             "--output-dir", tmp, "--db", str(db), "--detector", "fake"],
+            cwd=REPO, capture_output=True, text=True,
+        )
+        if proc.returncode != 0:
+            tail = "\n".join(proc.stderr.splitlines()[-5:])
+            return GateResult(False, "metric_regression", f"processing {golden_video.name} failed:\n{tail}")
+
+        # 2. Run the harness metrics directly
+        from harness.runner import run_metrics
+        try:
+            report = run_metrics(
+                db_path=db,
+                truth_dir=truth_dir / "IMG_5872",
+                videos=["IMG_5872"]
+            )
+            metrics = report.metrics
+            
+            # The harness returns MetricResult objects or dicts depending on version.
+            # Normalizing to float.
+            def to_f(val):
+                from harness.metrics.types import MetricResult
+                if isinstance(val, MetricResult): return val.value or 0.0
+                if isinstance(val, dict): return val.get("value") or 0.0
+                return float(val or 0.0)
+
+            recall = to_f(metrics.get("card_recall"))
+            precision = to_f(metrics.get("card_precision"))
+            # Image quality might be a nested dict or MetricResult
+            iq = metrics.get("image_quality", {})
+            if isinstance(iq, dict):
+                ssim = to_f(iq.get("ssim"))
+            else:
+                ssim = to_f(iq)
+
+            issues = []
+            if recall < BASELINE["card_recall"] - RECALL_TOL:
+                issues.append(f"recall drop: {recall:.4f} < {BASELINE['card_recall'] - RECALL_TOL:.4f}")
+            if precision < BASELINE["card_precision"] - PRECISION_TOL:
+                issues.append(f"precision drop: {precision:.4f} < {BASELINE['card_precision'] - PRECISION_TOL:.4f}")
+            if ssim < BASELINE["ssim"] - SSIM_DROP_TOL:
+                issues.append(f"SSIM drop: {ssim:.4f} < {BASELINE['ssim'] - SSIM_DROP_TOL:.4f}")
+
+            if issues:
+                return GateResult(False, "metric_regression", "; ".join(issues))
+
+            return GateResult(True, "metric_regression", f"recall={recall:.4f}, prec={precision:.4f}, ssim={ssim:.4f}")
+        except Exception as e:
+            import traceback
+            return GateResult(False, "metric_regression", f"harness logic failed: {e}\n{traceback.format_exc()}")
 
 
 def run_gate() -> GateResult:
