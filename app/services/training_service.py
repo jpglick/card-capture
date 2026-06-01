@@ -297,8 +297,8 @@ class TrainingService:
         out_dir.mkdir(parents=True, exist_ok=True)
 
         # v5.5: Metaflow is gone — drive the unified runtime in-process.
-        # We use cpu_debug so this works on the local training host even
-        # without CUDA; trainers don't need GPU to score a benchmark rerun.
+        # We use cpu_debug so this works on the local training host;
+        # trainers don't need GPU to score a benchmark rerun.
         runtime = LocalPipelineRuntime(telemetry=NoopTelemetry())
 
         from card_capture.config import load_config

@@ -174,7 +174,7 @@ def gpu_roi_mean_abs_diff(frame_t: torch.Tensor, bg_t: torch.Tensor, bbox: Tuple
 
 def yuv_nv12_to_rgb_batch(nv12_u8: torch.Tensor, h: int, w: int) -> torch.Tensor:
     """(N, 1.5*H, W) uint8 NV12 tensor → (N,H,W,3) uint8 RGB.
-    Performs hardware-accelerated color conversion on GPU (MPS/CUDA).
+    Performs hardware-accelerated color conversion on GPU (MPS).
     Returns RGB for direct YOLO tensor inference.
     """
     n = nv12_u8.shape[0]

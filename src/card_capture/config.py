@@ -69,8 +69,6 @@ class PipelineConfig:
     # Hardware Acceleration
     use_kornia: bool = True
     telemetry_scope: str = "canonical"
-    cuda_stride: int = 2
-    cuda_batch_size: int = 32
     
     debug: DebugConfig = field(default_factory=DebugConfig)
 

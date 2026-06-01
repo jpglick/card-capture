@@ -242,10 +242,6 @@ def test_probe_torch_device_status_reports_mps_unavailable_state():
 
     class _Torch:
         backends = _Backends()
-        class cuda:
-            @staticmethod
-            def is_available():
-                return False
 
     with patch("platform.system", return_value="Darwin"), patch(
         "platform.machine", return_value="arm64"

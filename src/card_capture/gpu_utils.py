@@ -1,4 +1,8 @@
-"""GPU acceleration utilities for PyTorch-based image processing."""
+"""GPU acceleration utilities for PyTorch-based image processing.
+
+This module provides helpers for device selection (MPS/CPU) and hardware-accelerated
+image metrics. CUDA is no longer supported; we target Apple Silicon exclusively.
+"""
 
 from __future__ import annotations
 
@@ -15,16 +19,13 @@ def get_device() -> torch.device:
     Detect and return the best available device for PyTorch computation.
 
     Priority order:
-    1. CUDA - for NVIDIA GPUs (production / RunPod)
-    2. MPS (Metal Performance Shaders) - for M-series Apple Silicon Macs
-    3. CPU - fallback
+    1. MPS (Metal Performance Shaders) - for M-series Apple Silicon Macs
+    2. CPU - fallback
 
     Returns:
         torch.device: The selected device for PyTorch operations.
     """
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    elif torch.backends.mps.is_available():
+    if torch.backends.mps.is_available():
         return torch.device("mps")
     else:
         return torch.device("cpu")
@@ -116,7 +117,7 @@ def compute_motion_gpu(frame1: np.ndarray, frame2: np.ndarray, device: Union[str
     Args:
         frame1: Previous frame (H, W) or (H, W, C), uint8 grayscale or color
         frame2: Current frame, same shape and type
-        device: torch device ("mps", "cuda", "cpu", or "auto") or torch.device object
+        device: torch device ("mps", "cpu", or "auto") or torch.device object
     
     Returns:
         Mean pixel delta (0-255 scale for uint8 frames)
@@ -192,7 +193,7 @@ def compute_edge_density_gpu(frame: np.ndarray, device: Union[str, torch.device]
     
     Args:
         frame: Input frame (H, W) grayscale or (H, W, C) color, uint8
-        device: torch device ("mps", "cuda", "cpu", or "auto")
+        device: torch device ("mps", "cpu", or "auto")
         sobel_threshold: Edge magnitude threshold (0-255 scale), default 50
         edge_density_threshold: Fraction of high-edge pixels for detection, default 0.15
     
@@ -254,7 +255,7 @@ def estimate_batch_size(device: str = "auto", frame_shape: tuple = (1080, 1920),
     for batched sharpness scoring, accounting for GPU memory overhead.
     
     Args:
-        device: torch device ("mps", "cuda", "cpu", or "auto")
+        device: torch device ("mps", "cpu", or "auto")
         frame_shape: Expected frame dimensions (height, width) in pixels (default: (1080, 1920))
         safety_margin: Fraction of VRAM to reserve (0.4 = 40% reserved, 60% usable)
     
@@ -264,7 +265,7 @@ def estimate_batch_size(device: str = "auto", frame_shape: tuple = (1080, 1920),
         - GPU: 32-128 depending on VRAM
     
     Raises:
-        (caught internally) Any CUDA/device query exceptions fallback to 32
+        (caught internally) Any device query exceptions fallback to 32
     """
     try:
         # Convert device string to torch.device if needed
@@ -281,10 +282,6 @@ def estimate_batch_size(device: str = "auto", frame_shape: tuple = (1080, 1920),
         if device_obj.type == "mps":
             # MPS (Mac) has no VRAM query API; estimate conservatively as 8GB
             available_vram_gb = 8.0
-        elif device_obj.type == "cuda":
-            # CUDA: query actual total device memory
-            total_memory_bytes = torch.cuda.get_device_properties(device_obj).total_memory
-            available_vram_gb = total_memory_bytes / (1024**3)
         else:
             # Unknown device type
             return 32
@@ -305,7 +302,7 @@ def estimate_batch_size(device: str = "auto", frame_shape: tuple = (1080, 1920),
         return batch_size
     
     except Exception:
-        # Fallback on any error (old CUDA version, missing device, etc.)
+        # Fallback on any error (missing device, etc.)
         return 32
 
 
@@ -318,7 +315,7 @@ def score_sharpness_batched(frames: list[np.ndarray], device: str = "auto",
     
     Args:
         frames: List of frames, each (H, W) grayscale or (H, W, C) color, uint8
-        device: torch device ("mps", "cuda", "cpu", or "auto")
+        device: torch device ("mps", "cpu", or "auto")
         batch_size: Frames to process simultaneously, clamped to [1, 128]
         variance_only: If True (default), compute only Laplacian. If False, for future expansion.
     
@@ -473,7 +470,7 @@ def compute_presence_metrics_batched(
 def require_device(requested: str) -> torch.device:
     """Resolve `requested` to a torch.device, raising rather than silently
     downgrading to CPU. `requested` of "cpu" is honored (explicit). "auto"
-    requires a GPU (cuda or mps) and raises if none is present.
+    requires the MPS GPU and raises if it is not present.
     """
     if requested == "cpu":
         return torch.device("cpu")
@@ -482,14 +479,15 @@ def require_device(requested: str) -> torch.device:
             raise RuntimeError("MPS device requested but not available "
                                "(this route is MPS-or-fail; no CPU fallback).")
         return torch.device("mps")
-    if requested == "cuda":
-        if not torch.cuda.is_available():
-            raise RuntimeError("CUDA device requested but not available.")
-        return torch.device("cuda")
-    # auto: require some accelerator
-    if torch.cuda.is_available():
-        return torch.device("cuda")
+    # auto: require the MPS accelerator
+    return resolve_required_gpu_device(requested)
+
+
+def resolve_required_gpu_device(requested: str = "auto") -> torch.device:
+    """Resolve to an MPS device, raising if no GPU is available.
+
+    Apple Silicon only: CUDA is no longer supported.
+    """
     if torch.backends.mps.is_available():
         return torch.device("mps")
-    raise RuntimeError("No GPU (cuda/mps) available and this route forbids "
-                       "silent CPU fallback. Set device='cpu' explicitly to override.")
+    raise RuntimeError("No MPS GPU available and this route forbids CPU fallback.")

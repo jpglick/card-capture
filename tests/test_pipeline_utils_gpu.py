@@ -26,38 +26,15 @@ def test_decode_frames_gpu_returns_index_map(monkeypatch):
     assert set(result.keys()) == {2, 5, 8}
 
 
-def test_decode_frames_gpu_hard_fails_without_flag(monkeypatch):
-    monkeypatch.delenv("CC_CUDA_ALLOW_CPU_FALLBACK", raising=False)
-    monkeypatch.setattr("torch.cuda.is_available", lambda: True)
-
-    fake_decord = MagicMock()
-    fake_decord.gpu.side_effect = RuntimeError("no GPU")
-    monkeypatch.setattr("card_capture.pipeline_utils.decord", fake_decord, raising=False)
-
-    from card_capture.pipeline_utils import decode_frames_gpu
-    with pytest.raises(RuntimeError, match="CC_CUDA_ALLOW_CPU_FALLBACK"):
-        decode_frames_gpu("/fake/video.mov", [0, 1])
-
-
-def test_decode_frames_gpu_cpu_fallback_with_flag(monkeypatch):
-    monkeypatch.setenv("CC_CUDA_ALLOW_CPU_FALLBACK", "1")
-
+def test_decode_frames_gpu_uses_opencv_on_mac(monkeypatch):
+    monkeypatch.setattr("platform.system", lambda: "Darwin")
+    
     fake_frame = np.zeros((100, 100, 3), dtype=np.uint8)
-    fake_batch = MagicMock()
-    fake_batch.__getitem__ = lambda self, i: MagicMock(asnumpy=lambda: fake_frame)
-    fake_vr = MagicMock()
-    fake_vr.get_batch.return_value = fake_batch
-
-    fake_decord = MagicMock()
-    fake_decord.gpu.side_effect = RuntimeError("no GPU")
-    fake_decord.cpu.return_value = "cpu_ctx"
-    fake_decord.VideoReader.return_value = fake_vr
-    monkeypatch.setattr("card_capture.pipeline_utils.decord", fake_decord, raising=False)
-
-    from card_capture.pipeline_utils import decode_frames_gpu
-    result = decode_frames_gpu("/fake/video.mov", [3])
-    fake_decord.cpu.assert_called_once_with(0)
-    assert 3 in result
+    with patch("card_capture.pipeline_utils._decode_frames_opencv", return_value={0: fake_frame}) as mock_cv:
+        from card_capture.pipeline_utils import decode_frames_gpu
+        res = decode_frames_gpu("vid.mov", [0])
+        assert res[0].shape == (100, 100, 3)
+        mock_cv.assert_called_once()
 
 
 def test_decode_frames_gpu_empty_indices():
@@ -129,9 +106,9 @@ def test_laplacian_select_frames_uses_decoded_dict(monkeypatch):
     assert len(result["t1"]) == 1
 
 def test_laplacian_variance_batch_cpu_fallback(monkeypatch):
-    """When CUDA is unavailable, _laplacian_variance_batch falls back to cv2 per-image."""
+    """When MPS is unavailable, _laplacian_variance_batch falls back to cv2 per-image."""
     import torch
-    monkeypatch.setattr("torch.cuda.is_available", lambda: False)
+    monkeypatch.setattr("torch.backends.mps.is_available", lambda: False)
 
     from card_capture.pipeline_utils import _laplacian_variance_batch
 

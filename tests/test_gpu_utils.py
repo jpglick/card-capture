@@ -26,8 +26,8 @@ def test_get_device_returns_valid_device():
     """Verify that get_device() returns a valid torch.device."""
     device = get_device()
     assert isinstance(device, torch.device)
-    # Device should be one of MPS, CUDA, or CPU
-    assert device.type in ("mps", "cuda", "cpu")
+    # Device should be one of MPS or CPU
+    assert device.type in ("mps", "cpu")
 
 
 # ---------------------------------------------------------------------------

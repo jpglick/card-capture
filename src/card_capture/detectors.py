@@ -191,7 +191,7 @@ class CardcaptorUltralyticsDetector(CardDetector):
         scale_factors: list[tuple[float, float, int, int]] = []
         
         if tensor_input is not None:
-            # Optimized tensor path (e.g. CUDA)
+            # Optimized tensor path (e.g. MPS)
             if self._is_coreml:
                 # COREML STABILITY FIX: Sequential inference for batch tensors.
                 # Ultralytics CoreML predictor is unstable with batch_size > 1.
@@ -359,9 +359,13 @@ def _resolve_model_path(repo_id: str, filename: str) -> str:
 
 
 def probe_torch_device_status(requested: str = "auto") -> TorchDeviceStatus:
-    """Determine the best available PyTorch device."""
+    """Determine the best available PyTorch device.
+
+    Device resolution is MPS -> CPU only. CUDA is not supported on this
+    Apple-Silicon-only build; ``cuda_available`` is always reported ``False``.
+    """
     import torch
-    
+
     mps_built = False
     mps_available = False
     try:
@@ -370,23 +374,31 @@ def probe_torch_device_status(requested: str = "auto") -> TorchDeviceStatus:
     except AttributeError:
         pass
 
+    # CUDA is unsupported; the field is retained for the serialized contract.
+    cuda_available = False
+
     reason = None
     if requested == "mps" and not mps_available:
         reason = "mps_unavailable"
-    elif requested == "cuda" and not torch.cuda.is_available():
-        reason = "cuda_unavailable"
-    elif requested == "auto" and not (torch.cuda.is_available() or mps_available):
-        reason = "mps_unavailable"  # Default reason if neither available on Mac/Linux? Test expects mps_unavailable
+    elif requested == "auto" and not mps_available:
+        reason = "mps_unavailable"
 
-    cuda_avail = torch.cuda.is_available()
-    if requested == "cuda":
-        return TorchDeviceStatus(requested, "cuda" if cuda_avail else "cpu", cuda_avail, mps_built=mps_built, mps_available=mps_available, cuda_available=cuda_avail, reason=reason)
     if requested == "mps":
-        return TorchDeviceStatus(requested, "mps" if mps_available else "cpu", mps_available, mps_built=mps_built, mps_available=mps_available, cuda_available=cuda_avail, reason=reason)
-    
-    if cuda_avail:
-        return TorchDeviceStatus(requested, "cuda", True, mps_built=mps_built, mps_available=mps_available, cuda_available=cuda_avail, reason=reason)
+        return TorchDeviceStatus(
+            requested, "mps" if mps_available else "cpu", mps_available,
+            mps_built=mps_built, mps_available=mps_available,
+            cuda_available=cuda_available, reason=reason,
+        )
+
     if mps_available:
-        return TorchDeviceStatus(requested, "mps", True, mps_built=mps_built, mps_available=mps_available, cuda_available=cuda_avail, reason=reason)
-        
-    return TorchDeviceStatus(requested, "cpu", True, mps_built=mps_built, mps_available=mps_available, cuda_available=cuda_avail, reason=reason)
+        return TorchDeviceStatus(
+            requested, "mps", True,
+            mps_built=mps_built, mps_available=mps_available,
+            cuda_available=cuda_available, reason=reason,
+        )
+
+    return TorchDeviceStatus(
+        requested, "cpu", True,
+        mps_built=mps_built, mps_available=mps_available,
+        cuda_available=cuda_available, reason=reason,
+    )

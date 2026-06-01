@@ -76,12 +76,12 @@ def _laplacian_variance_batch(images: List[Union[np.ndarray, "torch.Tensor"]]) -
         from .detectors import probe_torch_device_status
         resolved_device = probe_torch_device_status("auto").resolved
         if resolved_device == "cpu":
-            raise RuntimeError("no GPU")
+            raise RuntimeError("no acceleration")
 
         grays = []
         for img in images:
             if torch.is_tensor(img):
-                # GPU Tensor
+                # Accelerated Tensor
                 if img.ndim == 3 and img.shape[2] >= 3:
                     # BGR -> Gray (cv2 weights)
                     g = 0.114 * img[..., 0] + 0.587 * img[..., 1] + 0.299 * img[..., 2]
@@ -462,7 +462,7 @@ def _laplacian_select_frames(
                 if curr in ti["scan_frames"]:
                     ti["scores"][curr] = lap_var
     else:
-        # Slow path: sequential CPU decode via VideoCapture (non-CUDA fallback)
+        # Slow path: sequential CPU decode via VideoCapture (CPU fallback)
         max_scan_frame = max(all_scan_frames)
         try:
             capture = _open_capture(_Path(video_path))
@@ -533,12 +533,9 @@ def _laplacian_select_frames(
 try:
     import decord as decord  # noqa: F401
     # Use torch as the array bridge so decord's video reader allocates frames
-    # in torch's CUDA context (shared with the rest of the pipeline) rather
-    # than creating its own. Two wins: (1) eliminates the second-CUDA-context
-    # conflict that deadlocked refine when run inside metaflow's subprocess;
-    # (2) get_batch returns torch.Tensor on cuda directly — current callers
-    # still get numpy via .cpu().numpy() below, future callers can consume
-    # the tensor without a host roundtrip.
+    # in torch's context (shared with the rest of the pipeline) rather
+    # than creating its own. Two wins: (1) eliminates potential context
+    # conflicts; (2) get_batch returns torch.Tensor directly.
     decord.bridge.set_bridge('torch')
     _decord_import_error: str | None = None
 except Exception as _e:
@@ -547,83 +544,53 @@ except Exception as _e:
 
 
 def decode_frames_gpu(video_path, indices: list, return_tensors: bool = False) -> dict:
-    """Decode specific frames via NVDEC; return {frame_index: np.ndarray | torch.Tensor}.
+    """Decode specific frames via hardware-accelerated paths if available;
+    returns {frame_index: np.ndarray | torch.Tensor}.
 
-    Hard-fails if GPU context unavailable and CC_CUDA_ALLOW_CPU_FALLBACK is not set.
+    On macOS, this uses OpenCV with AVFoundation (fastest). On other platforms,
+    it uses CPU paths or PyAV.
     """
-    import os
     if not indices:
         return {}
 
-    allow_fallback = os.environ.get("CC_CUDA_ALLOW_CPU_FALLBACK", "0") == "1"
-    if not allow_fallback and not torch.cuda.is_available():
-        # Automatically allow fallback in non-CUDA environments (dev/MPS)
-        # to avoid requiring environment variables for local runs.
-        allow_fallback = True
+    # On macOS, OpenCV's AVFoundation backend with grab()/retrieve() is the
+    # fastest path for extracting scattered 4K HEVC frames.
+    import platform
+    if platform.system() == "Darwin":
+        result = _decode_frames_opencv(video_path, indices)
+        if result:
+            if return_tensors:
+                return {idx: torch.from_numpy(img) for idx, img in result.items()}
+            return result
 
-    # decord is None when the library couldn't be imported (e.g. missing NVIDIA driver
-    # on a dev machine). Fall back to PyAV (faster on Mac) or OpenCV if allowed.
-    if decord is None:
-        if allow_fallback:
-            # OpenCV over AVFoundation with grab()/retrieve() is the fastest path
-            # for extracting scattered 4K HEVC frames on this footage — benchmarked
-            # at 49s vs 85s (PyAV) vs 154s (naive cap.read() of every frame) for the
-            # ~526 canonical frames spanning the whole video. grab() advances the
-            # hardware decoder without paying the BGR conversion on skipped frames.
-            # PyAV remains a fallback only if OpenCV's backend can't open the file.
-            result = _decode_frames_opencv(video_path, indices)
-            if result:
-                return result
-            try:
-                import av  # noqa: F401
-                return _decode_frames_pyav(video_path, indices)
-            except ImportError:
-                return result
-        raise RuntimeError(
-            "decode_frames_gpu requires decord with NVDEC support. "
-            f"import decord failed: {_decord_import_error}. "
-            "Set CC_CUDA_ALLOW_CPU_FALLBACK=1 to fall back to OpenCV sequential decode."
-        )
+    # Fallback to decord (CPU) if available
+    if decord is not None:
+        ctx = decord.cpu(0)
+        sorted_indices = sorted(set(indices))
+        try:
+            vr = decord.VideoReader(str(video_path), ctx=ctx)
+            frames = vr.get_batch(sorted_indices)
+            if return_tensors:
+                result = {idx: frames[i] for i, idx in enumerate(sorted_indices)}
+            else:
+                frames_np = frames.cpu().numpy()
+                result = {idx: frames_np[i] for i, idx in enumerate(sorted_indices)}
+            return result
+        except Exception:
+            pass
 
-    # decord.gpu(0) succeeds even when decord was compiled without NVDEC;
-    # the real failure surfaces when VideoReader tries to open the GPU context.
-    try:
-        ctx = decord.gpu(0)
-    except Exception:
-        if allow_fallback:
-            ctx = decord.cpu(0)
-        else:
-            raise RuntimeError(
-                "decode_frames_gpu requires NVDEC (decord GPU context). "
-                "Set CC_CUDA_ALLOW_CPU_FALLBACK=1 to allow CPU fallback "
-                "in dev/test environments."
-            )
+    # Final fallback to OpenCV or PyAV
+    result = _decode_frames_opencv(video_path, indices)
+    if not result:
+        try:
+            import av  # noqa: F401
+            result = _decode_frames_pyav(video_path, indices)
+        except ImportError:
+            pass
 
-    sorted_indices = sorted(set(indices))
-    try:
-        vr = decord.VideoReader(str(video_path), ctx=ctx)
-    except Exception as e:
-        if ("CUDA not enabled" in str(e) or "cuda" in str(e).lower()) and allow_fallback:
-            vr = decord.VideoReader(str(video_path), ctx=decord.cpu(0))
-        else:
-            raise RuntimeError(
-                f"decord GPU VideoReader failed: {e}. "
-                "Ensure decord is built with USE_CUDA=ON (see Dockerfile.cuda). "
-                "Set CC_CUDA_ALLOW_CPU_FALLBACK=1 to allow CPU decode in dev environments."
-            ) from e
-    frames = vr.get_batch(sorted_indices)
-    # With decord.bridge.set_bridge('torch'), get_batch returns a torch.Tensor
-    # on the same device as ctx (cuda if NVDEC, cpu if fallback). 
-    
-    if return_tensors:
-        result = {idx: frames[i] for i, idx in enumerate(sorted_indices)}
-    else:
-        frames_np = frames.cpu().numpy()  # (N, H, W, 3) uint8
-        result = {idx: frames_np[i] for i, idx in enumerate(sorted_indices)}
-        del frames_np
-        
-    del frames
-    return result
+    if result and return_tensors:
+        return {idx: torch.from_numpy(img) for idx, img in result.items()}
+    return result or {}
 
 
 def _decode_frames_opencv(video_path, indices: list) -> dict:

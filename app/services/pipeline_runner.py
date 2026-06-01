@@ -175,7 +175,7 @@ class PipelineRunner:
             run_id=run_id,
             input_video=f"artifact://local/{abs_video}",
             output_root=f"artifact://local/{abs_output}/",
-            runtime_mode="cpu_debug",  # strict_gpu requires CUDA; UI host is Mac
+            runtime_mode="cpu_debug",
             config=request_config,
             db_path=abs_db,
             video_id=video_id,

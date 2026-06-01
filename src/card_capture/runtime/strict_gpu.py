@@ -26,11 +26,9 @@ from card_capture.runtime.gpu_session import GpuSession, MissingGpuError
 
 
 def _select_device() -> torch.device:
-    if torch.cuda.is_available():
-        return torch.device("cuda")
     if torch.backends.mps.is_available():
         return torch.device("mps")
-    raise MissingGpuError("No CUDA or MPS device available for StrictGpuRuntime")
+    raise MissingGpuError("No MPS device available for StrictGpuRuntime")
 
 
 class StrictGpuRuntime:

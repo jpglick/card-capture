@@ -1,7 +1,7 @@
 """Serializable contracts passed between runtime, runner, app, and harness.
 
 Values passed across this boundary must remain JSON-serializable. They must
-not include CUDA tensors, model objects, open video handles, or process-local
+not include tensors, model objects, open video handles, or process-local
 resources.
 """
 from __future__ import annotations
