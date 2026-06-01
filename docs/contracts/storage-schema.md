@@ -267,7 +267,8 @@ CREATE TABLE IF NOT EXISTS run_resource_samples (
     stage        TEXT    DEFAULT 'init',
     decoder_pct  REAL,
     encoder_pct  REAL,
-    mem_io_pct   REAL
+    mem_io_pct   REAL,
+    neural_pct   REAL
 );
 
 -- 19. card_view_metrics

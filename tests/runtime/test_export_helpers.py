@@ -16,8 +16,6 @@ from card_capture.runtime.batches import (
 
 
 def _gpu_device() -> torch.device:
-    if torch.cuda.is_available():
-        return torch.device("cuda")
     if torch.backends.mps.is_available():
         return torch.device("mps")
     pytest.skip("no GPU available")

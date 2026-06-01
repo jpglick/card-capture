@@ -2,7 +2,6 @@
 root_packages =
     card_capture
     app
-    pipeline
 include_external_packages = True
 
 [importlinter:contract:no-sqlite3-outside-data]
@@ -13,15 +12,12 @@ source_modules =
 forbidden_modules =
     sqlite3
 
-[importlinter:contract:no-provider-sdk-outside-platforms]
-name = provider SDKs only inside card_capture.platforms
+[importlinter:contract:no-provider-sdks]
+name = provider SDKs (runpod/beam) must not be imported anywhere
 type = forbidden
 source_modules =
-    card_capture.pipeline
-    card_capture.runtime
-    app.api
-    app.services.cards_service
-    app.services.runs_service
+    card_capture
+    app
 forbidden_modules =
     runpod
     beam

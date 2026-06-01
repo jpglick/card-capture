@@ -58,15 +58,7 @@ def get_host_info() -> dict:
     vram_total_gb: Optional[float] = None
     vram_is_unified = False
 
-    if gpu_device == "cuda":
-        try:
-            import torch
-            props = torch.cuda.get_device_properties(0)
-            gpu_name = props.name
-            vram_total_gb = round(props.total_memory / 1e9, 2)
-        except Exception:
-            pass
-    elif gpu_device == "mps":
+    if gpu_device == "mps":
         try:
             raw = subprocess.check_output(
                 ["system_profiler", "SPDisplaysDataType", "-json"],
@@ -170,27 +162,6 @@ class ResourceSampler:
             vm = psutil.virtual_memory()
             mem_pct = vm.percent
             mem_used_mb = vm.used / 1e6
-        except Exception:
-            pass
-
-        # NVIDIA via pynvml
-        try:
-            import pynvml
-            pynvml.nvmlInit()
-            handle = pynvml.nvmlDeviceGetHandleByIndex(0)
-            util = pynvml.nvmlDeviceGetUtilizationRates(handle)
-            gpu_pct = float(util.gpu)
-            mem_io_pct = float(util.memory)
-            mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
-            vram_used_mb = mem_info.used / 1e6
-            try:
-                decoder_pct = float(pynvml.nvmlDeviceGetDecoderUtilization(handle)[0])
-            except Exception:
-                pass
-            try:
-                encoder_pct = float(pynvml.nvmlDeviceGetEncoderUtilization(handle)[0])
-            except Exception:
-                pass
         except Exception:
             pass
 

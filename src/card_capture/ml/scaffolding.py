@@ -1,7 +1,7 @@
 """Deterministic training-loop scaffold.
 
 Provides:
-- ``pick_device()``   — MPS > CUDA > CPU preference.
+- ``pick_device()``   — MPS > CPU preference.
 - ``set_seed(seed)``  — reproducible random state across Python, NumPy, PyTorch.
 - ``train_one_epoch`` — generic one-epoch supervised training loop.
 """
@@ -16,8 +16,6 @@ def pick_device() -> torch.device:
     """Return the best available compute device."""
     if torch.backends.mps.is_available():
         return torch.device("mps")
-    if torch.cuda.is_available():
-        return torch.device("cuda")
     return torch.device("cpu")
 
 
@@ -26,8 +24,6 @@ def set_seed(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
 
 

@@ -1,7 +1,7 @@
 """Serializable contracts passed between runtime, runner, app, and harness.
 
 Values passed across this boundary must remain JSON-serializable. They must
-not include CUDA tensors, model objects, open video handles, or process-local
+not include tensors, model objects, open video handles, or process-local
 resources.
 """
 from __future__ import annotations
@@ -21,7 +21,7 @@ class PipelineRunRequest:
     output_root: str            # artifact:// reference
     runtime_mode: RuntimeMode
     config: Mapping[str, Any] = dataclasses.field(default_factory=dict)
-    # Optional callers (UI, RunPod, training) pass these explicitly so the
+    # Optional callers (UI, training) pass these explicitly so the
     # runtime doesn't have to infer SQLite location from output_root or guess
     # a video_id for FK constraints. All fields stay JSON-serializable.
     db_path: str | None = None

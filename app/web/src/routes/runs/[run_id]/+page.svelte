@@ -196,9 +196,6 @@
 
 <div class="page-header">
     <h1>Run <code>{runId}</code></h1>
-    {#if run?.detect_telemetry?.yolo_device === 'cuda' || runId.startsWith('batch_')}
-        <span class="cloud-badge">☁ Cloud GPU</span>
-    {/if}
     {#if run}
         <a href="/runs" class="back-link">← All runs</a>
     {/if}
@@ -586,7 +583,6 @@
 
     .device-badge { padding: 0.1rem 0.5rem; border-radius: 4px; font-size: 0.8rem; }
     .device-mps   { background: #e8f5e9; color: #2e7d32; }
-    .device-cuda  { background: #e3f2fd; color: #1565c0; }
     .device-cpu   { background: #fff3e0; color: #e65100; }
     .device-unknown { background: #f5f5f5; color: #757575; }
 

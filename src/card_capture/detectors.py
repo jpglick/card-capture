@@ -191,7 +191,7 @@ class CardcaptorUltralyticsDetector(CardDetector):
         scale_factors: list[tuple[float, float, int, int]] = []
         
         if tensor_input is not None:
-            # Optimized tensor path (e.g. CUDA)
+            # Optimized tensor path (e.g. MPS)
             if self._is_coreml:
                 # COREML STABILITY FIX: Sequential inference for batch tensors.
                 # Ultralytics CoreML predictor is unstable with batch_size > 1.
@@ -317,24 +317,6 @@ class CardcaptorUltralyticsDetector(CardDetector):
         self._device = self._resolve_device()
         model_path = _resolve_model_path(self.repo_id, self.filename)
 
-        # TensorRT fast path (CUDA only)
-        if self._device == "cuda":
-            import os
-            engine_path = os.path.splitext(model_path)[0] + ".engine"
-            try:
-                if not os.path.exists(engine_path):
-                    exporter = YOLO(model_path, task="obb")
-                    out = exporter.export(format="engine", half=True, dynamic=True,
-                                          imgsz=self.detection_width, device=0, verbose=False,
-                                          task="obb")
-                    engine_path = str(out) if out else engine_path
-                self._model = YOLO(engine_path, task="obb")
-                print(f"[detector] backend=tensorrt engine={engine_path}", flush=True)
-                self._half = True
-                return self._model
-            except Exception as e:
-                print(f"[detector] TensorRT unavailable ({e}); falling back to .pt FP16", flush=True)
-
         # CoreML fast path (Apple Silicon only)
         if self._device == "mps" and platform.system() == "Darwin" and platform.machine() == "arm64":
             import os
@@ -357,12 +339,6 @@ class CardcaptorUltralyticsDetector(CardDetector):
         self._model = YOLO(model_path, task="obb")
         self._model.to(self._device)
         self._half = False
-        if self._device == "cuda":
-            try:
-                self._model.half()
-                self._half = True
-            except Exception:
-                pass
         print(f"[detector] backend={self._device} half={self._half}", flush=True)
         return self._model
 
@@ -383,9 +359,13 @@ def _resolve_model_path(repo_id: str, filename: str) -> str:
 
 
 def probe_torch_device_status(requested: str = "auto") -> TorchDeviceStatus:
-    """Determine the best available PyTorch device."""
+    """Determine the best available PyTorch device.
+
+    Device resolution is MPS -> CPU only. CUDA is not supported on this
+    Apple-Silicon-only build; ``cuda_available`` is always reported ``False``.
+    """
     import torch
-    
+
     mps_built = False
     mps_available = False
     try:
@@ -394,23 +374,31 @@ def probe_torch_device_status(requested: str = "auto") -> TorchDeviceStatus:
     except AttributeError:
         pass
 
+    # CUDA is unsupported; the field is retained for the serialized contract.
+    cuda_available = False
+
     reason = None
     if requested == "mps" and not mps_available:
         reason = "mps_unavailable"
-    elif requested == "cuda" and not torch.cuda.is_available():
-        reason = "cuda_unavailable"
-    elif requested == "auto" and not (torch.cuda.is_available() or mps_available):
-        reason = "mps_unavailable"  # Default reason if neither available on Mac/Linux? Test expects mps_unavailable
+    elif requested == "auto" and not mps_available:
+        reason = "mps_unavailable"
 
-    cuda_avail = torch.cuda.is_available()
-    if requested == "cuda":
-        return TorchDeviceStatus(requested, "cuda" if cuda_avail else "cpu", cuda_avail, mps_built=mps_built, mps_available=mps_available, cuda_available=cuda_avail, reason=reason)
     if requested == "mps":
-        return TorchDeviceStatus(requested, "mps" if mps_available else "cpu", mps_available, mps_built=mps_built, mps_available=mps_available, cuda_available=cuda_avail, reason=reason)
-    
-    if cuda_avail:
-        return TorchDeviceStatus(requested, "cuda", True, mps_built=mps_built, mps_available=mps_available, cuda_available=cuda_avail, reason=reason)
+        return TorchDeviceStatus(
+            requested, "mps" if mps_available else "cpu", mps_available,
+            mps_built=mps_built, mps_available=mps_available,
+            cuda_available=cuda_available, reason=reason,
+        )
+
     if mps_available:
-        return TorchDeviceStatus(requested, "mps", True, mps_built=mps_built, mps_available=mps_available, cuda_available=cuda_avail, reason=reason)
-        
-    return TorchDeviceStatus(requested, "cpu", True, mps_built=mps_built, mps_available=mps_available, cuda_available=cuda_avail, reason=reason)
+        return TorchDeviceStatus(
+            requested, "mps", True,
+            mps_built=mps_built, mps_available=mps_available,
+            cuda_available=cuda_available, reason=reason,
+        )
+
+    return TorchDeviceStatus(
+        requested, "cpu", True,
+        mps_built=mps_built, mps_available=mps_available,
+        cuda_available=cuda_available, reason=reason,
+    )

@@ -1,9 +1,7 @@
-"""Worker subsystem for the card-capture Metaflow pipeline.
+"""Worker subsystem for the card-capture pipeline.
 
 Contains the multiprocessing producer/consumer machinery (Stages 1–3) that is
-shared between the Metaflow step (pipeline/steps/detect.py) and the legacy
-monolith path.  The VideoProcessor class and everything it exclusively uses
-have been deleted — they lived in the now-retired pipeline.py monolith.
+shared between the local pipeline and the legacy path.
 """
 from __future__ import annotations
 

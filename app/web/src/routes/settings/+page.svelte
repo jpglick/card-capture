@@ -12,16 +12,6 @@
     let pipelineConfig = $state<Record<string, number>>({});
     let pipelineSaving = $state(false);
 
-    // Compute backend config
-    import type { VastConfig } from '$lib/api/types';
-    let computeConfig = $state<VastConfig>({
-        pipeline_backend: 'mps',
-        cuda_gpu_type: 'RTX 4090',
-        vast_template_id: '',
-        cuda_idle_timeout_s: 300,
-    });
-    let computeSaving = $state(false);
-
     // Edit state
     let editingPreset: ConfigPreset | null = null;
     let newPresetName = '';
@@ -63,27 +53,8 @@
                 api.config.listPresets(),
             ]);
             pipelineConfig = await api.config.getPipeline();
-            await loadComputeConfig();
         } catch (e: any) {
             error = e.message;
-        }
-    }
-
-    async function loadComputeConfig() {
-        try {
-            computeConfig = await api.compute.get();
-        } catch { /* keep defaults */ }
-    }
-
-    async function saveComputeConfig() {
-        computeSaving = true;
-        try {
-            computeConfig = await api.compute.patch(computeConfig);
-            saveSuccess = 'Compute config saved.';
-        } catch (e: any) {
-            error = e.message;
-        } finally {
-            computeSaving = false;
         }
     }
 
@@ -278,53 +249,6 @@
         </div>
     </section>
 {/if}
-
-<section>
-    <h2>Compute</h2>
-    <p class="section-desc">Choose where heavy pipeline work runs.</p>
-
-    <div class="editor-form">
-        <div class="form-row">
-            <label for="compute-backend">Pipeline Backend</label>
-            <select id="compute-backend" bind:value={computeConfig.pipeline_backend} class="compute-select">
-                <option value="mps">Local (MPS — Mac mini)</option>
-                <option value="cuda">Cloud GPU (vast.ai)</option>
-            </select>
-        </div>
-
-        {#if computeConfig.pipeline_backend === 'cuda'}
-            <div class="form-row">
-                <label for="gpu-type">GPU type</label>
-                <select id="gpu-type" bind:value={computeConfig.cuda_gpu_type} class="compute-select">
-                    <option value="RTX 4090">RTX 4090 (recommended)</option>
-                    <option value="Flagship">Flagship (best available)</option>
-                    <option value="RTX 5060 Ti">RTX 5060 Ti (budget)</option>
-                </select>
-            </div>
-
-            <div class="form-row">
-                <label for="vast-template">Vast template ID</label>
-                <input id="vast-template" type="text" bind:value={computeConfig.vast_template_id}
-                       placeholder="pytorch/pytorch:2.3.0-cuda12.1-cudnn8-devel" />
-            </div>
-
-            <div class="form-row">
-                <label for="idle-timeout">Idle timeout (s)</label>
-                <input id="idle-timeout" type="number" bind:value={computeConfig.cuda_idle_timeout_s}
-                       min="60" max="3600" step="60" />
-            </div>
-
-            <div class="form-row">
-                <label>VAST_API_KEY</label>
-                <span class="perf-tip">Set via environment variable — never stored in config.</span>
-            </div>
-        {/if}
-    </div>
-
-    <button class="btn-primary" onclick={saveComputeConfig} disabled={computeSaving} style="margin-top: 1rem;">
-        {computeSaving ? 'Saving…' : 'Save Compute Config'}
-    </button>
-</section>
 
 <section>
     <h2>Threshold Playground</h2>

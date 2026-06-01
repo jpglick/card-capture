@@ -92,8 +92,7 @@ def clarity_score_gpu(frame_hwc: np.ndarray, bbox: Tuple[int, int, int, int],
     gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY) if roi.ndim == 3 else roi
 
     dev = torch.device(device if device != "auto" else
-                       ("mps" if torch.backends.mps.is_available()
-                        else ("cuda" if torch.cuda.is_available() else "cpu")))
+                       ("mps" if torch.backends.mps.is_available() else "cpu"))
     t = torch.from_numpy(gray.astype(np.float32) / 255.0).unsqueeze(0).unsqueeze(0).to(dev)
     kernel = torch.tensor([[0, -1, 0], [-1, 4, -1], [0, -1, 0]],
                           dtype=torch.float32, device=dev).unsqueeze(0).unsqueeze(0)

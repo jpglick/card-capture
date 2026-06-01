@@ -1,4 +1,4 @@
-"""Unpack cloud result tarballs and merge worker output into local SQLite."""
+"""Unpack result tarballs and merge worker output into local SQLite."""
 from __future__ import annotations
 
 import json
@@ -21,8 +21,6 @@ from card_capture.data.sql_queries import (
     RESULT_LOGS_INSERT,
     RESULT_RESOURCE_SAMPLES_DELETE,
     RESULT_RESOURCE_SAMPLES_FOR_RUN,
-    RESULT_RUN_UPDATE_HOST_INFO,
-    RESULT_RUN_UPDATE_TELEMETRY,
     RESULT_RUN_VIDEO_ID,
     RESULT_TABLE_EXISTS,
     result_card_instances_insert,
@@ -79,66 +77,6 @@ class ResultImporter:
 
         with open_connection(self.db_path) as conn:
             return self._count_cards(conn, run_id)
-
-    def import_handler_output(self, handler_output: dict[str, Any], run_id: str) -> None:
-        """Persist RunPod handler diagnostics that are not part of export.json."""
-        with open_connection(self.db_path) as conn:
-            video_id = self._local_video_id(conn, run_id)
-            telemetry = {
-                "status": handler_output.get("status"),
-                "gpu": handler_output.get("gpu"),
-                "resource_stats": handler_output.get("resource_stats"),
-                "timings": handler_output.get("timings"),
-                "diagnostics": handler_output.get("diagnostics"),
-            }
-            if self._has_column(conn, "pipeline_runs", "detect_telemetry_json"):
-                conn.execute(
-                    RESULT_RUN_UPDATE_TELEMETRY,
-                    (json.dumps(telemetry), run_id),
-                )
-            if self._has_column(conn, "pipeline_runs", "host_info_json"):
-                host_info = {
-                    "provider": "runpod",
-                    "gpu": handler_output.get("gpu"),
-                    "resource_stats": handler_output.get("resource_stats"),
-                }
-                conn.execute(
-                    RESULT_RUN_UPDATE_HOST_INFO,
-                    (json.dumps(host_info), run_id),
-                )
-
-            diagnostics = handler_output.get("diagnostics") or {}
-            for event_type, payload in (diagnostics.get("stage_payloads") or {}).items():
-                stage = event_type[len("stage_"):] if event_type.startswith("stage_") else event_type
-                self._insert_event_if_missing(conn, video_id, run_id, stage, event_type, payload)
-
-            if handler_output.get("resource_stats"):
-                self._insert_event_if_missing(
-                    conn,
-                    video_id,
-                    run_id,
-                    "runpod",
-                    "runpod_resource_stats",
-                    handler_output["resource_stats"],
-                )
-
-            samples = handler_output.get("resource_samples") or []
-            if samples and self._table_exists(conn, "run_resource_samples"):
-                conn.execute(RESULT_RESOURCE_SAMPLES_DELETE, (run_id,))
-                for sample in samples:
-                    self._insert_resource_sample(conn, run_id, sample)
-
-            stdout = handler_output.get("metaflow_stdout") or handler_output.get("metaflow_stdout_tail")
-            if stdout and self._table_exists(conn, "pipeline_run_logs"):
-                existing = conn.execute(
-                    RESULT_LOGS_COUNT, (run_id,)
-                ).fetchone()[0]
-                if existing == 0:
-                    for line in str(stdout).splitlines():
-                        conn.execute(
-                            RESULT_LOGS_INSERT,
-                            (run_id, line),
-                        )
 
     def _import_export_cards(self, cards: list[dict], run_id: str, crops_dir: Path) -> None:
         with open_connection(self.db_path) as conn:

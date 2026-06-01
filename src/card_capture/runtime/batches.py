@@ -16,8 +16,8 @@ class WrongDeviceError(TypeError):
 
 
 def _require_gpu(t: torch.Tensor, name: str) -> None:
-    if t.device.type not in ("cuda", "mps"):
-        raise WrongDeviceError(f"{name} requires a GPU tensor; got device={t.device}")
+    if t.device.type != "mps":
+        raise WrongDeviceError(f"{name} requires an MPS tensor; got device={t.device}")
 
 
 @dataclasses.dataclass(frozen=True)

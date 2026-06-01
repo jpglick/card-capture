@@ -1,18 +1,19 @@
-# Quick Reference: Card Capture v2.1
+# Quick Reference: Card Capture v5.5
 
-## v2.1 Problem Statement
-Extract high-quality trading card stills from local videos with predictable throughput and a bounded-memory multiprocessing flow.
+## v5.5 Problem Statement
+Extract high-quality trading card stills from local videos with an in-process, Apple-Silicon-optimized pipeline.
 
-## High-Level v2.1 Flow
+## High-Level v5.5 Flow
 ```
-Video -> Stage 1 producer (sample + triage + persist frame) -> frame_queue
-      -> Stage 2 consumer (batched detector inference + confidence filter) -> detection_queue
-      -> Parent orchestration (storage writes + candidate selection + best export)
+Video -> sample (Stage 1) -> detect (Stage 2) -> novelty (Stage 3)
+      -> track (Stage 4) -> refine (Stage 5) -> score (Stage 6)
+      -> resolve (Stage 7) -> fuse (Stage 8) -> dedup (Stage 9)
+      -> store (Stage 10)
 ```
 
-This is a producer/consumer pipeline implemented in `src/card_capture/pipeline.py`.
+This is an in-process producer/consumer pipeline implemented in `src/card_capture/pipeline/runtime_local.py`.
 
-## v2.1 CLI Flags (process)
+## v5.5 CLI Flags (process)
 
 ```bash
 card-capture process <video> \
@@ -20,64 +21,45 @@ card-capture process <video> \
   --db <db.sqlite> \
   --detector {docaligner,fake} \
   --reader-backend {auto,decord,pyav} \
-  --queue-size 64 \
-  --inference-batch-size 16 \
   --corner-confidence 0.5 \
-  --blur-threshold 30.0 \
-  --variance-threshold 20.0 \
-  --empty-pixel-threshold 0.98 \
   --detection-width 640 \
-  --device {auto,cpu,mps,cuda}
+  --device {auto,cpu,mps}
 ```
 
 ## Install Notes
 
-- `pip install -e ".[pipeline_v21]"` installs the supported pip-side pipeline dependencies: `av` and `onnxruntime`.
+- `pip install -e ".[legacy_tracking]"` installs the tracking dependencies: `av` and `onnxruntime`.
 - `decord` is a separate install because PyPI does not ship Apple Silicon macOS wheels.
 - `--reader-backend auto` prefers `decord` when importable and otherwise falls back to `pyav`.
-- Apple Silicon macOS: use a local micromamba/conda-forge environment, for example:
+- Apple Silicon macOS: use a local micromamba/conda-forge environment.
 
-```bash
-mkdir -p .tools
-cd .tools
-curl -L https://micro.mamba.pm/api/micromamba/osx-arm64/latest | tar -xj
-cd ..
-.tools/bin/micromamba create -y -p "$PWD/.decord-env" -c conda-forge python=3.11 decord ffmpeg pip
-.tools/bin/micromamba run -p "$PWD/.decord-env" pip install -e ".[pipeline_v21,model,review,test]"
-```
+## v5.5 Runtime Entities
 
-## v2.1 Runtime Entities
-
-- `ProcessingOptions`: runtime knobs passed from CLI to pipeline.
-- `_FrameEnvelope`: stage1 payload (`FramePacket` + saved source frame path).
-- `_DetectionEnvelope`: stage2 output payload (`DetectionPacket` + triage metrics + source path).
-- `_ProducerStats`: stage1 counters (`frame_count`, `accepted_frame_count`).
-- `ProcessingResult`: top-level result returned to CLI with frame/detection/save totals.
+- `PipelineRunRequest`: serializable request with config knobs.
+- `LocalPipelineRuntime`: orchestrator for the in-process run.
+- `RunManifest`: final result with timings and card records.
+- `PipelineRunResult`: top-level result containing the manifest.
 
 ## Stage Responsibilities
 
-1. Stage 1 Producer
-   - Reads sampled frames.
-   - Applies triage (`blur`, `variance`, `empty_pixel` thresholds).
-   - Saves accepted frame JPEGs.
-   - Pushes `_FrameEnvelope` rows to `frame_queue`.
-2. Stage 2 Consumer
-   - Collects frames into batches (`--inference-batch-size`).
-   - Runs detector inference (`detect_batch` if available, otherwise per-frame fallback).
-   - Filters by `--corner-confidence`.
-   - Pushes `_DetectionEnvelope` rows to `detection_queue`.
-3. Parent Process
-   - Drains detections until sentinel.
-   - Persists videos, instances, views, and evidence rows.
-   - Runs selector and copies canonical images into `output_dir/best`.
+1. **sample**: Streaming decode producer.
+2. **detect**: YOLOv8-OBB corner detection (batched).
+3. **novelty**: Background novelty gating.
+4. **track**: BoT-SORT/ByteTrack session-aware tracking.
+5. **refine**: Kornia GPU perspective warp to 750×1050.
+6. **score**: Quality scoring and adaptive pruning.
+7. **resolve**: Front/Back and identity resolution.
+8. **fuse**: Median/Foil-aware glare rejection.
+9. **dedup**: Global intra-run and cross-video deduplication.
+10. **store**: Metadata persistence and image writing via repositories.
 
-## Queue and Backpressure Knobs
+## Performance Mandate
 
-- `--queue-size` controls both `frame_queue` and `detection_queue` capacity.
-- `--inference-batch-size` trades latency vs detector throughput.
-- Queue puts use bounded retry/backoff; hard timeouts raise runtime errors instead of hanging.
+- **In-Process:** Avoids IPC overhead.
+- **GPU Boundary:** All model inference and GPU ops are confined to a worker context.
+- **Single-Writer:** All SQLite writes are sequentialized through `card_capture.data.writer`.
 
-## Smoke Command (v2.1)
+## Smoke Command (v5.5)
 
 ```bash
 card-capture process <temp-video> \
@@ -85,7 +67,5 @@ card-capture process <temp-video> \
   --db <temp-db> \
   --detector fake \
   --reader-backend auto \
-  --queue-size 8 \
-  --inference-batch-size 4 \
   --corner-confidence 0.5
 ```

@@ -18,17 +18,13 @@ def _build_model() -> nn.Module:
 
 
 def _resolve_device(prefer: str = "auto") -> torch.device:
-    _VALID = {"auto", "cpu", "mps", "cuda"}
+    _VALID = {"auto", "cpu", "mps"}
     if prefer not in _VALID:
         raise ValueError(f"Invalid device {prefer!r}. Must be one of {_VALID}")
     if prefer == "cpu":
         return torch.device("cpu")
     if prefer == "mps":
         return torch.device("mps")
-    if prefer == "cuda":
-        return torch.device("cuda")
-    if torch.cuda.is_available():
-        return torch.device("cuda")
     if torch.backends.mps.is_available():
         return torch.device("mps")
     return torch.device("cpu")

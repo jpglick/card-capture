@@ -12,8 +12,6 @@ from card_capture.runtime.batches import (
 
 
 def _gpu_device() -> torch.device:
-    if torch.cuda.is_available():
-        return torch.device("cuda")
     if torch.backends.mps.is_available():
         return torch.device("mps")
     pytest.skip("no GPU available")
@@ -23,7 +21,7 @@ def test_frame_batch_accepts_gpu_tensor():
     dev = _gpu_device()
     t = torch.zeros((2, 3, 1080, 1920), device=dev, dtype=torch.float32)
     batch = GpuFrameBatch(tensor=t)
-    assert batch.tensor.device.type in {"cuda", "mps"}
+    assert batch.tensor.device.type == "mps"
 
 
 def test_frame_batch_rejects_cpu_tensor():

@@ -1,6 +1,6 @@
 """Thread-safe registry that maps run_id -> EventBus.
 
-Metaflow step modules import this module to retrieve the EventBus for the
+The pipeline runtime imports this module to retrieve the EventBus for the
 currently executing run and emit progress events back to the HTTP layer.
 They look up the run_id from the ``EVENT_BUS_RUN_ID`` environment variable
 that ``PipelineRunner`` sets before launching the flow.

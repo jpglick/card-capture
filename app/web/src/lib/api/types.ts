@@ -270,13 +270,6 @@ export interface RegressionCompare {
     per_video_deltas: any[];
 }
 
-export interface VastConfig {
-    pipeline_backend: 'mps' | 'cuda';
-    cuda_gpu_type: 'RTX 4090' | 'Flagship' | 'RTX 5060 Ti';
-    vast_template_id: string;
-    cuda_idle_timeout_s: number;
-}
-
 export interface BatchJob {
     video_id: string;
     status: 'pending' | 'running' | 'complete' | 'failed';

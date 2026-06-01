@@ -760,7 +760,7 @@ class AdaptivePresenceSampler:
 
         threshold = self.presence_threshold  # classifier path; overwritten by Otsu in fallback
         if self.presence_weights_path is not None:
-            # Lazy-load inside subprocess to avoid pickling MPS/CUDA tensors across
+            # Lazy-load inside subprocess to avoid pickling MPS tensors across
             # the multiprocessing boundary.
             if self._presence_classifier is None:
                 self._presence_classifier = _PresenceClassifier(

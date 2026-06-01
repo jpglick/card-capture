@@ -77,6 +77,7 @@ class TorchDeviceStatus:
     is_available: bool = False
     mps_built: bool = False
     mps_available: bool = False
+    cuda_built: bool = False
     cuda_available: bool = False
     reason: Optional[str] = None
 

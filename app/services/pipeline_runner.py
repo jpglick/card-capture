@@ -146,9 +146,9 @@ class PipelineRunner:
             log_sink=lambda line: self._persist_log(run_id, line),
         )
 
-        # Resource sampler is keyed by stage. We can't watch metaflow log
-        # lines anymore, so wrap the telemetry so stage_started flips the
-        # sampler's current_stage at the same instant we tell the UI.
+        # Resource sampler is keyed by stage. Wrap the telemetry so
+        # stage_started flips the sampler's current_stage at the
+        # same instant we tell the UI.
         sampler = None
         if self.db_path:
             from app.services.resource_sampler import ResourceSampler
@@ -175,7 +175,7 @@ class PipelineRunner:
             run_id=run_id,
             input_video=f"artifact://local/{abs_video}",
             output_root=f"artifact://local/{abs_output}/",
-            runtime_mode="cpu_debug",  # strict_gpu requires CUDA; UI host is Mac
+            runtime_mode="cpu_debug",
             config=request_config,
             db_path=abs_db,
             video_id=video_id,

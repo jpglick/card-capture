@@ -4,35 +4,33 @@ Extract high-quality 750×1050 stills of trading cards from hand-held workspace
 videos. Input: 4K portrait `.MOV` files. Output: perspective-rectified,
 deduplicated card images + SQLite metadata.
 
+Full v5.5 architecture: `docs/architecture/arch-5.5.md`.
+
 ---
 
-## Architecture (Unified Runtime, v5.5+)
+## Architecture (Local Runtime, v5.5+)
 
-The pipeline runs as a high-performance in-process loop (`UnifiedRuntime`) to
+The pipeline runs as a high-performance in-process loop (`LocalPipelineRuntime`) to
 minimize IPC overhead and redundant video decoding.
 
 ```
 Video.mov
-  [Producer Thread]
-  Stage 1  Stride Sampler             — Decodes frames @ variable FPS based on activity
-  
-  [Worker Thread (GPU Boundary)]
-  Stage 2  YOLO Corner Detection       — YOLOv8-OBB @ 640px; batched GPU inference
-  Stage 3  Eager Warp / Crop Cache    — GPU-resident 750×1050 crops; skips re-decoding
-  
-  [Main Thread]
-  Stage 4  Background Novelty Gate     — Mean + Variance model; drops empty stands
-  Stage 5  Session-Aware Tracking      — BoT-SORT/ByteTrack; 4 reset signals
-  Stage 6  Refinement & Scoring        — Consumes cached crops; 7-component quality score
-  Stage 7  Front/Back Resolution       — Heuristic or classifier-based resolution
-  Stage 8  Lighting-Diverse Fusion     — Median or foil-aware glare rejection
-  Stage 9  Global Dedup + Storage      — Single-Writer DAL; cards.sqlite
+  Stage 1  sample     — Adaptive Presence Sampler; starts streaming producer
+  Stage 2  detect     — YOLO Corner Detection; batched inference
+  Stage 3  novelty    — Background Novelty Gate; drops empty stands
+  Stage 4  track      — Session-Aware Tracking; BoT-SORT/ByteTrack
+  Stage 5  refine     — GPU Refinement; Kornia perspective warp 750x1050
+  Stage 6  score      — Quality Scoring + Pruning; adaptive thresholds
+  Stage 7  resolve    — Front/Back Resolution; side prediction
+  Stage 8  fuse       — Lighting-Diverse Fusion; median fusion
+  Stage 9  dedup      — Global Dedup; ReID + pHash
+  Stage 10 store      — Storage; persists to disk and SQLite
 ```
 
 **Architectural Mandates:**
-- **In-Process:** Production runs must use `UnifiedRuntime`. Metaflow is for remote orchestration only.
-- **Strict GPU Boundary:** All PyTorch/Kornia operations MUST happen in the `_worker` thread.
-- **Single-Writer DAL:** All DB writes MUST go through `SingleWriterDAL` in `card_capture.dal`.
+- **In-Process:** Production runs must use `LocalPipelineRuntime`.
+- **Strict GPU Boundary:** All PyTorch/Kornia operations MUST happen in the `_worker` thread context.
+- **Single-Writer DAL:** All DB writes MUST go through the `Writer` in `card_capture.data.writer`.
 
 ---
 
@@ -40,23 +38,22 @@ Video.mov
 
 | File | Purpose |
 |---|---|
-| `src/card_capture/runtime.py` | **Core:** Unified in-process orchestrator and producer/worker threads |
-| `src/card_capture/dal.py` | Data Access Layer: Single-Writer thread-safe SQLite persistence |
+| `src/card_capture/pipeline/runtime_local.py` | **Core:** Local orchestrator for in-process runs |
+| `src/card_capture/pipeline/runner.py` | Uniform submit/wait/cancel runner interface |
+| `src/card_capture/data/` | Data Access Layer: repositories and Single-Writer persistence |
 | `src/card_capture/models.py` | Centralized domain objects (`FrameSample`, `TrackState`, etc.) |
 | `src/card_capture/interfaces.py` | Protocols for components (`CardDetector`, `FrameSampler`) |
 | `src/card_capture/sampler/` | `StrideSampler` for two-pass presence detection |
-| `src/card_capture/detectors.py` | YOLOv8-OBB backends + device probing |
+| `src/card_capture/detectors.py` | YOLOv8-OBB backends + device probing (Apple Silicon) |
 | `src/card_capture/presence/` | Novelty gate (Mean/Variance) + background modeling |
 | `src/card_capture/tracking/` | BoT-SORT and ByteTrack adapters |
 | `src/card_capture/cropper.py` | `PrecisionNormalizer` for consistent homography |
-| `src/card_capture/storage.py` | (Internal) Direct SQLite storage logic |
-| `pipeline/card_capture_flow.py` | Metaflow orchestrator (Remote/Baseline use only) |
 
 ---
 
 ## Configuration
 
-All knobs live in `PipelineConfig` (`src/card_capture/config.py`). Defaults:
+All knobs live in `PipelineConfig` (`src/card_capture/pipeline/request.py`). Defaults:
 
 ```
 corner_confidence          = 0.5    # YOLO gate
@@ -88,11 +85,8 @@ Quarantined tests (`@pytest.mark.quarantine`) include those requiring CUDA/MPS h
 ## Commands
 
 ```bash
-# Process a video (Unified pipeline, default)
+# Process a video (Local pipeline, default)
 card-capture process video.MOV --output-dir out --db out/cards.sqlite
-
-# Run via Metaflow (legacy/remote)
-card-capture process video.MOV --pipeline metaflow --db out/cards.sqlite
 
 # Start the web app
 uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
@@ -103,11 +97,6 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 
 ## Known Weaknesses (v5.5)
 
-- F/B classifier fallback uses longest-track heuristic when the classifier is unavailable (resolve stage gracefully degrades; classifier weights are an optional artifact).
-- Eager warping uses CPU fallback (`PrecisionNormalizer`) if Kornia construction fails for the requested device.
-- In-memory peak (~180 MB for the reference video) scales with concurrent active tracks; mitigation (selective spill between refine/score) is a tracked follow-up.
-
-## Recent baseline
-
-V5.5 back-half wired and verified against IMG_5872.MOV — see
-[docs/superpowers/plans/v5-5/back-half-baseline.md](docs/superpowers/plans/v5-5/back-half-baseline.md).
+- F/B classifier fallback uses longest-track heuristic when the classifier is unavailable.
+- GPU Refinement uses CPU fallback (`PrecisionNormalizer`) if Kornia construction fails for the requested device.
+- Apple Silicon (MPS) is the only supported hardware accelerator; CUDA is unsupported.

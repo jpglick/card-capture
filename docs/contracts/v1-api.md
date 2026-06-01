@@ -744,12 +744,12 @@ Create a custom config preset.
 
 ### `GET /api/v1/config/playground/{run_id}`
 
-Retrieve persisted Metaflow artifact data for the threshold playground UI.
+Retrieve persisted data for the threshold playground UI (V5.5 placeholder).
 
 **Response `200`:**
 ```json
 {
-  "run_id": "CardCaptureFlow/1715523601234567",
+  "run_id": "run_2026_05_12_1400",
   "available_steps": ["novelty", "score", "dedup"],
   "slider_params": [
     {
@@ -759,14 +759,6 @@ Retrieve persisted Metaflow artifact data for the threshold playground UI.
       "max": 0.30,
       "step": 0.01,
       "affects_steps": ["novelty", "score"]
-    },
-    {
-      "param": "corner_confidence",
-      "current": 0.50,
-      "min": 0.20,
-      "max": 0.90,
-      "step": 0.05,
-      "affects_steps": ["novelty"]
     }
   ]
 }
@@ -780,20 +772,20 @@ Retrieve persisted Metaflow artifact data for the threshold playground UI.
 
 **Content-Type:** `text/event-stream`
 
-The server emits newline-delimited SSE events as each Metaflow step completes. The `event:` field identifies the event type; `data:` is a JSON object.
+The server emits newline-delimited SSE events as each stage completes. The `event:` field identifies the event type; `data:` is a JSON object.
 
 ### Event: `stage_started`
 
 ```
 event: stage_started
-data: {"run_id": "CardCaptureFlow/1715523601234567", "stage_id": "detect", "ts": "2026-05-12T14:00:05Z"}
+data: {"run_id": "run_2026_05_12_1400", "stage_id": "detect", "ts": "2026-05-12T14:00:05Z"}
 ```
 
 ### Event: `stage_progress`
 
 ```
 event: stage_progress
-data: {"run_id": "CardCaptureFlow/1715523601234567", "stage_id": "detect", "pct": 42, "detail": "Sampling frame 600/1420", "ts": "2026-05-12T14:00:11Z"}
+data: {"run_id": "run_2026_05_12_1400", "stage_id": "detect", "pct": 42, "detail": "Sampling frame 600/1420", "ts": "2026-05-12T14:00:11Z"}
 ```
 
 **Fields:** `pct` is `0–100` (integer); `detail` is a human-readable status string.
@@ -802,33 +794,26 @@ data: {"run_id": "CardCaptureFlow/1715523601234567", "stage_id": "detect", "pct"
 
 ```
 event: stage_completed
-data: {"run_id": "CardCaptureFlow/1715523601234567", "stage_id": "detect", "elapsed_ms": 12100, "ts": "2026-05-12T14:00:17Z"}
-```
-
-### Event: `artifact_persisted`
-
-```
-event: artifact_persisted
-data: {"run_id": "CardCaptureFlow/1715523601234567", "stage_id": "detect", "artifact_name": "corner_detections", "artifact_ref": "CardCaptureFlow/1715523601234567/detect/corner_detections", "ts": "2026-05-12T14:00:17Z"}
+data: {"run_id": "run_2026_05_12_1400", "stage_id": "detect", "elapsed_ms": 12100, "ts": "2026-05-12T14:00:17Z"}
 ```
 
 ### Event: `run_completed`
 
 ```
 event: run_completed
-data: {"run_id": "CardCaptureFlow/1715523601234567", "cards_extracted": 12, "elapsed_ms": 87430, "ts": "2026-05-12T14:01:27Z"}
+data: {"run_id": "run_2026_05_12_1400", "cards_extracted": 12, "elapsed_ms": 87430, "ts": "2026-05-12T14:01:27Z"}
 ```
 
 ### Event: `run_failed`
 
 ```
 event: run_failed
-data: {"run_id": "CardCaptureFlow/1715523601234567", "stage_id": "refine", "error": "GPU out of memory", "ts": "2026-05-12T14:00:55Z"}
+data: {"run_id": "run_2026_05_12_1400", "stage_id": "refine", "error": "GPU out of memory", "ts": "2026-05-12T14:00:55Z"}
 ```
 
 ### SSE Ordering Guarantee
 
-Events are emitted in pipeline step order. `stage_started` always precedes `artifact_persisted` and `stage_completed` for the same step. `run_completed` or `run_failed` is always the last event.
+Events are emitted in pipeline stage order. `stage_started` always precedes `stage_progress` and `stage_completed` for the same stage. `run_completed` or `run_failed` is always the last event.
 
 ---
 

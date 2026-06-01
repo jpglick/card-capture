@@ -36,9 +36,9 @@ Each rule carries:
 ### Runtime Backends
 
 - **R-RT-1** `blocking:phase-2` (static): GPU hot-path modules (per `pyproject.toml [tool.gpu_strict_lint] files`) must not call `cv2.VideoCapture`, `cv2.imread`, `PIL.Image.open`, `torch.Tensor.cpu`, or `torch.Tensor.numpy` except through the approved export helpers. (Enforced as of Phase 2).
-- **R-RT-2** `blocking:phase-2` (runtime): `StrictGpuRuntime` raises `ContractViolation` on missing CUDA/MPS, missing decode backend, or tensor host transfer outside an approved export boundary.
+- **R-RT-2** `blocking:phase-2` (runtime): `StrictGpuRuntime` raises `ContractViolation` on missing MPS, missing decode backend, or tensor host transfer outside an approved export boundary.
 - **R-RT-3** `blocking:phase-2` (review): Production must not silently fall back to CPU. `runtime_mode` is explicit.
-- **R-RT-4** `advisory:phase-2` → `blocking:phase-3` (review): Backend duplication is preferred over `if cuda` / `if mps` / `if cpu_debug` conditionals in hot paths.
+- **R-RT-4** `advisory:phase-2` → `blocking:phase-3` (review): Backend duplication is preferred over `if mps` / `if cpu_debug` conditionals in hot paths.
 
 ### Data Access
 
@@ -55,9 +55,8 @@ Each rule carries:
 
 ### Platforms
 
-- **R-PLAT-1** `blocking:phase-5` (static, Import Linter): Provider SDKs (`runpod`, `beam`, vast.ai clients) are imported only inside `card_capture.platforms`.
+- **R-PLAT-1** `blocking:phase-5` (static, Import Linter): All execution platforms must live in `card_capture.platforms`.
 - **R-PLAT-2** `blocking:phase-5` (review): Every platform returns a `RunManifest` of the same shape.
-- **R-PLAT-3** `blocking:phase-5` (review): Provider failures are mapped to stable categories (`preflight_failed`, `submission_failed`, ...) before app-facing status.
 
 ### Testing
 

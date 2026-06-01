@@ -87,7 +87,7 @@ class LocalPipelineRuntime:
         from card_capture.data.repositories.events import EventsRepository
         from card_capture.data.repositories.cards import CardsRepository
 
-        # Prefer the explicit db_path callers pass in (UI, RunPod, training).
+        # Prefer the explicit db_path callers pass in (UI, training).
         # Fall back to <output_root>/cards.sqlite for older test callers.
         if request.db_path:
             db_path = Path(request.db_path)

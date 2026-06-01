@@ -8,7 +8,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TEST_ROOT = REPO_ROOT / "tests"
 
-ALLOWED_MARKERS = {"cuda", "mps", "provider", "benchmark", "slow", "quarantine"}
+ALLOWED_MARKERS = {"mps", "benchmark", "slow", "quarantine"}
 
 
 def _iter_test_files():
