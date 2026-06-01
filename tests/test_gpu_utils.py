@@ -24,7 +24,7 @@ from card_capture.gpu_utils import (
 
 def test_get_device_returns_valid_device():
     """Verify that get_device() returns a valid torch.device."""
-    device = get_device()
+    device = get_device(allow_cpu_fallback=True)
     assert isinstance(device, torch.device)
     # Device should be one of MPS or CPU
     assert device.type in ("mps", "cpu")
@@ -36,7 +36,7 @@ def test_get_device_returns_valid_device():
 
 def test_compute_variance_gpu_returns_scalar():
     """Verify that compute_variance_gpu returns a float >= 0."""
-    device = get_device()
+    device = get_device(allow_cpu_fallback=True)
     
     # Create a test frame (8-bit BGR image, typical from OpenCV)
     frame = np.random.randint(0, 256, (480, 640, 3), dtype=np.uint8)
@@ -51,7 +51,7 @@ def test_compute_variance_gpu_returns_scalar():
 
 def test_compute_variance_gpu_high_variance():
     """Verify variance is higher for high-frequency content."""
-    device = get_device()
+    device = get_device(allow_cpu_fallback=True)
     
     # Low variance: smooth gradient
     low_var_frame = np.full((480, 640, 3), 128, dtype=np.uint8)
@@ -72,7 +72,7 @@ def test_compute_variance_gpu_high_variance():
 
 def test_compute_sharpness_gpu_returns_scalar():
     """Verify that compute_sharpness_gpu returns a float >= 0."""
-    device = get_device()
+    device = get_device(allow_cpu_fallback=True)
     
     # Create a test frame
     frame = np.random.randint(0, 256, (480, 640, 3), dtype=np.uint8)
@@ -87,7 +87,7 @@ def test_compute_sharpness_gpu_returns_scalar():
 
 def test_compute_sharpness_gpu_blurry_vs_sharp():
     """Verify sharpness is lower for blurry images and higher for sharp."""
-    device = get_device()
+    device = get_device(allow_cpu_fallback=True)
     
     # Sharp image: high-frequency content
     sharp_frame = np.zeros((480, 640, 3), dtype=np.uint8)

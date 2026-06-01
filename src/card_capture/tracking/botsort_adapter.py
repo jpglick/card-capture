@@ -100,20 +100,21 @@ def _import_botsort():
     try:
         from boxmot import BoTSORT as _Klass  # legacy (boxmot ≤ 0.16)
         return _Klass
-    except Exception:
-        pass
+    except Exception as e1:
+        e_first = e1
     try:
         from boxmot import BotSort as _Klass  # boxmot ≥ 0.17 top-level export
         return _Klass
-    except Exception:
-        pass
+    except Exception as e2:
+        e_second = e2
     try:
         from boxmot.trackers.botsort.botsort import BotSort as _Klass  # boxmot ≥ 0.17
         return _Klass
     except Exception as exc:
         raise ImportError(
-            "BoT-SORT backend requires the 'boxmot' package. "
-            "Install it with: pip install 'card-capture[legacy_tracking]'"
+            f"BoT-SORT backend requires the 'boxmot' package. "
+            f"Install it with: pip install 'card-capture[legacy_tracking]'. "
+            f"Errors: {e_first}, {e_second}, {exc}"
         ) from exc
 
 

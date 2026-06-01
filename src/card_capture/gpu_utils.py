@@ -14,21 +14,28 @@ import numpy as np
 import cv2
 
 
-def get_device() -> torch.device:
-    """
-    Detect and return the best available device for PyTorch computation.
+import os
 
-    Priority order:
-    1. MPS (Metal Performance Shaders) - for M-series Apple Silicon Macs
-    2. CPU - fallback
+def _env_cpu_ok() -> bool:
+    return os.environ.get("CC_ALLOW_CPU_FALLBACK", "0") == "1"
 
-    Returns:
-        torch.device: The selected device for PyTorch operations.
+
+def get_device(allow_cpu_fallback: bool = False) -> torch.device:
+    """Return the MPS device, or hard-fail if MPS is unavailable.
+
+    v5.5 is Apple-Silicon-only. CPU is returned ONLY when the caller explicitly
+    opts in via `allow_cpu_fallback` (mapped from PipelineConfig.allow_cpu_fallback
+    / RuntimeMode 'cpu_debug').
     """
     if torch.backends.mps.is_available():
         return torch.device("mps")
-    else:
+    if allow_cpu_fallback:
         return torch.device("cpu")
+    raise RuntimeError(
+        "MPS GPU unavailable and allow_cpu_fallback is False. v5.5 is "
+        "Apple-Silicon-only; set PipelineConfig.allow_cpu_fallback=True "
+        "(or RuntimeMode 'cpu_debug') for CPU debug runs."
+    )
 
 
 def _frame_to_tensor(frame: np.ndarray, device: torch.device) -> torch.Tensor:
@@ -126,7 +133,7 @@ def compute_motion_gpu(frame1: np.ndarray, frame2: np.ndarray, device: Union[str
         ValueError: If frame shapes don't match
     """
     if device == "auto":
-        device = get_device()
+        device = get_device(allow_cpu_fallback=_env_cpu_ok())
     
     # Validate frame shapes match
     if frame1.shape != frame2.shape:
@@ -203,7 +210,7 @@ def compute_edge_density_gpu(frame: np.ndarray, device: Union[str, torch.device]
         - is_high_edge: True if edge_density_fraction > edge_density_threshold
     """
     if device == "auto":
-        device = get_device()
+        device = get_device(allow_cpu_fallback=_env_cpu_ok())
     
     # Convert to grayscale if needed
     if len(frame.shape) == 3:
@@ -248,7 +255,7 @@ def compute_edge_density_gpu(frame: np.ndarray, device: Union[str, torch.device]
     return edge_density, is_high
 
 
-def estimate_batch_size(device: str = "auto", frame_shape: tuple = (1080, 1920), safety_margin: float = 0.4) -> int:
+def estimate_batch_size(device: str = "auto", safety_margin: float = 0.4) -> int:
     """Estimate safe GPU batch size for sharpness scoring based on available VRAM.
     
     Queries GPU memory and estimates how many frames can be processed simultaneously
@@ -256,7 +263,6 @@ def estimate_batch_size(device: str = "auto", frame_shape: tuple = (1080, 1920),
     
     Args:
         device: torch device ("mps", "cpu", or "auto")
-        frame_shape: Expected frame dimensions (height, width) in pixels (default: (1080, 1920))
         safety_margin: Fraction of VRAM to reserve (0.4 = 40% reserved, 60% usable)
     
     Returns:
@@ -270,7 +276,7 @@ def estimate_batch_size(device: str = "auto", frame_shape: tuple = (1080, 1920),
     try:
         # Convert device string to torch.device if needed
         if device == "auto":
-            device_obj = get_device()
+            device_obj = get_device(allow_cpu_fallback=_env_cpu_ok())
         else:
             device_obj = torch.device(device)
         
@@ -307,7 +313,7 @@ def estimate_batch_size(device: str = "auto", frame_shape: tuple = (1080, 1920),
 
 
 def score_sharpness_batched(frames: list[np.ndarray], device: str = "auto", 
-                            batch_size: int = 32, variance_only: bool = True) -> list[float]:
+                            batch_size: int = 32) -> list[float]:
     """Score sharpness (Laplacian variance) for a batch of frames on GPU.
     
     Processes multiple frames in parallel on GPU for efficient batched computation.
@@ -317,7 +323,6 @@ def score_sharpness_batched(frames: list[np.ndarray], device: str = "auto",
         frames: List of frames, each (H, W) grayscale or (H, W, C) color, uint8
         device: torch device ("mps", "cpu", or "auto")
         batch_size: Frames to process simultaneously, clamped to [1, 128]
-        variance_only: If True (default), compute only Laplacian. If False, for future expansion.
     
     Returns:
         List of float variance scores in original frame order, same length as input frames.
@@ -332,7 +337,7 @@ def score_sharpness_batched(frames: list[np.ndarray], device: str = "auto",
     
     # Convert device string to torch.device if needed
     if device == "auto":
-        device = get_device()
+        device = get_device(allow_cpu_fallback=_env_cpu_ok())
     elif isinstance(device, str):
         device = torch.device(device)
     
@@ -411,7 +416,7 @@ def compute_presence_metrics_batched(
         return []
 
     if device == "auto":
-        device = get_device()
+        device = get_device(allow_cpu_fallback=_env_cpu_ok())
     elif isinstance(device, str):
         device = torch.device(device)
 

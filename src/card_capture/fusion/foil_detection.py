@@ -11,12 +11,9 @@ import torch.nn.functional as F
 # separation across the range 10.0-80.0, selecting 50.0 as a robust midpoint.
 DEFAULT_FOIL_THRESHOLD = 50.0
 
-# Resolve GPU device once at module load time (CUDA > MPS > CPU).
+# Resolve GPU device once at module load time (MPS > CPU).
 from card_capture import gpu_utils as _gpu_utils
-_device = _gpu_utils.get_device()
-
-# True when the operator explicitly permits silent CPU fallback.
-_CPU_FALLBACK_ALLOWED = os.environ.get("CC_CUDA_ALLOW_CPU_FALLBACK", "0") == "1"
+_device = _gpu_utils.get_device(allow_cpu_fallback=_gpu_utils._env_cpu_ok())
 
 
 def _compute_laplacian_variance_gpu(frames: list[np.ndarray]) -> float:
@@ -63,13 +60,11 @@ def _compute_laplacian_variance_cpu(frames: list[np.ndarray]) -> float:
 
 def compute_laplacian_variance(frames: list[np.ndarray]) -> float:
     """
-    Compute the mean variance of Laplacian magnitudes across frames.
+    Compute the mean variance of Laplacian magnitudes across frames via cv2.
 
     High-frequency content that shifts between frames indicates a foil/holographic surface.
-    Uses CUDA GPU when available; falls back to cv2 otherwise.  MPS (Apple Silicon)
-    falls through to the cv2 path silently — MPS float32 produces numerically
-    different results from cv2.Laplacian and can skew the foil threshold.
-    A warning is emitted only on pure-CPU systems without CC_CUDA_ALLOW_CPU_FALLBACK=1.
+    The former CUDA GPU path was dead on Apple Silicon (MPS uses float32 and
+    fell through to cv2 anyway); v5.5 is Apple-Silicon-only, so it is removed.
 
     Args:
         frames: List of BGR frames (typically 4 canonical frames)
@@ -80,17 +75,6 @@ def compute_laplacian_variance(frames: list[np.ndarray]) -> float:
     if len(frames) < 2:
         return 0.0
 
-    if _device.type == "cuda":
-        return _compute_laplacian_variance_gpu(frames)
-
-    # Non-CUDA path (cpu or mps) — warn only on pure-CPU systems without opt-in.
-    if _device.type == "cpu" and not _CPU_FALLBACK_ALLOWED:
-        warnings.warn(
-            "foil_detection.compute_laplacian_variance: running on CPU (no CUDA device found). "
-            "Set CC_CUDA_ALLOW_CPU_FALLBACK=1 to suppress this warning.",
-            RuntimeWarning,
-            stacklevel=2,
-        )
     return _compute_laplacian_variance_cpu(frames)
 
 

@@ -349,25 +349,6 @@ class StabilityBasedSampler:
         finally:
             capture.release()
 
-class SyntheticSampler:
-    def __init__(self):
-        self.last_selected_frame_count = 0
-        self.last_source_fps = 30.0
-        self.last_scan_frame_count = 0
-        self.last_inter_window_gaps_frames = []
-        self.last_valley_splits = []
-        self.background_proxies = []
-
-    def sample(self, video_path: Path = None, sample_fps: float = 0.0) -> Iterator[FrameSample]:
-        # Yield 10 identical frames so the tracker can form a stable track
-        count = 0
-        for i in range(10):
-            image = np.zeros((120, 90, 3), dtype=np.uint8)
-            image[15:105, 10:80] = 180
-            yield FrameSample(frame_index=i, timestamp_ms=i * 100, image=image, width=90, height=120)
-            count += 1
-        self.last_selected_frame_count = count
-
 class ContrastBasedSampler:
     def __init__(self, video_path: str, scan_fps: float = 5.0, scan_width: int = 160, contrast_threshold: float = 600.0, min_presence_frames: int = 3, candidates_per_window: int = 3, device: str = "auto", window_merge_gap: int = 5, motion_threshold: float = 8.0, histogram_sigma: float = 1.5, edge_density_threshold: float = 0.15, sobel_magnitude_threshold: float = 50.0, detection_metrics: list[str] = None):
         self.video_path = video_path
@@ -384,8 +365,8 @@ class ContrastBasedSampler:
         self.detection_metrics = detection_metrics if detection_metrics is not None else ["variance"]
         if device == "auto":
             try:
-                from ..gpu_utils import get_device
-                self.device = get_device()
+                from ..gpu_utils import get_device, _env_cpu_ok
+                self.device = get_device(allow_cpu_fallback=_env_cpu_ok())
             except ImportError: self.device = torch.device("cpu")
         else: self.device = torch.device(device)
 
@@ -681,9 +662,9 @@ class AdaptivePresenceSampler:
             resolved_device = torch.device(device) if device != "auto" else torch.device("cpu")
             if device == "auto":
                 try:
-                    from ..gpu_utils import get_device
+                    from ..gpu_utils import get_device, _env_cpu_ok
 
-                    resolved_device = get_device()
+                    resolved_device = get_device(allow_cpu_fallback=_env_cpu_ok())
                 except Exception:
                     resolved_device = torch.device("cpu")
             if resolved_device.type == "cpu":
