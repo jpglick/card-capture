@@ -136,7 +136,7 @@ def test_quality_scorer_penalizes_occluded_frame():
 
 def test_per_pixel_bg_tracks_variance():
     """Verify BG model stores per-pixel variance."""
-    from card_capture.presence.background_novelty import BackgroundModel
+    from card_capture.stages.novelty.background_novelty import BackgroundModel
 
     # Create two frames with different variance patterns
     # Region [0:50, 0:50]: constant at 150 and 145 (small variance)
@@ -159,7 +159,7 @@ def test_per_pixel_bg_tracks_variance():
 
 def test_mahalanobis_novelty_with_variance():
     """Verify Mahalanobis novelty accounts for variance."""
-    from card_capture.presence.background_novelty import BackgroundModel, quad_novelty
+    from card_capture.stages.novelty.background_novelty import BackgroundModel, quad_novelty
 
     # Create background: uniform gray at 128
     bg_frame = np.ones((100, 100), dtype=np.uint8) * 128

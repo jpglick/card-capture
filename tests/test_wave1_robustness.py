@@ -512,7 +512,7 @@ def test_lab_color_novelty_detects_chroma_difference(tmp_path):
     This test ensures Lab color mode can detect color-only differences.
     """
     import cv2
-    from card_capture.presence.background_novelty import BackgroundModel, quad_novelty
+    from card_capture.stages.novelty.background_novelty import BackgroundModel, quad_novelty
 
     # Create a neutral gray background
     # Neutral gray: (B=128, G=128, R=128) → LAB: L≈137, a=128, b=128
@@ -553,7 +553,7 @@ def test_lab_novelty_backward_compatible_with_grayscale(tmp_path):
     rounding differences in color space conversion).
     """
     import cv2
-    from card_capture.presence.background_novelty import BackgroundModel, quad_novelty
+    from card_capture.stages.novelty.background_novelty import BackgroundModel, quad_novelty
 
     # Create uniform background
     bg_frames = [np.full((100, 100, 3), (128, 128, 128), dtype=np.uint8) for _ in range(3)]
@@ -595,7 +595,7 @@ def test_background_model_refresh_from_frame_ewma():
     tracking slow lighting changes.
     """
     import cv2
-    from card_capture.presence.background_novelty import BackgroundModel
+    from card_capture.stages.novelty.background_novelty import BackgroundModel
 
     # Create initial background model with dim lighting (brightness ~100)
     dim_frames = [np.full((100, 100, 3), (100, 100, 100), dtype=np.uint8) for _ in range(3)]
@@ -653,7 +653,7 @@ def test_background_model_refresh_gradual_drift():
     during detected empty windows).
     """
     import cv2
-    from card_capture.presence.background_novelty import BackgroundModel
+    from card_capture.stages.novelty.background_novelty import BackgroundModel
 
     # Initial dim background (brightness ~100)
     initial_frames = [np.full((100, 100, 3), (100, 100, 100), dtype=np.uint8) for _ in range(3)]

@@ -460,7 +460,7 @@ class TestAdaptiveThresholds:
             _prune_empty_workspace_tracks,
             _PreparedTrack,
         )
-        from card_capture.presence.background_novelty import BackgroundModel
+        from card_capture.stages.novelty.background_novelty import BackgroundModel
         from card_capture.core.models import ScoredCandidate
         from card_capture.core.models import QualityScore
         import cv2

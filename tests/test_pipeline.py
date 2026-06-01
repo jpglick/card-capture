@@ -657,7 +657,7 @@ def test_candidate_filter_drops_background_quads(tmp_path):
     """_filter_candidates_by_novelty must remove candidates whose quad interior
     matches the workspace baseline."""
     from card_capture.shared.pipeline_utils import _filter_candidates_by_novelty
-    from card_capture.presence.background_novelty import BackgroundModel
+    from card_capture.stages.novelty.background_novelty import BackgroundModel
     import cv2
 
     # Build a flat background and write it to disk
@@ -697,7 +697,7 @@ def test_candidate_filter_drops_background_quads(tmp_path):
 @pytest.mark.skip(reason="_collect_candidate_novelty_scores retired with monolith")
 def test_candidate_novelty_collection_does_not_drop_pre_tracking_candidates(tmp_path):
     from card_capture.shared.pipeline_utils import _collect_candidate_novelty_scores, PipelineContext
-    from card_capture.presence.background_novelty import BackgroundModel
+    from card_capture.stages.novelty.background_novelty import BackgroundModel
     import cv2
 
     bg_arr = np.full((200, 200, 3), 128, dtype=np.uint8)
@@ -737,7 +737,7 @@ def test_prune_empty_workspace_tracks_drops_low_novelty_tracks(tmp_path):
     """A finalized track whose medoid frame's quad matches the background is removed."""
     from card_capture.shared.pipeline_utils import _prune_empty_workspace_tracks, _PreparedTrack
     from card_capture.core.models import TrackState
-    from card_capture.presence.background_novelty import BackgroundModel
+    from card_capture.stages.novelty.background_novelty import BackgroundModel
     import cv2
 
     bg_arr = np.full((200, 200, 3), 128, dtype=np.uint8)

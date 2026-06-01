@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from card_capture.presence.classifier import PresenceClassifier
+from card_capture.stages.novelty.classifier import PresenceClassifier
 
 WEIGHTS = Path("models/presence_classifier.pt")
 pytestmark = pytest.mark.skipif(not WEIGHTS.exists(), reason="weights not trained yet")
