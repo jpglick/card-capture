@@ -69,3 +69,6 @@ models/*
 
 # Gemini CLI local tool config
 .gemini/
+scripts/deadcode/findings.json
+scripts/deadcode/manifest.json
+scripts/deadcode/report.md
