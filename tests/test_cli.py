@@ -216,7 +216,7 @@ def test_readme_mentions_reader_backend_flag():
 
 
 def test_quick_reference_mentions_multiprocessing_pipeline():
-    quick_reference = Path("QUICK_REFERENCE.md").read_text(encoding="utf-8").lower()
+    quick_reference = Path("docs/QUICK_REFERENCE.md").read_text(encoding="utf-8").lower()
     assert "producer/consumer pipeline" in quick_reference
 
 
