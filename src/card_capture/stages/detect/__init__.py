@@ -9,10 +9,10 @@ from __future__ import annotations
 from card_capture.stages.detect.detectors import (
     CardcaptorUltralyticsDetector,
     FakeCardDetector,
-    probe_torch_device_status,
-)
+    )
 from card_capture.core.models import FramePacket
 from card_capture.shared.stage_metrics import emit_stage_metrics
+from card_capture.core.gpu_utils import probe_torch_device_status
 
 
 def run(state: dict, *, telemetry) -> None:

@@ -7,10 +7,10 @@ from unittest.mock import MagicMock, patch
 from card_capture.stages.detect.detectors import (
     CardcaptorUltralyticsDetector,
     FakeCornerDetector,
-    probe_torch_device_status,
-)
+    )
 from card_capture.core.workers import NullStateDetector
 from card_capture.core.models import DetectionPacket, FramePacket, FrameSample
+from card_capture.core.gpu_utils import probe_torch_device_status
 
 
 def _make_frame(height: int, width: int) -> FrameSample:

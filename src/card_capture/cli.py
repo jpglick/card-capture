@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from card_capture._warnings import install as _install_warning_filters
+from card_capture.core.gpu_utils import probe_torch_device_status
+
 _install_warning_filters()
 
 import os
@@ -12,7 +14,7 @@ import uuid
 from pathlib import Path
 from typing import Optional, Sequence
 
-from card_capture.stages.detect.detectors import CardcaptorUltralyticsDetector, FakeCardDetector, probe_torch_device_status
+from card_capture.stages.detect.detectors import CardcaptorUltralyticsDetector, FakeCardDetector
 from card_capture.stages.sample.sampler import AdaptivePresenceSampler
 from card_capture.stages.store.storage import Storage
 from card_capture.core.config import load_config, save_config

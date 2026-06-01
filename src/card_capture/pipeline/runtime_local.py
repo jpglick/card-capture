@@ -25,6 +25,8 @@ from card_capture.pipeline.telemetry import PipelineTelemetry, NoopTelemetry
 from card_capture.stages import (
     store)
 from card_capture.stages import dedup, fuse, resolve, score, refine, track, novelty, detect, sample
+from card_capture.core.gpu_utils import probe_torch_device_status
+from card_capture.core.video_utils import probe_video, _resolve_reader_backend, _decord_available, _open_capture, RollingWindowTriage, FrameTriageFilter
 
 
 _STAGES = (

@@ -16,7 +16,7 @@ from typing import Any, List, Optional
 import cv2
 import numpy as np
 
-from card_capture.stages.sample.ingestion import FrameTriageFilter, RollingWindowTriage
+from card_capture.core.video_utils import RollingWindowTriage
 from .models import (
     CornerDetection,
     DetectionPacket,
@@ -24,6 +24,7 @@ from .models import (
     FrameSample,
     PerformanceTelemetry,
 )
+from card_capture.core.video_utils import FrameTriageFilter
 
 # ---------------------------------------------------------------------------
 # Queue control / timing constants

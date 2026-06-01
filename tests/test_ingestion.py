@@ -4,11 +4,10 @@ import builtins
 
 import numpy as np
 
-from card_capture.stages.sample.ingestion import (
-    FrameTriageFilter,
-    _decord_available,
+from card_capture.core.video_utils import (
     _resolve_reader_backend,
 )
+from card_capture.core.video_utils import _decord_available, FrameTriageFilter
 
 
 def test_frame_triage_filter_rejects_empty_frame() -> None:

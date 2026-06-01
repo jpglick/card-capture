@@ -3,7 +3,7 @@ import cv2
 from typing import List, Tuple, Union
 from card_capture.core.models import Point
 from .cropper import _orient_for_target_canvas, order_points_clockwise
-from card_capture.stages.detect.detectors import probe_torch_device_status
+from card_capture.core.gpu_utils import probe_torch_device_status
 
 try:
     import torch

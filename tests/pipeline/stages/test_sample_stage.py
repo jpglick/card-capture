@@ -3,6 +3,7 @@ from unittest.mock import MagicMock
 
 from card_capture.stages import sample
 from card_capture.stages.sample.sampler.frame_producer import FrameProducer
+from card_capture.core.video_utils import probe_video, _resolve_reader_backend, _decord_available, _open_capture, RollingWindowTriage, FrameTriageFilter
 
 
 def test_sample_starts_producer_without_draining(synthetic_two_cards_mov):

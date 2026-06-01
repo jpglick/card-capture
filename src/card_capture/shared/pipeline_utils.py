@@ -14,11 +14,12 @@ from typing import Any, List
 import cv2
 import numpy as np
 import torch
+from card_capture.core.video_utils import _open_capture
 
 # _open_capture is imported at module level so it can be monkeypatched in tests.
 # _laplacian_select_frames references this name.
 try:
-    from card_capture.stages.sample.ingestion import _open_capture
+    from card_capture.core.video_utils import _open_capture
 except Exception:  # pragma: no cover — only fails in incomplete test environments
     _open_capture = None  # type: ignore[assignment]
 
@@ -73,7 +74,7 @@ def _laplacian_variance_batch(images: List[Union[np.ndarray, "torch.Tensor"]]) -
         return []
 
     try:
-        from card_capture.stages.detect.detectors import probe_torch_device_status
+        from card_capture.core.gpu_utils import probe_torch_device_status
         resolved_device = probe_torch_device_status("auto").resolved
         if resolved_device == "cpu":
             raise RuntimeError("no acceleration")
