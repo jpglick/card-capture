@@ -16,7 +16,7 @@ from typing import Any, List, Optional
 import cv2
 import numpy as np
 
-from card_capture.ingestion import FrameTriageFilter, RollingWindowTriage
+from card_capture.stages.sample.ingestion import FrameTriageFilter, RollingWindowTriage
 from .models import (
     CornerDetection,
     DetectionPacket,

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from card_capture.stages.detect.detectors import CardcaptorUltralyticsDetector, FakeCardDetector, probe_torch_device_status
-from .sampler import AdaptivePresenceSampler
+from card_capture.stages.sample.sampler import AdaptivePresenceSampler
 from .storage import Storage
 from card_capture.core.config import load_config, save_config
 
@@ -306,7 +306,7 @@ def _run_sampler_sessions(args: argparse.Namespace) -> int:
     This runs only the scan + window-build phases (no ML inference, no frame
     decoding) so it completes in ~35 s instead of the full pipeline's 2+ min.
     """
-    from .adaptive_gap import compute_session_gap_frames
+    from card_capture.stages.sample.adaptive_gap import compute_session_gap_frames
     from card_capture.core.config import load_config
 
     config = load_config(args.config)

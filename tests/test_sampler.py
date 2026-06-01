@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from card_capture.core.models import FrameSample
-from card_capture.sampler import (
+from card_capture.stages.sample.sampler import (
     StabilityBasedSampler,
     StableWindow,
     ContrastBasedSampler,
@@ -261,7 +261,7 @@ def test_video_sampler_uses_decord_backend_when_requested(monkeypatch, tmp_path)
     ]
     backend_calls = []
 
-    monkeypatch.setattr("card_capture.sampler._resolve_reader_backend", lambda preferred: preferred)
+    monkeypatch.setattr("card_capture.stages.sample.sampler._resolve_reader_backend", lambda preferred: preferred)
 
     def _fake_decord(self, video_path, sample_fps, **kwargs):
         backend_calls.append((Path(video_path), sample_fps))
@@ -276,7 +276,7 @@ def test_video_sampler_uses_decord_backend_when_requested(monkeypatch, tmp_path)
 
 
 def test_video_sampler_uses_pyav_backend_when_auto_falls_back(monkeypatch, tmp_path):
-    monkeypatch.setattr("card_capture.sampler._resolve_reader_backend", lambda preferred: "pyav")
+    monkeypatch.setattr("card_capture.stages.sample.sampler._resolve_reader_backend", lambda preferred: "pyav")
     sampler = VideoSampler(reader_backend="auto")
     expected = [
         FrameSample(
@@ -656,7 +656,7 @@ class TestAdaptivePresenceSamplerClassifierPath:
         assert isinstance(windows, list)
 
 def test_sampler_collects_background_proxies(tmp_path):
-    from card_capture.sampler import AdaptivePresenceSampler
+    from card_capture.stages.sample.sampler import AdaptivePresenceSampler
     import numpy as np
 
     # 10 frames of background (low score), 10 frames of card (high score)
@@ -683,7 +683,7 @@ def test_sampler_collects_background_proxies(tmp_path):
 
 @pytest.mark.quarantine
 def test_sampler_background_proxies_safety_threshold(tmp_path):
-    from card_capture.sampler import AdaptivePresenceSampler
+    from card_capture.stages.sample.sampler import AdaptivePresenceSampler
     # Only "card" frames (high score), no background
     frames = colored_frames(20)
     path = make_video(tmp_path, frames, fps=30.0)

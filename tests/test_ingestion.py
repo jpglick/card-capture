@@ -4,7 +4,7 @@ import builtins
 
 import numpy as np
 
-from card_capture.ingestion import (
+from card_capture.stages.sample.ingestion import (
     FrameTriageFilter,
     _decord_available,
     _resolve_reader_backend,
@@ -37,7 +37,7 @@ def test_frame_triage_filter_accepts_textured_frame() -> None:
 def test_resolve_reader_backend_auto_falls_back_to_pyav_when_decord_unavailable(
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr("card_capture.ingestion._decord_available", lambda: False)
+    monkeypatch.setattr("card_capture.stages.sample.ingestion._decord_available", lambda: False)
 
     backend = _resolve_reader_backend("auto")
 

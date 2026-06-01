@@ -11,8 +11,8 @@ from pathlib import Path
 import cv2
 
 from card_capture.shared.stage_metrics import emit_stage_metrics
-from card_capture.sampler import StrideSampler
-from card_capture.sampler.frame_producer import FrameProducer
+from card_capture.stages.sample.sampler import StrideSampler
+from card_capture.stages.sample.sampler.frame_producer import FrameProducer
 
 
 def _estimate_selected_count(video_path: str, target_fps: float) -> int:

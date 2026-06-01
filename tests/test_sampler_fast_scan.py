@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
 from unittest.mock import patch, MagicMock
-from card_capture.sampler import AdaptivePresenceSampler
-from card_capture.sampler.valley_splits import find_valley_splits
+from card_capture.stages.sample.sampler import AdaptivePresenceSampler
+from card_capture.stages.sample.sampler.valley_splits import find_valley_splits
 
 
 def test_adaptive_sampler_accepts_fast_scan_fps():
@@ -19,7 +19,7 @@ def test_adaptive_sampler_accepts_delta_spike_ratio():
 
 def test_scan_frame_has_delta_score_field():
     """_ScanFrame must have sobel_score and delta_score attributes."""
-    from card_capture.sampler import _ScanFrame
+    from card_capture.stages.sample.sampler import _ScanFrame
     frame = _ScanFrame(frame_index=0, timestamp_ms=0.0, sobel_score=0.5, delta_score=0.0)
     assert frame.delta_score == 0.0
     assert frame.sobel_score == 0.5
@@ -27,7 +27,7 @@ def test_scan_frame_has_delta_score_field():
 
 def test_scan_frame_delta_score_computed_between_frames():
     """First frame delta_score is 0.0; subsequent frames have non-zero delta when images differ."""
-    from card_capture.sampler import _ScanFrame
+    from card_capture.stages.sample.sampler import _ScanFrame
     # Just verify the dataclass accepts and stores it correctly
     f1 = _ScanFrame(frame_index=0, timestamp_ms=0.0, sobel_score=1.0, delta_score=0.0)
     f2 = _ScanFrame(frame_index=1, timestamp_ms=66.7, sobel_score=1.1, delta_score=12.5)
@@ -43,7 +43,7 @@ def test_sampler_exposes_last_valley_splits():
 
 
 def _adaptive_scan_frame(frame_index):
-    from card_capture.sampler import _AdaptiveScanFrame
+    from card_capture.stages.sample.sampler import _AdaptiveScanFrame
 
     return _AdaptiveScanFrame(
         frame_index=frame_index,
@@ -55,7 +55,7 @@ def _adaptive_scan_frame(frame_index):
 
 
 def test_per_region_valley_splits_map_scan_indices_to_source_frames(monkeypatch):
-    from card_capture.sampler import valley_detection_per_region as regional
+    from card_capture.stages.sample.sampler import valley_detection_per_region as regional
 
     frames = [np.zeros((12, 12, 3), dtype=np.uint8) for _ in range(5)]
     monkeypatch.setattr(
@@ -73,7 +73,7 @@ def test_per_region_valley_splits_map_scan_indices_to_source_frames(monkeypatch)
 
 
 def test_per_region_valley_splits_require_configured_region_votes(monkeypatch):
-    from card_capture.sampler import valley_detection_per_region as regional
+    from card_capture.stages.sample.sampler import valley_detection_per_region as regional
 
     frames = [np.zeros((12, 12, 3), dtype=np.uint8) for _ in range(5)]
     monkeypatch.setattr(
@@ -96,11 +96,11 @@ def test_compute_valley_splits_maps_regional_splits_to_source_frames(monkeypatch
     scan_frames = [_adaptive_scan_frame(i) for i in range(0, 84, 4)]
 
     monkeypatch.setattr(
-        "card_capture.sampler.valley_splits.find_valley_splits",
+        "card_capture.stages.sample.sampler.valley_splits.find_valley_splits",
         lambda *args, **kwargs: [40],
     )
     monkeypatch.setattr(
-        "card_capture.sampler.valley_detection_per_region.find_valley_splits_per_region",
+        "card_capture.stages.sample.sampler.valley_detection_per_region.find_valley_splits_per_region",
         lambda *args, **kwargs: [4, 80],
     )
 
@@ -112,11 +112,11 @@ def test_compute_valley_splits_coalesces_adjacent_regional_splits(monkeypatch):
     scan_frames = [_adaptive_scan_frame(i) for i in [0, 4, 8, 12, 16, 60]]
 
     monkeypatch.setattr(
-        "card_capture.sampler.valley_splits.find_valley_splits",
+        "card_capture.stages.sample.sampler.valley_splits.find_valley_splits",
         lambda *args, **kwargs: [],
     )
     monkeypatch.setattr(
-        "card_capture.sampler.valley_detection_per_region.find_valley_splits_per_region",
+        "card_capture.stages.sample.sampler.valley_detection_per_region.find_valley_splits_per_region",
         lambda *args, **kwargs: [4, 8, 12],
     )
 
@@ -125,7 +125,7 @@ def test_compute_valley_splits_coalesces_adjacent_regional_splits(monkeypatch):
 
 def _make_presence_window(start_frame, end_frame, n_records, base_score=0.8):
     """Helper: build a PresenceWindow and matching _AdaptiveScanFrame list."""
-    from card_capture.sampler import PresenceWindow, _AdaptiveScanFrame
+    from card_capture.stages.sample.sampler import PresenceWindow, _AdaptiveScanFrame
     window = PresenceWindow(start_frame=start_frame, end_frame=end_frame)
     step = (end_frame - start_frame) // max(n_records - 1, 1)
     records = []
@@ -178,7 +178,7 @@ def test_score_sharpness_short_window_respects_min():
 
 def test_score_sharpness_picks_best_score_per_bucket():
     """Within each bucket, the frame with the highest presence_score is chosen."""
-    from card_capture.sampler import PresenceWindow, _AdaptiveScanFrame
+    from card_capture.stages.sample.sampler import PresenceWindow, _AdaptiveScanFrame
     sampler = AdaptivePresenceSampler(target_yolo_fps=1.0, max_candidates_per_window=2)
     sampler.last_source_fps = 60.0
     # 2-second window → 2 buckets; plant known best scores

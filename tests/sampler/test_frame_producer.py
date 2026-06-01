@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from card_capture.core.models import FrameSample
-from card_capture.sampler.frame_producer import FrameProducer
+from card_capture.stages.sample.sampler.frame_producer import FrameProducer
 
 
 def _frame(i: int) -> FrameSample:

@@ -14,7 +14,7 @@ import torch
 
 from card_capture.core.models import FrameSample
 from ..ingestion import _resolve_reader_backend, _open_capture
-from ..presence.classifier import PresenceClassifier as _PresenceClassifier
+from card_capture.presence.classifier import PresenceClassifier as _PresenceClassifier
 from card_capture.core.gpu_utils import (
     compute_variance_gpu,
     compute_sharpness_gpu,

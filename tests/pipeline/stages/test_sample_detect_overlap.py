@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 
 from card_capture.pipeline.stages import detect as detect_stage
 from card_capture.pipeline.stages import sample as sample_stage
-from card_capture.sampler import StrideSampler
+from card_capture.stages.sample.sampler import StrideSampler
 
 
 def test_sample_detect_overlap_parity(synthetic_two_cards_mov):

@@ -2,7 +2,7 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from card_capture.sampler import VideoSampler
+from card_capture.stages.sample.sampler import VideoSampler
 
 
 def test_open_pyav_container_uses_software_no_hwaccel():
