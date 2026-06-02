@@ -5,6 +5,16 @@ from unittest.mock import patch, MagicMock
 from app.services.training_service import TrainingService
 
 
+def test_to_url_maps_output_path_to_files(tmp_path):
+    """Presence/corner images live under var/output and are served at /files.
+    _to_url must root the URL at var/output (preserving the presence_samples
+    subdir), regardless of where the DB lives. Regression for broken images in
+    the labeling UI after the var/ reorg split db and output dirs."""
+    svc = TrainingService(db_path=tmp_path / "var" / "db" / "cards.sqlite")
+    abs_path = "/Users/x/proj/var/output/presence_samples/run_a_0.jpg"
+    assert svc._to_url(abs_path) == "/files/presence_samples/run_a_0.jpg"
+
+
 def test_rerun_video_passes_full_config(tmp_path, monkeypatch):
     captured = {}
 

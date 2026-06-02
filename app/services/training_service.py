@@ -410,10 +410,16 @@ class TrainingService:
             )
 
     def _to_url(self, abs_path: str) -> str:
+        # /files serves the pipeline output root (var/output), so map paths
+        # rooted there — NOT at db_path.parent (var/db). Keeps presence/corner
+        # images resolvable in the labeling UI.
         p = Path(abs_path)
-        output_dir = Path(self.db_path).parent
         try:
-            rel = p.relative_to(output_dir)
-            return "/files/" + str(rel)
+            return "/files/" + str(p.relative_to("var/output"))
         except ValueError:
-            return "/files/" + p.name
+            pass
+        parts = p.parts
+        for i in range(len(parts) - 1):
+            if parts[i] == "var" and parts[i + 1] == "output":
+                return "/files/" + "/".join(parts[i + 2:])
+        return "/files/" + p.name

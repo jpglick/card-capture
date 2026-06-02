@@ -232,7 +232,9 @@ class PipelineRunner:
         try:
             from app.services.presence_sampler import sample_presence_frames
             from pathlib import Path as _Path
-            base_output = _Path(self.db_path).parent
+            # Write under the pipeline output root (var/output) so /files serves
+            # the frames — db_path.parent is var/db, which /files does NOT serve.
+            base_output = _Path(os.environ.get("CC_OUTPUT") or (_Path(_REPO_ROOT) / "var/output"))
             n = sample_presence_frames(
                 video_path=_Path(video_path),
                 run_id=run_id,
