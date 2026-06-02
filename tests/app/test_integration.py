@@ -179,6 +179,24 @@ class TestRuns:
         assert r.status_code == 200
         assert len(r.json()) == 1
 
+    def test_get_run_events_shape(self, client: TestClient, run_id: str, tmp_db: Path):
+        # Insert a pipeline_events row the way the pipeline does
+        with sqlite3.connect(str(tmp_db)) as conn:
+            conn.execute(
+                "INSERT INTO pipeline_events (run_id, video_id, stage_id, frame_index, timestamp_ms, event_type, data_json, created_at)"
+                " VALUES (?, 1, 'detect', 0, 0, 'stage_metrics', '{\"estimated_frames\": 399}', datetime('now'))",
+                (run_id,),
+            )
+        r = client.get(f"/api/v1/runs/{run_id}/events")
+        assert r.status_code == 200
+        events = r.json()
+        assert len(events) == 1
+        ev = events[0]
+        # Exact field names the TypeScript RunEvent type expects
+        assert "event_type" in ev
+        assert "data_json" in ev
+        assert "created_at" in ev
+
     def test_get_run_cards_shape(self, client: TestClient, run_id: str, tmp_db: Path):
         # Insert a card_instance for this run
         with sqlite3.connect(str(tmp_db)) as conn:

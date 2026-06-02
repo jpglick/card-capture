@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 import torch
 
+from card_capture.core.gpu_utils import probe_torch_device_status
 from card_capture.core.interfaces import CardDetector
 from card_capture.core.models import (
     CardDetection,

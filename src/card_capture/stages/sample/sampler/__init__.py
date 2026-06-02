@@ -246,8 +246,11 @@ class VideoSampler:
             if video_stream is None:
                 raise ValueError(f"No video stream found in: {video_path}")
             
-            # Use multi-threading for the decoder to speed up CPU-side handling
-            video_stream.thread_type = "AUTO"
+            # SLICE threading only. FRAME threading (part of thread_type="AUTO")
+            # deadlocks mid-stream on Apple Silicon when both OpenCV and PyAV are
+            # imported (duplicate libavdevice dylibs), wedging the run with no error
+            # surfaced. SLICE parallelizes within a frame and avoids that hang.
+            video_stream.thread_type = "SLICE"
 
             source_fps = float(video_stream.average_rate or video_stream.guessed_rate or sample_fps)
             frame_step = max(1, int(round(source_fps / sample_fps))) if sample_fps > 0 else 1

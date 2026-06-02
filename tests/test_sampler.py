@@ -301,6 +301,67 @@ def test_video_sampler_uses_pyav_backend_when_auto_falls_back(monkeypatch, tmp_p
     assert backend_calls == [(tmp_path / "input.mov", 0.0)]
 
 
+def test_pyav_decode_never_uses_frame_threading(monkeypatch):
+    """FRAME threading (thread_type="AUTO") deadlocks mid-stream when OpenCV and
+    PyAV are both imported (duplicate libavdevice). The pyav decode path must
+    request SLICE-only threading, never AUTO/FRAME. We use a fake container so
+    the assertion guards the assigned value (a real codec resolves thread_type
+    to its own capabilities, masking the regression)."""
+    from fractions import Fraction
+
+    assigned: list[str] = []
+
+    class _Stream:
+        type = "video"
+        average_rate = 30
+        guessed_rate = 30
+        time_base = Fraction(1, 30)
+        _tt = "NONE"
+
+        @property
+        def thread_type(self):
+            return self._tt
+
+        @thread_type.setter
+        def thread_type(self, v):
+            assigned.append(v)
+            self._tt = v
+
+    class _Frame:
+        pts = 0
+        width = 8
+        height = 6
+
+        def to_ndarray(self, format=None):
+            return np.zeros((6, 8, 3), dtype=np.uint8)
+
+    class _Packet:
+        def decode(self):
+            return [_Frame()]
+
+    class _Container:
+        streams = [_Stream()]
+
+        def demux(self, stream):
+            return [_Packet()]
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        VideoSampler, "_open_pyav_container", staticmethod(lambda video_path: (_Container(), False))
+    )
+
+    sampler = VideoSampler(reader_backend="pyav")
+    frames = list(sampler.sample(Path("fake.mov"), sample_fps=5.0))
+
+    assert len(frames) > 0, "decode must still yield frames"
+    assert assigned, "decode path must explicitly set thread_type"
+    assert assigned[-1] not in ("AUTO", "FRAME"), (
+        f"FRAME threading reintroduced: thread_type={assigned[-1]!r}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # PresenceWindow Tests
 # ---------------------------------------------------------------------------

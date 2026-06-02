@@ -13,6 +13,13 @@ from card_capture.core.models import DetectionPacket, FramePacket, FrameSample
 from card_capture.core.gpu_utils import probe_torch_device_status
 
 
+def test_resolve_device_does_not_raise_nameerror():
+    """_resolve_device must resolve the device, not NameError on a missing import."""
+    detector = CardcaptorUltralyticsDetector(device="cpu")
+    resolved = detector._resolve_device()  # must not raise NameError
+    assert isinstance(resolved, str) and resolved
+
+
 def _make_frame(height: int, width: int) -> FrameSample:
     return FrameSample(
         frame_index=0,

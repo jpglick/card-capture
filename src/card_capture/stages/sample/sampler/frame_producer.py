@@ -25,8 +25,18 @@ _SENTINEL = object()
 class FrameProducer:
     """Run ``sampler.sample()`` on a daemon thread, feeding a bounded queue."""
 
-    def __init__(self, sampler: _Samplerish, *, maxsize: int = 32) -> None:
+    def __init__(
+        self,
+        sampler: _Samplerish,
+        *,
+        maxsize: int = 32,
+        stall_timeout: Optional[float] = None,
+    ) -> None:
         self._sampler = sampler
+        # If no frame (and no sentinel) arrives within stall_timeout seconds while
+        # the decode thread is still alive, the consumer raises instead of blocking
+        # forever — so a wedged decode surfaces as a failed run, not a silent hang.
+        self._stall_timeout = stall_timeout
         self._queue: "queue.Queue" = queue.Queue(maxsize=maxsize)
         self._thread: Optional[threading.Thread] = None
         self._error: Optional[BaseException] = None
@@ -68,7 +78,17 @@ class FrameProducer:
     def __iter__(self) -> Iterator[FrameSample]:
         """Yield frames until the sentinel, then join and re-raise producer errors."""
         while True:
-            item = self._queue.get()
+            try:
+                item = self._queue.get(timeout=self._stall_timeout)
+            except queue.Empty:
+                # No frame within stall_timeout. If the decode thread is still
+                # alive it has wedged — fail loud rather than block forever.
+                if self._thread is not None and self._thread.is_alive():
+                    raise TimeoutError(
+                        f"frame producer stalled: no frame for "
+                        f"{self._stall_timeout}s (decode wedged)"
+                    )
+                break
             if item is _SENTINEL:
                 break
             yield item

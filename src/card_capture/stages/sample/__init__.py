@@ -37,7 +37,9 @@ def run(state: dict, *, telemetry) -> None:
     telemetry.resource_sample({"event": "decode_open", "path": video_path})
 
     sampler = StrideSampler(video_path=Path(video_path))
-    producer = FrameProducer(sampler).start()
+    # stall_timeout: if decode wedges mid-stream (no frame for this long while the
+    # thread is alive), detect raises and the run fails loudly instead of hanging.
+    producer = FrameProducer(sampler, stall_timeout=120.0).start()
     # Block until the first frame is decoded so this stage's timing reflects
     # decode startup; all remaining frames overlap the detect stage.
     producer.wait_first(timeout=60.0)
