@@ -1,5 +1,5 @@
 """Phase 1 — PipelineConfig has all back-half fields with V4 defaults."""
-from card_capture.config import PipelineConfig
+from card_capture.core.config import PipelineConfig
 
 
 def test_pipeline_config_has_novelty_floor():

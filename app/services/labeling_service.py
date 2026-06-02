@@ -30,16 +30,16 @@ def _to_file_url(path: Optional[str]) -> Optional[str]:
         return None
     p = Path(path)
     try:
-        return "/files/" + str(p.relative_to("card_capture_output"))
+        return "/files/" + str(p.relative_to("var/output"))
     except ValueError:
         pass
+
     parts = p.parts
-    try:
-        idx = parts.index("card_capture_output")
-        rel = "/".join(parts[idx + 1:])
-        return f"/files/{rel}" if rel else None
-    except ValueError:
-        return None
+    for i in range(len(parts) - 1):
+        if parts[i] == "var" and parts[i+1] == "output":
+            rel = "/".join(parts[i + 2:])
+            return f"/files/{rel}" if rel else None
+    return None
 
 
 class LabelingService:

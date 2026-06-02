@@ -39,7 +39,11 @@ containers =
 layers =
     runtime
     pipeline
+    stages
+    shared
+    ml
     data
+    core
 
 [importlinter:contract:no-metaflow]
 name = metaflow must not be imported anywhere

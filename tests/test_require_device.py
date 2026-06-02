@@ -1,7 +1,7 @@
 # tests/test_require_device.py
 import pytest
 import torch
-from card_capture import gpu_utils
+from card_capture.core import gpu_utils
 
 
 def test_require_device_mps_raises_when_unavailable(monkeypatch):

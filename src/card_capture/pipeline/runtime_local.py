@@ -22,31 +22,24 @@ from card_capture.pipeline.request import (
     StageTiming,
 )
 from card_capture.pipeline.telemetry import PipelineTelemetry, NoopTelemetry
-from card_capture.pipeline.stages import (
-    sample as stage_sample,
-    detect as stage_detect,
-    novelty as stage_novelty,
-    track as stage_track,
-    refine as stage_refine,
-    score as stage_score,
-    resolve as stage_resolve,
-    fuse as stage_fuse,
-    dedup as stage_dedup,
-    store as stage_store,
-)
+from card_capture.stages import (
+    store)
+from card_capture.stages import dedup, fuse, resolve, score, refine, track, novelty, detect, sample
+from card_capture.core.gpu_utils import probe_torch_device_status
+from card_capture.core.video_utils import probe_video, _resolve_reader_backend, _decord_available, _open_capture, RollingWindowTriage, FrameTriageFilter
 
 
 _STAGES = (
-    ("sample", stage_sample),
-    ("detect", stage_detect),
-    ("novelty", stage_novelty),
-    ("track", stage_track),
-    ("refine", stage_refine),
-    ("score", stage_score),
-    ("resolve", stage_resolve),
-    ("fuse", stage_fuse),
-    ("dedup", stage_dedup),
-    ("store", stage_store),
+    ("sample", sample),
+    ("detect", detect),
+    ("novelty", novelty),
+    ("track", track),
+    ("refine", refine),
+    ("score", score),
+    ("resolve", resolve),
+    ("fuse", fuse),
+    ("dedup", dedup),
+    ("store", store),
 )
 
 

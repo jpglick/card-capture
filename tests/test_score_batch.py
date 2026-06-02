@@ -5,7 +5,7 @@ import cv2
 # Skip if torch not available
 torch = pytest.importorskip("torch")
 
-from card_capture.scoring import QualityScorer
+from card_capture.stages.score.scoring import QualityScorer
 
 
 def test_score_batch_close_to_single_and_orders_sharpness():

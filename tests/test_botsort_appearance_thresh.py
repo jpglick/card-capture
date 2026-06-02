@@ -3,7 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from card_capture.pipeline.stages.dedup import SAME_CARD_EMB_THRESHOLD
+from card_capture.stages.dedup import SAME_CARD_EMB_THRESHOLD
 
 
 class _FakeBoTSORT:
@@ -20,8 +20,8 @@ class _FakeBoTSORT:
 def test_botsort_uses_calibrated_appearance_thresh():
     _FakeBoTSORT.calls = []
     with patch.dict("sys.modules", {"supervision": SimpleNamespace(Detections=object)}):
-        with patch("card_capture.tracking.botsort_adapter._import_botsort", return_value=_FakeBoTSORT):
-            from card_capture.tracking.botsort_adapter import BoTSORTAdapter
+        with patch("card_capture.stages.track.botsort_adapter._import_botsort", return_value=_FakeBoTSORT):
+            from card_capture.stages.track.botsort_adapter import BoTSORTAdapter
 
             adapter = BoTSORTAdapter(min_track_length=1)
             adapter.reset()

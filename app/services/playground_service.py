@@ -7,8 +7,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-
-from card_capture.pipeline.stages import novelty, track, score, resolve, fuse
+from card_capture.stages import track, novelty
 
 
 class PlaygroundService:

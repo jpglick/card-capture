@@ -22,17 +22,17 @@ from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
+from card_capture.stages import novelty, detect, sample
+from card_capture.core.gpu_utils import probe_torch_device_status
+from card_capture.core.video_utils import probe_video, _resolve_reader_backend, _decord_available, _open_capture, RollingWindowTriage, FrameTriageFilter
 
 REPO = Path("/Users/josh/code/card-capture")
 sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO))
 
-from card_capture.config import load_config
+from card_capture.core.config import load_config
 from card_capture.pipeline.request import PipelineRunRequest
 from card_capture.pipeline.telemetry import NoopTelemetry
-from card_capture.pipeline.stages import sample as stage_sample
-from card_capture.pipeline.stages import detect as stage_detect
-from card_capture.pipeline.stages import novelty as stage_novelty
 from card_capture.data.writer import Writer
 from card_capture.data.repositories.runs import RunsRepository
 from card_capture.data.repositories.events import EventsRepository
@@ -40,7 +40,7 @@ from card_capture.data.repositories.cards import CardsRepository
 from card_capture.data.repositories.videos import VideosRepository
 from migrations.run_migrations import apply_migrations
 from card_capture.ml.models.dino_embedder import DinoEmbedder
-from card_capture.tracking.appearance_sessionizer import (
+from card_capture.stages.track.appearance_sessionizer import (
     AppearanceObservation,
     AppearanceSessionizer,
 )
@@ -88,9 +88,9 @@ state: dict = {
 
 tele = NoopTelemetry()
 t = time.time()
-stage_sample.run(state, telemetry=tele)
-stage_detect.run(state, telemetry=tele)
-stage_novelty.run(state, telemetry=tele)
+sample.run(state, telemetry=tele)
+detect.run(state, telemetry=tele)
+novelty.run(state, telemetry=tele)
 print(f"sample+detect+novelty in {time.time() - t:.1f}s", flush=True)
 w.flush(); w.stop()
 

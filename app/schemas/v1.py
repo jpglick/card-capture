@@ -147,19 +147,21 @@ class RunCreateRequest(BaseModel):
 
 
 class RunEvent(BaseModel):
+    # Shape matches what ``RunService`` reads from ``pipeline_events`` and what
+    # the TypeScript ``RunEvent`` type (app/web/src/lib/api/types.ts) consumes.
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "event": "stage_started",
-                "data": {"stage_id": "detect", "run_id": "CardCaptureFlow/1715523601234567"},
-                "ts": "2026-05-12T14:00:05Z",
+                "event_type": "stage_metrics",
+                "data_json": '{"estimated_frames": 399}',
+                "created_at": "2026-05-12T14:00:05Z",
             }
         }
     )
 
-    event: str
-    data: dict[str, Any]
-    ts: str
+    event_type: str
+    data_json: Optional[str] = None
+    created_at: str
 
 
 class RunTelemetry(BaseModel):

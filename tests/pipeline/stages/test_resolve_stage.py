@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from card_capture.pipeline.stages import resolve as resolve_stage
+from card_capture.stages import resolve
 
 
 def _refined(instance_id, q=0.8, side_score=0.5):
@@ -35,7 +35,7 @@ def test_resolve_groups_tracks_by_session_id():
             {**_refined("t3"), "session_id": 20},
         ],
     }
-    resolve_stage.run(state, telemetry=MagicMock())
+    resolve.run(state, telemetry=MagicMock())
     assert len(state["resolved_sessions"]) == 2
     # session 10 has 2 tracks, session 20 has 1
     counts = [len(s["tracks"]) for s in state["resolved_sessions"]]
@@ -52,7 +52,7 @@ def test_resolve_assigns_front_to_highest_side_score():
             {**_refined("high-q"), "side_score": 0.9, "session_id": 1},
         ],
     }
-    resolve_stage.run(state, telemetry=MagicMock())
+    resolve.run(state, telemetry=MagicMock())
     session = state["resolved_sessions"][0]
     # In V4/V5.5, the tracks are prioritized. The best is Front.
     best = session["tracks"][0]
@@ -71,16 +71,16 @@ def test_resolve_classifier_can_override_heuristic(monkeypatch):
         ],
     }
 
-    import card_capture.pipeline.stages.resolve as res_mod
+    import card_capture.stages.resolve
 
     class _StubPredictor:
         def predict_array(self, img):
             # [Front_prob, Back_prob]
             return [0.01, 0.99]
 
-    monkeypatch.setattr(res_mod, "_get_fb_predictor", lambda: _StubPredictor())
+    monkeypatch.setattr(resolve, "_get_fb_predictor", lambda: _StubPredictor())
     
-    resolve_stage.run(state, telemetry=MagicMock())
+    resolve.run(state, telemetry=MagicMock())
     assert state["resolved_sessions"][0]["tracks"][0]["angle"] == "Back"
 
 
@@ -92,7 +92,7 @@ def test_resolve_emits_prepared_tracks_list():
         "request": request,
         "refined_tracks": [_refined("a"), _refined("b")],
     }
-    resolve_stage.run(state, telemetry=MagicMock())
+    resolve.run(state, telemetry=MagicMock())
     assert "prepared_tracks" in state
     assert len(state["prepared_tracks"]) == 2
     assert {t["instance_id"] for t in state["prepared_tracks"]} == {"a", "b"}

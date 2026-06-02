@@ -16,9 +16,9 @@ def test_decode_frames_gpu_returns_index_map(monkeypatch):
     fake_decord.gpu.return_value = "gpu_ctx"
     fake_decord.VideoReader.return_value = fake_vr
 
-    monkeypatch.setattr("card_capture.pipeline_utils.decord", fake_decord, raising=False)
+    monkeypatch.setattr("card_capture.shared.pipeline_utils.decord", fake_decord, raising=False)
 
-    from card_capture.pipeline_utils import decode_frames_gpu
+    from card_capture.shared.pipeline_utils import decode_frames_gpu
     result = decode_frames_gpu("/fake/video.mov", [5, 2, 8])
 
     # Indices passed to get_batch must be sorted
@@ -30,21 +30,21 @@ def test_decode_frames_gpu_uses_opencv_on_mac(monkeypatch):
     monkeypatch.setattr("platform.system", lambda: "Darwin")
     
     fake_frame = np.zeros((100, 100, 3), dtype=np.uint8)
-    with patch("card_capture.pipeline_utils._decode_frames_opencv", return_value={0: fake_frame}) as mock_cv:
-        from card_capture.pipeline_utils import decode_frames_gpu
+    with patch("card_capture.shared.pipeline_utils._decode_frames_opencv", return_value={0: fake_frame}) as mock_cv:
+        from card_capture.shared.pipeline_utils import decode_frames_gpu
         res = decode_frames_gpu("vid.mov", [0])
         assert res[0].shape == (100, 100, 3)
         mock_cv.assert_called_once()
 
 
 def test_decode_frames_gpu_empty_indices():
-    from card_capture.pipeline_utils import decode_frames_gpu
+    from card_capture.shared.pipeline_utils import decode_frames_gpu
     result = decode_frames_gpu("/fake/video.mov", [])
     assert result == {}
 
 
 def test_compute_laplacian_scan_indices_basic():
-    from card_capture.pipeline_utils import _compute_laplacian_scan_indices
+    from card_capture.shared.pipeline_utils import _compute_laplacian_scan_indices
     track_ranges = [
         {"instance_id": "a", "detections": [(10, []), (20, [])]},
     ]
@@ -54,7 +54,7 @@ def test_compute_laplacian_scan_indices_basic():
 
 
 def test_compute_laplacian_scan_indices_multiple_tracks():
-    from card_capture.pipeline_utils import _compute_laplacian_scan_indices
+    from card_capture.shared.pipeline_utils import _compute_laplacian_scan_indices
     track_ranges = [
         {"instance_id": "a", "detections": [(0, []), (4, [])]},
         {"instance_id": "b", "detections": [(10, []), (12, [])]},
@@ -65,7 +65,7 @@ def test_compute_laplacian_scan_indices_multiple_tracks():
 
 
 def test_compute_laplacian_scan_indices_empty():
-    from card_capture.pipeline_utils import _compute_laplacian_scan_indices
+    from card_capture.shared.pipeline_utils import _compute_laplacian_scan_indices
     assert _compute_laplacian_scan_indices([], scan_stride=4) == set()
     assert _compute_laplacian_scan_indices([{"instance_id": "a", "detections": []}], scan_stride=4) == set()
 
@@ -73,7 +73,7 @@ def test_compute_laplacian_scan_indices_empty():
 def test_laplacian_select_frames_uses_decoded_dict(monkeypatch):
     """When decoded_frames is provided, VideoCapture must NOT be opened."""
     import numpy as np
-    from card_capture.pipeline_utils import _laplacian_select_frames
+    from card_capture.shared.pipeline_utils import _laplacian_select_frames
 
     # Create a frame with some variance so Laplacian > 0
     sharp = np.zeros((100, 100, 3), dtype=np.uint8)
@@ -94,7 +94,7 @@ def test_laplacian_select_frames_uses_decoded_dict(monkeypatch):
         opened.append(p)
         raise AssertionError("VideoCapture opened unexpectedly")
 
-    monkeypatch.setattr("card_capture.pipeline_utils._open_capture", fake_open_capture)
+    monkeypatch.setattr("card_capture.shared.pipeline_utils._open_capture", fake_open_capture)
 
     result = _laplacian_select_frames(
         "/fake/video.mov", track_ranges,
@@ -110,7 +110,7 @@ def test_laplacian_variance_batch_cpu_fallback(monkeypatch):
     import torch
     monkeypatch.setattr("torch.backends.mps.is_available", lambda: False)
 
-    from card_capture.pipeline_utils import _laplacian_variance_batch
+    from card_capture.shared.pipeline_utils import _laplacian_variance_batch
 
     images = [np.zeros((64, 64, 3), dtype=np.uint8) for _ in range(3)]
     results = _laplacian_variance_batch(images)
@@ -120,7 +120,7 @@ def test_laplacian_variance_batch_cpu_fallback(monkeypatch):
 
 def test_laplacian_variance_batch_returns_floats():
     """_laplacian_variance_batch always returns a list of floats, one per image."""
-    from card_capture.pipeline_utils import _laplacian_variance_batch
+    from card_capture.shared.pipeline_utils import _laplacian_variance_batch
 
     images = [np.random.randint(0, 256, (64, 64, 3), dtype=np.uint8) for _ in range(4)]
     results = _laplacian_variance_batch(images)

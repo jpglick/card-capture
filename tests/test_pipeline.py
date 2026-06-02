@@ -6,20 +6,20 @@ import numpy as np
 import pytest
 from queue import Empty, Full
 
-from card_capture.models import CardDetection, CornerDetection, DetectionPacket, FramePacket, FrameSample, QualityScore, ScoredCandidate, TrackState
-from card_capture.pipeline_utils import (
+from card_capture.core.models import CardDetection, CornerDetection, DetectionPacket, FramePacket, FrameSample, QualityScore, ScoredCandidate, TrackState
+from card_capture.shared.pipeline_utils import (
     _appearance_vector,
     _side_textiness_score,
     _select_canonical_entries,
 )
-from card_capture.workers import (
+from card_capture.core.workers import (
     ProcessingOptions,
     _SENTINEL,
     _drain_detection_queue,
     _put_with_retry,
 )
-from card_capture.deduplicator import VisualDeduplicator
-from card_capture.storage import Storage
+from card_capture.stages.dedup.deduplicator import VisualDeduplicator
+from card_capture.stages.store.storage import Storage
 
 
 class FakeSampler:
@@ -446,7 +446,7 @@ def test_adaptive_hamming_threshold_flips_dedup_decision(tmp_path):
     where H > 22 but fits within the clipping range, OR we pre-populate the
     context to raise the threshold high enough.
     """
-    from card_capture.pipeline_utils import PipelineContext, _side_textiness_score, _appearance_vector
+    from card_capture.shared.pipeline_utils import PipelineContext, _side_textiness_score, _appearance_vector
     import cv2
 
     deduplicator = VisualDeduplicator()
@@ -625,7 +625,7 @@ def test_adaptive_hamming_threshold_flips_dedup_decision(tmp_path):
         assert prepared_with_context[0].duplicate_track_index is None
 
 def test_pipeline_processing_options_has_tracker_backend():
-    from card_capture.workers import ProcessingOptions
+    from card_capture.core.workers import ProcessingOptions
     from pathlib import Path
     opts = ProcessingOptions(output_dir=Path("/tmp"))
     assert opts.tracker_backend == "bytetrack"
@@ -634,7 +634,7 @@ def test_pipeline_processing_options_has_tracker_backend():
 
 
 def test_pipeline_processing_options_accepts_bytetrack():
-    from card_capture.workers import ProcessingOptions
+    from card_capture.core.workers import ProcessingOptions
     from pathlib import Path
     opts = ProcessingOptions(output_dir=Path("/tmp"), tracker_backend="bytetrack")
     assert opts.tracker_backend == "bytetrack"
@@ -656,8 +656,8 @@ def test_pyproject_declares_legacy_tracking_runtime_dependencies():
 def test_candidate_filter_drops_background_quads(tmp_path):
     """_filter_candidates_by_novelty must remove candidates whose quad interior
     matches the workspace baseline."""
-    from card_capture.pipeline_utils import _filter_candidates_by_novelty
-    from card_capture.presence.background_novelty import BackgroundModel
+    from card_capture.shared.pipeline_utils import _filter_candidates_by_novelty
+    from card_capture.stages.novelty.background_novelty import BackgroundModel
     import cv2
 
     # Build a flat background and write it to disk
@@ -696,8 +696,8 @@ def test_candidate_filter_drops_background_quads(tmp_path):
 
 @pytest.mark.skip(reason="_collect_candidate_novelty_scores retired with monolith")
 def test_candidate_novelty_collection_does_not_drop_pre_tracking_candidates(tmp_path):
-    from card_capture.pipeline_utils import _collect_candidate_novelty_scores, PipelineContext
-    from card_capture.presence.background_novelty import BackgroundModel
+    from card_capture.shared.pipeline_utils import _collect_candidate_novelty_scores, PipelineContext
+    from card_capture.stages.novelty.background_novelty import BackgroundModel
     import cv2
 
     bg_arr = np.full((200, 200, 3), 128, dtype=np.uint8)
@@ -735,9 +735,9 @@ def test_candidate_novelty_collection_does_not_drop_pre_tracking_candidates(tmp_
 @pytest.mark.skip(reason="_PreparedTrack retired with monolith")
 def test_prune_empty_workspace_tracks_drops_low_novelty_tracks(tmp_path):
     """A finalized track whose medoid frame's quad matches the background is removed."""
-    from card_capture.pipeline_utils import _prune_empty_workspace_tracks, _PreparedTrack
-    from card_capture.models import TrackState
-    from card_capture.presence.background_novelty import BackgroundModel
+    from card_capture.shared.pipeline_utils import _prune_empty_workspace_tracks, _PreparedTrack
+    from card_capture.core.models import TrackState
+    from card_capture.stages.novelty.background_novelty import BackgroundModel
     import cv2
 
     bg_arr = np.full((200, 200, 3), 128, dtype=np.uint8)
@@ -812,8 +812,8 @@ class SingleDetectionDetector:
 @pytest.mark.skip(reason="VideoProcessor retired with monolith")
 def test_pipeline_integrates_novelty_score(tmp_path):
     """Pipeline must compute novelty and store it in card_views quality_score_json."""
-    from card_capture.pipeline_utils import VideoProcessor, ProcessingOptions
-    from card_capture.storage import Storage
+    from card_capture.shared.pipeline_utils import VideoProcessor, ProcessingOptions
+    from card_capture.stages.store.storage import Storage
     import cv2
     import json
 

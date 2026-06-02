@@ -5,7 +5,7 @@ import pytest
 torch = pytest.importorskip("torch")
 pytest.importorskip("kornia")
 
-from card_capture.gpu_refinement import KorniaNormalizer
+from card_capture.stages.refine.gpu_refinement import KorniaNormalizer
 
 
 def _img_and_corners():
@@ -45,7 +45,7 @@ def test_gpu_tensor_warp_rotate_180_matches_numpy():
 def test_warp_gpu_return_matches_numpy():
     import torch
     import numpy as np
-    from card_capture.gpu_refinement import KorniaNormalizer
+    from card_capture.stages.refine.gpu_refinement import KorniaNormalizer
     norm = KorniaNormalizer(width=750, height=1050, device="cpu")
     img = np.random.randint(0, 256, (300, 200, 3), dtype=np.uint8)
     corners = [(10.0, 10.0), (180.0, 12.0), (185.0, 280.0), (8.0, 275.0)]

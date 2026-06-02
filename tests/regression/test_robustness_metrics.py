@@ -32,7 +32,7 @@ def test_card_recall_counts_matched_cards():
     result = MatchResult(matched=matched, unmatched_truth=(truth[2],), phantom_instances=())
 
     # Import and use the robustness metrics
-    from card_capture.metrics.robustness_pack import RobustnessMetrics
+    from harness.metrics.robustness_pack import RobustnessMetrics
 
     metrics = RobustnessMetrics(matched=matched, unmatched_truth=(truth[2],),
                                  phantom_instances=(), truth_cards=truth)
@@ -55,7 +55,7 @@ def test_front_back_f1_measures_angle_accuracy():
     )
     result = MatchResult(matched=matched, unmatched_truth=(), phantom_instances=())
 
-    from card_capture.metrics.robustness_pack import RobustnessMetrics
+    from harness.metrics.robustness_pack import RobustnessMetrics
 
     metrics = RobustnessMetrics(matched=matched, unmatched_truth=(),
                                  phantom_instances=(), truth_cards=truth)

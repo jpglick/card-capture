@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-import card_capture.tracking.botsort_adapter as botsort_mod
+import card_capture.stages.track.botsort_adapter as botsort_mod
 
 
 class _FakeBoTSORT:
@@ -74,7 +74,7 @@ def test_equal_length_holder_bridge_is_suppressed_only_via_real_novelty():
 
     with patch.dict("sys.modules", {"supervision": SimpleNamespace(Detections=object)}):
         with patch.object(botsort_mod, "_import_botsort", return_value=_FakeBoTSORT):
-            from card_capture.tracking.botsort_adapter import BoTSORTAdapter
+            from card_capture.stages.track.botsort_adapter import BoTSORTAdapter
 
             adapter = BoTSORTAdapter(min_track_length=1)
             with patch.object(adapter, "_embed_candidates") as mock_embed:

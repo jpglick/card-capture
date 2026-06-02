@@ -36,18 +36,18 @@ Video.mov
 
 ## Key Modules
 
-| File | Purpose |
-|---|---|
-| `src/card_capture/pipeline/runtime_local.py` | **Core:** Local orchestrator for in-process runs |
-| `src/card_capture/pipeline/runner.py` | Uniform submit/wait/cancel runner interface |
-| `src/card_capture/data/` | Data Access Layer: repositories and Single-Writer persistence |
-| `src/card_capture/models.py` | Centralized domain objects (`FrameSample`, `TrackState`, etc.) |
-| `src/card_capture/interfaces.py` | Protocols for components (`CardDetector`, `FrameSampler`) |
-| `src/card_capture/sampler/` | `StrideSampler` for two-pass presence detection |
-| `src/card_capture/detectors.py` | YOLOv8-OBB backends + device probing (Apple Silicon) |
-| `src/card_capture/presence/` | Novelty gate (Mean/Variance) + background modeling |
-| `src/card_capture/tracking/` | BoT-SORT and ByteTrack adapters |
-| `src/card_capture/cropper.py` | `PrecisionNormalizer` for consistent homography |
+```
+src/card_capture/
+  core/         # foundation layer — leaf utilities + types (models, config, gpu_utils)
+  stages/       # vertical slices (sample, detect, novelty, track, refine, score, resolve, fuse, dedup, store)
+  shared/       # cross-stage helpers (pipeline_utils, stage_metrics)
+  ml/           # model zoo + inference (shared assets)
+  training/     # all offline training logic
+  runtime/      # GPU session orchestration (gpu_session, strict_gpu)
+  pipeline/     # orchestration (request, runner, telemetry, runtime_local)
+  data/         # DAL (connection, repositories)
+  review/       # legacy Jinja review UI
+```
 
 ---
 

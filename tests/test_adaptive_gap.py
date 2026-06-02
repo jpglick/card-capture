@@ -1,6 +1,6 @@
 import numpy as np
 
-from card_capture.adaptive_gap import compute_session_gap_frames, GapDistribution
+from card_capture.stages.sample.adaptive_gap import compute_session_gap_frames, GapDistribution
 
 
 def test_compute_gap_returns_p95_plus_buffer():

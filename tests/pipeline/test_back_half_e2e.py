@@ -20,7 +20,7 @@ def _init_db(path: Path) -> None:
     """
     import sqlite3
 
-    from card_capture.storage import Storage
+    from card_capture.stages.store.storage import Storage
 
     # Creates videos, card_instances, card_views, saved_cards, track_telemetry,
     # pipeline_events with the real columns + FK constraints.

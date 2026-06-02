@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from card_capture.pipeline.stages import dedup as dedup_stage
+from card_capture.stages import dedup
 
 
 def _fused(instance_id, embedding=None, primary_hash="0" * 16):
@@ -28,7 +28,7 @@ def test_dedup_intra_run_groups_by_close_embedding():
         "video_id": 1,
         "repos": {"cards": _StubRepoNoCrossVideo()},
     }
-    dedup_stage.run(state, telemetry=MagicMock())
+    dedup.run(state, telemetry=MagicMock())
     assert len(state["dedup_groups"]) == 1
     g = state["dedup_groups"][0]
     assert g["canonical_instance_id"] == "a"
@@ -46,7 +46,7 @@ def test_dedup_intra_run_groups_by_phash_when_embedding_missing():
         "video_id": 1,
         "repos": {"cards": _StubRepoNoCrossVideo()},
     }
-    dedup_stage.run(state, telemetry=MagicMock())
+    dedup.run(state, telemetry=MagicMock())
     assert len(state["dedup_groups"]) == 1
     g = state["dedup_groups"][0]
     assert "q" in g["duplicate_instance_ids"]
@@ -68,7 +68,7 @@ def test_dedup_cross_video_query_excludes_self_video_id():
         "video_id": 42,
         "repos": {"cards": _StubRepo()},
     }
-    dedup_stage.run(state, telemetry=MagicMock())
+    dedup.run(state, telemetry=MagicMock())
     assert captured["video_id"] == 42
 
 
@@ -87,7 +87,7 @@ def test_dedup_cross_video_match_sets_parent_id():
         "video_id": 7,
         "repos": {"cards": _StubRepo()},
     }
-    dedup_stage.run(state, telemetry=MagicMock())
+    dedup.run(state, telemetry=MagicMock())
     g = state["dedup_groups"][0]
     assert g["cross_video_parent_id"] == 99
 
@@ -110,7 +110,7 @@ def test_intra_run_visual_duplicates_remain_in_final_cards():
         "video_id": 1,
         "repos": {"cards": _StubRepoNoCrossVideo()},
     }
-    dedup_stage.run(state, telemetry=MagicMock())
+    dedup.run(state, telemetry=MagicMock())
     
     # Check they are grouped
     assert len(state["dedup_groups"]) == 1

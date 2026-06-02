@@ -20,7 +20,7 @@ REPO = Path("/Users/josh/code/card-capture")
 sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO))
 
-from card_capture.config import load_config
+from card_capture.core.config import load_config
 from card_capture.pipeline.request import PipelineRunRequest
 from card_capture.pipeline import runtime_local
 from card_capture.pipeline.telemetry import NoopTelemetry

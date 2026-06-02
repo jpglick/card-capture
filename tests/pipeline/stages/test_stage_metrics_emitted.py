@@ -5,10 +5,11 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from card_capture.models import QualityScore, ScoredCandidate, TrackState
-from card_capture.pipeline.stages import detect as detect_stage
-from card_capture.pipeline.stages import novelty as novelty_stage
-from card_capture.pipeline.stages import track as track_stage
+from card_capture.core.models import QualityScore, ScoredCandidate, TrackState
+from card_capture.stages import dedup, fuse, resolve, score, refine, track, novelty, detect
+from card_capture.stages import sample
+from card_capture.core.gpu_utils import probe_torch_device_status
+from card_capture.core.video_utils import probe_video, _resolve_reader_backend, _decord_available, _open_capture, RollingWindowTriage, FrameTriageFilter
 
 
 class _EventsRepo:
@@ -56,7 +57,7 @@ def test_detect_emits_stage_metrics(monkeypatch):
                 )
             ]
 
-    monkeypatch.setattr(detect_stage, "FakeCardDetector", _Detector)
+    monkeypatch.setattr(detect, "FakeCardDetector", _Detector)
     state = {
         "request": SimpleNamespace(run_id="r1", config={"detector": "fake"}),
         "frame_producer": _Producer([frame]),
@@ -65,7 +66,7 @@ def test_detect_emits_stage_metrics(monkeypatch):
         "repos": {"events": events},
         "video_id": 1,
     }
-    detect_stage.run(state, telemetry=SimpleNamespace(progress=lambda *a, **k: None, resource_sample=lambda *a, **k: None))
+    detect.run(state, telemetry=SimpleNamespace(progress=lambda *a, **k: None, resource_sample=lambda *a, **k: None))
     assert events.calls[-1]["stage"] == "detect"
     assert events.calls[-1]["metrics"]["detections"] == 1
 
@@ -79,7 +80,7 @@ def test_novelty_emits_stage_metrics():
         "repos": {"events": events},
         "video_id": 1,
     }
-    novelty_stage.run(state, telemetry=SimpleNamespace())
+    novelty.run(state, telemetry=SimpleNamespace())
     assert events.calls[-1]["stage"] == "novelty"
     assert events.calls[-1]["metrics"]["scored"] == 1
 
@@ -108,8 +109,8 @@ def test_track_emits_stage_metrics(monkeypatch):
             )
             return [TrackState(instance_id="i1", candidates=[cand], session_id=0)]
 
-    monkeypatch.setattr(track_stage, "BoTSORTAdapter", _Tracker)
-    monkeypatch.setattr(track_stage, "ByteTrackAdapter", _Tracker)
+    monkeypatch.setattr(track, "BoTSORTAdapter", _Tracker)
+    monkeypatch.setattr(track, "ByteTrackAdapter", _Tracker)
     state = {
         "request": SimpleNamespace(run_id="r1", config={"tracker_backend": "botsort", "min_track_length": 1}),
         "sampled_frames": [],
@@ -127,7 +128,7 @@ def test_track_emits_stage_metrics(monkeypatch):
         "repos": {"events": events},
         "video_id": 1,
     }
-    track_stage.run(state, telemetry=SimpleNamespace())
+    track.run(state, telemetry=SimpleNamespace())
     assert events.calls[-1]["stage"] == "track"
     metrics = events.calls[-1]["metrics"]
     assert metrics["tracks_final"] == 1
@@ -137,7 +138,7 @@ def test_track_emits_stage_metrics(monkeypatch):
 
 
 def test_all_stage_modules_call_emit_stage_metrics():
-    from card_capture.pipeline.stages import dedup, detect, fuse, novelty, refine, resolve, sample, score, store, track
+    from card_capture.stages import store
 
     expected = {
         sample: 'stage="sample"',

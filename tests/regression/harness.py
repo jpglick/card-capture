@@ -21,7 +21,7 @@ class HarnessConfig:
     output_dir: Path
     git_sha: str
     tolerance_ms: int = 500
-    db_path: Path = Path("card_capture_output/cards.sqlite")
+    db_path: Path = Path("var/db/cards.sqlite")
     presence_threshold: float = 0.5
 
 
@@ -60,7 +60,7 @@ def run_pipeline_for_video(
     if rc != 0:
         raise RuntimeError(f"pipeline returned non-zero exit code {rc} for {video_path}")
 
-    from card_capture.storage import Storage
+    from card_capture.stages.store.storage import Storage
     import json as _json
 
     storage = Storage(db_path)

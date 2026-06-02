@@ -4,13 +4,20 @@ import numpy as np
 import pytest
 from unittest.mock import MagicMock, patch
 
-from card_capture.detectors import (
+from card_capture.stages.detect.detectors import (
     CardcaptorUltralyticsDetector,
     FakeCornerDetector,
-    probe_torch_device_status,
-)
-from card_capture.workers import NullStateDetector
-from card_capture.models import DetectionPacket, FramePacket, FrameSample
+    )
+from card_capture.core.workers import NullStateDetector
+from card_capture.core.models import DetectionPacket, FramePacket, FrameSample
+from card_capture.core.gpu_utils import probe_torch_device_status
+
+
+def test_resolve_device_does_not_raise_nameerror():
+    """_resolve_device must resolve the device, not NameError on a missing import."""
+    detector = CardcaptorUltralyticsDetector(device="cpu")
+    resolved = detector._resolve_device()  # must not raise NameError
+    assert isinstance(resolved, str) and resolved
 
 
 def _make_frame(height: int, width: int) -> FrameSample:
@@ -285,7 +292,7 @@ def test_null_state_detector_sequential_warmup():
 @pytest.mark.quarantine
 def test_detector_skips_hf_download_when_cached(tmp_path, monkeypatch):
     """If hf_hub_download finds the file in the local cache, no network call is needed."""
-    from card_capture import detectors as det_mod
+    from card_capture.stages.detect import detectors as det_mod
 
     fake_path = tmp_path / "cached_model.onnx"
     fake_path.write_bytes(b"weights")

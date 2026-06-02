@@ -1,7 +1,7 @@
 import numpy as np
 import cv2
 
-from card_capture.presence.training_data import sample_negative_patches, mine_positive_crops
+from card_capture.training.training_data import sample_negative_patches, mine_positive_crops
 
 
 def test_sample_negative_patches_returns_correct_shape():

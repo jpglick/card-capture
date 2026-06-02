@@ -35,7 +35,7 @@ CORNERS = [[0, 0], [63, 0], [63, 63], [0, 63]]
 
 def test_selects_sharpest_frame(tmp_path):
     """Given blurry-sharp-blurry, frame 1 (sharp) is selected."""
-    from card_capture.pipeline_utils import _laplacian_select_frames
+    from card_capture.shared.pipeline_utils import _laplacian_select_frames
     vpath = _make_video(tmp_path, [_blurry(), _sharp(), _blurry()])
     track_ranges = [{
         "instance_id": "abc",
@@ -49,14 +49,14 @@ def test_selects_sharpest_frame(tmp_path):
 
 def test_empty_track_ranges(tmp_path):
     """Empty input returns empty dict without errors."""
-    from card_capture.pipeline_utils import _laplacian_select_frames
+    from card_capture.shared.pipeline_utils import _laplacian_select_frames
     result = _laplacian_select_frames(tmp_path / "nonexistent.mp4", [], scan_stride=4, top_k=1, max_corner_gap=15)
     assert result == {}
 
 
 def test_fallback_when_corner_gap_exceeded(tmp_path):
     """Sharpest frame far from any detection falls back to nearest detection."""
-    from card_capture.pipeline_utils import _laplacian_select_frames
+    from card_capture.shared.pipeline_utils import _laplacian_select_frames
     # 5 blurry + 1 sharp at frame 5; detection only at frame 0 (gap=5 > max=4)
     frames = [_blurry()] * 5 + [_sharp()]
     vpath = _make_video(tmp_path, frames)
@@ -70,7 +70,7 @@ def test_fallback_when_corner_gap_exceeded(tmp_path):
 
 def test_borrows_corners_from_nearest_detection(tmp_path):
     """Non-YOLO sharp frame borrows corners from nearest detection."""
-    from card_capture.pipeline_utils import _laplacian_select_frames
+    from card_capture.shared.pipeline_utils import _laplacian_select_frames
     alt_corners = [[1, 1], [62, 1], [62, 62], [1, 62]]
     frames = [_blurry(), _sharp(), _blurry()]
     vpath = _make_video(tmp_path, frames)
@@ -86,7 +86,7 @@ def test_borrows_corners_from_nearest_detection(tmp_path):
 
 def test_top_k_returns_multiple_frames(tmp_path):
     """top_k=2 returns two frames ordered sharpest first."""
-    from card_capture.pipeline_utils import _laplacian_select_frames
+    from card_capture.shared.pipeline_utils import _laplacian_select_frames
     frames = [_blurry(), _sharp(), _blurry(), _sharp()]
     vpath = _make_video(tmp_path, frames)
     track_ranges = [{

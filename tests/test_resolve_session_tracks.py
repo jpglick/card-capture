@@ -3,8 +3,8 @@ import numpy as np
 import cv2
 
 pytest.skip("_resolve_session_tracks and _PreparedTrack retired with monolith", allow_module_level=True)
-from card_capture.models import TrackState, ScoredCandidate, QualityScore
-from card_capture.deduplicator import VisualDeduplicator
+from card_capture.core.models import TrackState, ScoredCandidate, QualityScore
+from card_capture.stages.dedup.deduplicator import VisualDeduplicator
 
 
 def _make_track(instance_id, image_paths):

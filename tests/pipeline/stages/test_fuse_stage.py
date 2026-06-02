@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from card_capture.pipeline.stages import fuse as fuse_stage
+from card_capture.stages import fuse
 
 
 def _prepared_track(instance_id, n_canonical=4):
@@ -37,7 +37,7 @@ def test_fuse_emits_one_record_per_prepared_track():
         "request": request,
         "prepared_tracks": [_prepared_track("a"), _prepared_track("b")],
     }
-    fuse_stage.run(state, telemetry=MagicMock())
+    fuse.run(state, telemetry=MagicMock())
     assert len(state["fused_canonicals"]) == 2
     for fc in state["fused_canonicals"]:
         assert isinstance(fc["fused_image"], np.ndarray)
@@ -52,7 +52,7 @@ def test_fuse_single_frame_passthrough_when_target_is_one():
                       "fusion_target_frames": 1}
     track = _prepared_track("c", n_canonical=4)
     state = {"request": request, "prepared_tracks": [track]}
-    fuse_stage.run(state, telemetry=MagicMock())
+    fuse.run(state, telemetry=MagicMock())
     fc = state["fused_canonicals"][0]
     assert np.array_equal(fc["fused_image"], track["best_canonical_image"])
 
@@ -69,9 +69,9 @@ def test_fuse_passes_foil_threshold_when_enabled():
             captured["foil_threshold"] = foil_threshold
             return images[0]
 
-    with patch("card_capture.fuser.MultiFrameFuser", _StubFuser):
+    with patch("card_capture.stages.fuse.fuser.MultiFrameFuser", _StubFuser):
         state = {"request": request, "prepared_tracks": [_prepared_track("d")]}
-        fuse_stage.run(state, telemetry=MagicMock())
+        fuse.run(state, telemetry=MagicMock())
 
     assert captured["foil_threshold"] == 50.0
 
@@ -87,8 +87,8 @@ def test_fuse_skips_foil_when_disabled():
             captured["foil_threshold"] = foil_threshold
             return images[0]
 
-    with patch("card_capture.fuser.MultiFrameFuser", _StubFuser):
+    with patch("card_capture.stages.fuse.fuser.MultiFrameFuser", _StubFuser):
         state = {"request": request, "prepared_tracks": [_prepared_track("e")]}
-        fuse_stage.run(state, telemetry=MagicMock())
+        fuse.run(state, telemetry=MagicMock())
 
     assert captured["foil_threshold"] is None

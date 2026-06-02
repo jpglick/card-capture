@@ -2,7 +2,7 @@
 of all knobs stages consume."""
 import json
 
-from card_capture.config import PipelineConfig
+from card_capture.core.config import PipelineConfig
 
 
 def test_to_request_config_includes_all_back_half_fields():
@@ -77,7 +77,7 @@ def test_cli_run_process_passes_full_config(tmp_path, monkeypatch):
         setattr(args, f, None)
 
     # Storage.initialize and add_video need to succeed
-    with patch("card_capture.storage.Storage") as MockStorage, \
+    with patch("card_capture.stages.store.storage.Storage") as MockStorage, \
          patch("card_capture.pipeline.runtime_local.LocalPipelineRuntime.run",
                new=fake_runtime_run):
         MockStorage.return_value.add_video.return_value = 1
@@ -87,8 +87,8 @@ def test_cli_run_process_passes_full_config(tmp_path, monkeypatch):
     assert "foil_threshold" in captured["config"]
 
 def test_to_options_maps_all_fields(tmp_path):
-    from card_capture.config import PipelineConfig
-    from card_capture.workers import ProcessingOptions
+    from card_capture.core.config import PipelineConfig
+    from card_capture.core.workers import ProcessingOptions
     
     cfg = PipelineConfig()
     # Set a few non-default values to ensure they are mapped

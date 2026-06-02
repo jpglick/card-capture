@@ -90,7 +90,7 @@ async def start_run(video_id: int, request: Request, bg: BackgroundTasks):
     runner = _build_runner(request)
     _svc(request).update_status(video_id, "processing")
 
-    output_dir = Path(_REPO_ROOT) / "card_capture_output" / run_id
+    output_dir = Path(_REPO_ROOT) / "var/output" / run_id
 
     bg.add_task(
         runner.run_async,

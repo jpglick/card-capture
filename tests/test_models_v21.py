@@ -2,7 +2,7 @@ from pathlib import Path
 
 import numpy as np
 
-from card_capture.models import (
+from card_capture.core.models import (
     CornerDetection,
     DetectionPacket,
     FramePacket,
@@ -64,7 +64,7 @@ def test_processing_result_has_v21_counts():
 
 
 def test_packets_can_carry_telemetry():
-    from card_capture.models import PerformanceTelemetry
+    from card_capture.core.models import PerformanceTelemetry
 
     telemetry = PerformanceTelemetry(t_ingest=0.1, t_detect=0.2)
 

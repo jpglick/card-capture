@@ -1,11 +1,12 @@
 """FrameProducer: order, first-frame gating, error propagation, early stop."""
+import threading
 import time
 
 import numpy as np
 import pytest
 
-from card_capture.models import FrameSample
-from card_capture.sampler.frame_producer import FrameProducer
+from card_capture.core.models import FrameSample
+from card_capture.stages.sample.sampler.frame_producer import FrameProducer
 
 
 def _frame(i: int) -> FrameSample:
@@ -55,3 +56,27 @@ def test_stop_terminates_blocked_producer_without_hanging():
     assert prod.wait_first(timeout=2.0) is True
     prod.stop(timeout=2.0)
     assert prod._thread is not None and not prod._thread.is_alive()
+
+
+class _StallingSampler:
+    """Blocks inside sample() before producing any frame (simulates a wedged decode)."""
+
+    def __init__(self, release: threading.Event):
+        self._release = release
+
+    def sample(self):
+        self._release.wait()  # never released during the test → produces nothing
+        return
+        yield  # noqa: unreachable — makes this a generator
+
+
+def test_iter_raises_on_stall_instead_of_hanging():
+    release = threading.Event()
+    prod = FrameProducer(_StallingSampler(release), stall_timeout=0.2).start()
+    try:
+        start = time.monotonic()
+        with pytest.raises(TimeoutError, match="stalled"):
+            list(prod)
+        assert time.monotonic() - start < 5.0, "must fail fast, not hang"
+    finally:
+        release.set()  # let the daemon thread exit cleanly

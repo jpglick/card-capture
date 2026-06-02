@@ -165,7 +165,7 @@ class PipelineRunner:
         # Merge full PipelineConfig defaults so back-half stages read knobs
         # like novelty_floor / foil_threshold from request.config. Caller
         # overrides win (detector arg, etc.).
-        from card_capture.config import load_config
+        from card_capture.core.config import load_config
         config = load_config(Path(_REPO_ROOT) / "card_capture_config.json")
         request_config = config.to_request_config()
         request_config["detector"] = detector
@@ -232,7 +232,9 @@ class PipelineRunner:
         try:
             from app.services.presence_sampler import sample_presence_frames
             from pathlib import Path as _Path
-            base_output = _Path(self.db_path).parent
+            # Write under the pipeline output root (var/output) so /files serves
+            # the frames — db_path.parent is var/db, which /files does NOT serve.
+            base_output = _Path(os.environ.get("CC_OUTPUT") or (_Path(_REPO_ROOT) / "var/output"))
             n = sample_presence_frames(
                 video_path=_Path(video_path),
                 run_id=run_id,
@@ -260,7 +262,7 @@ class PipelineRunner:
         if not self.db_path:
             return
         try:
-            from card_capture.storage import Storage
+            from card_capture.stages.store.storage import Storage
             Storage(self.db_path).update_video_status(video_id, status)
         except Exception as exc:
             logger.warning("Could not update video %s status to %s: %s", video_id, status, exc)

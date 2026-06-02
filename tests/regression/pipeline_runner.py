@@ -42,7 +42,7 @@ def instances_from_db_rows(rows: Iterable[dict]) -> List[HarnessInstance]:
 
 def load_instances_for_video(db_path: Path, video_id: int) -> List[HarnessInstance]:
     """Read Card Instances for a single video out of the pipeline's SQLite DB."""
-    from card_capture.storage import Storage
+    from card_capture.stages.store.storage import Storage
     storage = Storage(db_path)
     storage.initialize()
     with storage._connect() as conn:

@@ -1,6 +1,6 @@
 import pytest
 from pathlib import Path
-from card_capture.storage import Storage
+from card_capture.stages.store.storage import Storage
 
 def test_storage_fusion_columns(tmp_path: Path):
     storage = Storage(tmp_path / "cards.sqlite")
@@ -22,7 +22,7 @@ def test_storage_fusion_columns(tmp_path: Path):
         assert row["fused_image_path"] == "fused/1.jpg"
 
 def test_storage_view_metrics(tmp_path: Path):
-    from card_capture.models import CornerDetection
+    from card_capture.core.models import CornerDetection
     storage = Storage(tmp_path / "cards.sqlite")
     storage.initialize()
     video_id = storage.add_video("test.mov", "h1", 100, 100, 100)

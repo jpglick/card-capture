@@ -19,27 +19,25 @@ from card_capture.data.sql_queries import (
 def _to_file_url(path: Optional[str]) -> Optional[str]:
     """Convert an absolute or relative filesystem path to a /files/ URL.
 
-    The FastAPI app mounts card_capture_output/ at /files/. Works for both
-    relative paths (card_capture_output/...) and absolute paths that contain
-    card_capture_output somewhere in the path.
+    The FastAPI app mounts var/output/ at /files/. Works for both
+    relative paths (var/output/...) and absolute paths that contain
+    var/output somewhere in the path.
     """
     if not path:
         return None
     p = Path(path)
-    # Relative path already rooted at card_capture_output
+    # Relative path already rooted at var/output
     try:
-        rel = p.relative_to("card_capture_output")
+        rel = p.relative_to("var/output")
         return f"/files/{rel}"
     except ValueError:
         pass
-    # Absolute path: find card_capture_output in parts and take the tail
+    # Absolute path: find var/output in parts and take the tail
     parts = p.parts
-    try:
-        idx = parts.index("card_capture_output")
-        rel = "/".join(parts[idx + 1:])
-        return f"/files/{rel}" if rel else None
-    except ValueError:
-        pass
+    for i in range(len(parts) - 1):
+        if parts[i] == "var" and parts[i+1] == "output":
+            rel = "/".join(parts[i + 2:])
+            return f"/files/{rel}" if rel else None
     return None
 
 

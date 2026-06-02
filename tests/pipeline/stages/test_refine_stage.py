@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from card_capture.pipeline.stages import refine as refine_stage
+from card_capture.stages import refine
 
 
 def _frame(idx, w=640, h=480):
@@ -64,7 +64,7 @@ def test_refine_carries_identity_into_frame_entries():
         "video_id": 42,
         "db_path": "/tmp/x.sqlite",  # ignored when no telemetry writes
     }
-    refine_stage.run(state, telemetry=MagicMock())
+    refine.run(state, telemetry=MagicMock())
 
     assert "refined_tracks" in state
     refined = state["refined_tracks"]
@@ -97,7 +97,7 @@ def test_refine_assigns_best_canonical_image():
         "video_id": 1,
         "db_path": "/tmp/x.sqlite",
     }
-    refine_stage.run(state, telemetry=MagicMock())
+    refine.run(state, telemetry=MagicMock())
     refined = state["refined_tracks"][0]
     assert isinstance(refined["best_canonical_image"], np.ndarray)
     assert refined["best_canonical_image"].shape == (1050, 750, 3)
@@ -124,15 +124,15 @@ def test_refine_attaches_reid_embedding_when_embedder_available(monkeypatch):
     }
 
     # Patch DinoEmbedder so we don't need real weights
-    import card_capture.pipeline.stages.refine as ref_mod
+    import card_capture.stages.refine
 
     class _StubEmbedder:
         def embed_array(self, img):
             import torch
             return torch.tensor([[0.1, 0.2, 0.3]])
 
-    monkeypatch.setattr(ref_mod, "_get_embedder", lambda: _StubEmbedder())
-    refine_stage.run(state, telemetry=MagicMock())
+    monkeypatch.setattr(refine, "_get_embedder", lambda: _StubEmbedder())
+    refine.run(state, telemetry=MagicMock())
     assert state["refined_tracks"][0]["reid_embedding"] == pytest.approx([0.1, 0.2, 0.3])
 
 
@@ -161,6 +161,6 @@ def test_refine_records_track_telemetry_rows(tmp_path, monkeypatch):
         "db_path": str(tmp_path / "cards.sqlite"),
         "repos": {"cards": _StubRepo()},
     }
-    refine_stage.run(state, telemetry=MagicMock())
+    refine.run(state, telemetry=MagicMock())
     assert any(row["video_id"] == 7 and row["instance_id"] == "inst-dddddddd"
                for row in captured)

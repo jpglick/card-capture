@@ -2,7 +2,7 @@
 import math
 import numpy as np
 import cv2
-from card_capture.frame_quality import (
+from card_capture.stages.score.frame_quality import (
     flatness_score, clarity_score_gpu, clarity_var_gpu_roi,
     appearance_grid_gpu_roi, ahash_from_grid, ahash_hamming,
 )

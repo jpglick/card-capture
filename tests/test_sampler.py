@@ -6,8 +6,8 @@ import cv2
 import numpy as np
 import pytest
 
-from card_capture.models import FrameSample
-from card_capture.sampler import (
+from card_capture.core.models import FrameSample
+from card_capture.stages.sample.sampler import (
     StabilityBasedSampler,
     StableWindow,
     ContrastBasedSampler,
@@ -261,7 +261,7 @@ def test_video_sampler_uses_decord_backend_when_requested(monkeypatch, tmp_path)
     ]
     backend_calls = []
 
-    monkeypatch.setattr("card_capture.sampler._resolve_reader_backend", lambda preferred: preferred)
+    monkeypatch.setattr("card_capture.stages.sample.sampler._resolve_reader_backend", lambda preferred: preferred)
 
     def _fake_decord(self, video_path, sample_fps, **kwargs):
         backend_calls.append((Path(video_path), sample_fps))
@@ -276,7 +276,7 @@ def test_video_sampler_uses_decord_backend_when_requested(monkeypatch, tmp_path)
 
 
 def test_video_sampler_uses_pyav_backend_when_auto_falls_back(monkeypatch, tmp_path):
-    monkeypatch.setattr("card_capture.sampler._resolve_reader_backend", lambda preferred: "pyav")
+    monkeypatch.setattr("card_capture.stages.sample.sampler._resolve_reader_backend", lambda preferred: "pyav")
     sampler = VideoSampler(reader_backend="auto")
     expected = [
         FrameSample(
@@ -299,6 +299,67 @@ def test_video_sampler_uses_pyav_backend_when_auto_falls_back(monkeypatch, tmp_p
 
     assert results == expected
     assert backend_calls == [(tmp_path / "input.mov", 0.0)]
+
+
+def test_pyav_decode_never_uses_frame_threading(monkeypatch):
+    """FRAME threading (thread_type="AUTO") deadlocks mid-stream when OpenCV and
+    PyAV are both imported (duplicate libavdevice). The pyav decode path must
+    request SLICE-only threading, never AUTO/FRAME. We use a fake container so
+    the assertion guards the assigned value (a real codec resolves thread_type
+    to its own capabilities, masking the regression)."""
+    from fractions import Fraction
+
+    assigned: list[str] = []
+
+    class _Stream:
+        type = "video"
+        average_rate = 30
+        guessed_rate = 30
+        time_base = Fraction(1, 30)
+        _tt = "NONE"
+
+        @property
+        def thread_type(self):
+            return self._tt
+
+        @thread_type.setter
+        def thread_type(self, v):
+            assigned.append(v)
+            self._tt = v
+
+    class _Frame:
+        pts = 0
+        width = 8
+        height = 6
+
+        def to_ndarray(self, format=None):
+            return np.zeros((6, 8, 3), dtype=np.uint8)
+
+    class _Packet:
+        def decode(self):
+            return [_Frame()]
+
+    class _Container:
+        streams = [_Stream()]
+
+        def demux(self, stream):
+            return [_Packet()]
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        VideoSampler, "_open_pyav_container", staticmethod(lambda video_path: (_Container(), False))
+    )
+
+    sampler = VideoSampler(reader_backend="pyav")
+    frames = list(sampler.sample(Path("fake.mov"), sample_fps=5.0))
+
+    assert len(frames) > 0, "decode must still yield frames"
+    assert assigned, "decode path must explicitly set thread_type"
+    assert assigned[-1] not in ("AUTO", "FRAME"), (
+        f"FRAME threading reintroduced: thread_type={assigned[-1]!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -656,7 +717,7 @@ class TestAdaptivePresenceSamplerClassifierPath:
         assert isinstance(windows, list)
 
 def test_sampler_collects_background_proxies(tmp_path):
-    from card_capture.sampler import AdaptivePresenceSampler
+    from card_capture.stages.sample.sampler import AdaptivePresenceSampler
     import numpy as np
 
     # 10 frames of background (low score), 10 frames of card (high score)
@@ -683,7 +744,7 @@ def test_sampler_collects_background_proxies(tmp_path):
 
 @pytest.mark.quarantine
 def test_sampler_background_proxies_safety_threshold(tmp_path):
-    from card_capture.sampler import AdaptivePresenceSampler
+    from card_capture.stages.sample.sampler import AdaptivePresenceSampler
     # Only "card" frames (high score), no background
     frames = colored_frames(20)
     path = make_video(tmp_path, frames, fps=30.0)

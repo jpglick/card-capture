@@ -4,13 +4,13 @@ import numpy as np
 import pytest
 import cv2
 
-from card_capture.occlusion_residual import compute_occlusion_residual_score
-from card_capture.scoring import QualityScorer
-from card_capture.ecc_registration import compute_ecc_warp, register_frames_via_ecc
-from card_capture.fuser import MultiFrameFuser
-from card_capture.models import ScoredCandidate
-from card_capture.models import QualityScore
-from card_capture.tracking.botsort_adapter import rotated_iou, axis_aligned_iou_from_corners
+from card_capture.stages.refine.occlusion_residual import compute_occlusion_residual_score
+from card_capture.stages.score.scoring import QualityScorer
+from card_capture.stages.fuse.ecc_registration import compute_ecc_warp, register_frames_via_ecc
+from card_capture.stages.fuse.fuser import MultiFrameFuser
+from card_capture.core.models import ScoredCandidate
+from card_capture.core.models import QualityScore
+from card_capture.stages.track.botsort_adapter import rotated_iou, axis_aligned_iou_from_corners
 
 
 def _clean_card(h=1050, w=750):
@@ -136,7 +136,7 @@ def test_quality_scorer_penalizes_occluded_frame():
 
 def test_per_pixel_bg_tracks_variance():
     """Verify BG model stores per-pixel variance."""
-    from card_capture.presence.background_novelty import BackgroundModel
+    from card_capture.stages.novelty.background_novelty import BackgroundModel
 
     # Create two frames with different variance patterns
     # Region [0:50, 0:50]: constant at 150 and 145 (small variance)
@@ -159,7 +159,7 @@ def test_per_pixel_bg_tracks_variance():
 
 def test_mahalanobis_novelty_with_variance():
     """Verify Mahalanobis novelty accounts for variance."""
-    from card_capture.presence.background_novelty import BackgroundModel, quad_novelty
+    from card_capture.stages.novelty.background_novelty import BackgroundModel, quad_novelty
 
     # Create background: uniform gray at 128
     bg_frame = np.ones((100, 100), dtype=np.uint8) * 128
@@ -201,7 +201,7 @@ class TestPerRegionValleyDetection:
 
     def test_per_region_valley_detection_multicard_swap(self):
         """Test detecting valleys when card A leaves left, card B enters right."""
-        from card_capture.sampler.valley_detection_per_region import per_region_valley_detection
+        from card_capture.stages.sample.sampler.valley_detection_per_region import per_region_valley_detection
 
         h, w = 180, 240
 
@@ -254,7 +254,7 @@ class TestPerRegionValleyDetection:
 
     def test_find_valley_splits_per_region_returns_unique_frames(self):
         """Test that find_valley_splits_per_region returns unique frame indices."""
-        from card_capture.sampler.valley_detection_per_region import find_valley_splits_per_region
+        from card_capture.stages.sample.sampler.valley_detection_per_region import find_valley_splits_per_region
 
         h, w = 180, 240
 
@@ -285,7 +285,7 @@ class TestPerRegionValleyDetection:
 
     def test_per_region_valley_empty_frames_returns_empty(self):
         """Test that empty frame list returns no valleys."""
-        from card_capture.sampler.valley_detection_per_region import per_region_valley_detection
+        from card_capture.stages.sample.sampler.valley_detection_per_region import per_region_valley_detection
 
         valleys = per_region_valley_detection(
             [],
@@ -298,7 +298,7 @@ class TestPerRegionValleyDetection:
 
     def test_per_region_valley_flat_signal_no_valleys(self):
         """Test that a constant high-edge-density signal produces no valleys."""
-        from card_capture.sampler.valley_detection_per_region import per_region_valley_detection
+        from card_capture.stages.sample.sampler.valley_detection_per_region import per_region_valley_detection
 
         h, w = 180, 240
         frames = [self._create_high_edge_frame(h, w) for _ in range(6)]
@@ -316,7 +316,7 @@ class TestPerRegionValleyDetection:
 
     def test_per_region_valley_grayscale_input(self):
         """Test that grayscale frames are handled correctly."""
-        from card_capture.sampler.valley_detection_per_region import per_region_valley_detection
+        from card_capture.stages.sample.sampler.valley_detection_per_region import per_region_valley_detection
 
         h, w = 180, 240
 
@@ -343,7 +343,7 @@ class TestPerRegionValleyDetection:
     @pytest.mark.quarantine
     def test_sampler_integrates_per_region_valleys(self):
         """Test that AdaptivePresenceSampler integrates per-region valley detection."""
-        from card_capture.sampler import AdaptivePresenceSampler, _AdaptiveScanFrame
+        from card_capture.stages.sample.sampler import AdaptivePresenceSampler, _AdaptiveScanFrame
 
         # Create a mock sampler
         sampler = AdaptivePresenceSampler(

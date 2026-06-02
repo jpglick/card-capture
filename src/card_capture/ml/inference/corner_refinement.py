@@ -8,7 +8,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 from typing import List, Tuple, Optional
-from ..models import Point
+from card_capture.core.models import Point
 
 
 def refine_corners(

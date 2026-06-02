@@ -1,7 +1,7 @@
 import numpy as np
 
-from card_capture.models import QualityScore, ScoredCandidate
-from card_capture.tracking import ByteTrackAdapter
+from card_capture.core.models import QualityScore, ScoredCandidate
+from card_capture.stages.track.bytetrack_adapter import ByteTrackAdapter
 
 
 def _candidate(detection_id, frame_index, x, y, conf=0.9, w=200, h=300):

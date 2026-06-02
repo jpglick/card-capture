@@ -12,14 +12,14 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from card_capture.models import (
+from card_capture.core.models import (
     CornerDetection,
     DetectionPacket,
     FrameSample,
     QualityScore,
 )
-from card_capture.models import ScoredCandidate
-from card_capture.tracking.botsort_adapter import BoTSORTAdapter
+from card_capture.core.models import ScoredCandidate
+from card_capture.stages.track.botsort_adapter import BoTSORTAdapter
 
 
 def _candidate_with_frame_path(
@@ -83,14 +83,14 @@ def mock_botsort_adapter():
         "boxmot.trackers.botsort.botsort": MagicMock(),
         "supervision": mock_supervision,
     }):
-        with patch("card_capture.tracking.botsort_adapter._import_botsort") as mock_import:
+        with patch("card_capture.stages.track.botsort_adapter._import_botsort") as mock_import:
             MockBoTSORT = MagicMock()
             mock_tracker = MagicMock()
             mock_tracker.update = mock_update
             MockBoTSORT.return_value = mock_tracker
             mock_import.return_value = MockBoTSORT
 
-            from card_capture.tracking.botsort_adapter import BoTSORTAdapter
+            from card_capture.stages.track.botsort_adapter import BoTSORTAdapter
 
             adapter = BoTSORTAdapter(min_track_length=1)
             adapter._captured_frames = captured_frames  # Expose for testing
@@ -215,10 +215,10 @@ def test_front_back_assignment_uses_side_score(tmp_path):
     that the high-textiness track is selected as Front regardless of track length.
     """
     import cv2
-    from card_capture.pipeline_utils import _resolve_session_tracks, _PreparedTrack
-    from card_capture.models import TrackState, ScoredCandidate
-    from card_capture.models import QualityScore
-    from card_capture.deduplicator import VisualDeduplicator
+    from card_capture.shared.pipeline_utils import _resolve_session_tracks, _PreparedTrack
+    from card_capture.core.models import TrackState, ScoredCandidate
+    from card_capture.core.models import QualityScore
+    from card_capture.stages.dedup.deduplicator import VisualDeduplicator
 
     # Helper to create a track with specified side_score
     def make_track_with_score(instance_id, num_frames, side_score_val):
@@ -313,10 +313,10 @@ def test_quality_weighted_track_selection(tmp_path):
     Expected: sharp track selected as Front (not blurry despite length)
     """
     import cv2
-    from card_capture.pipeline_utils import _resolve_session_tracks, _PreparedTrack
-    from card_capture.models import TrackState, ScoredCandidate
-    from card_capture.models import QualityScore
-    from card_capture.deduplicator import VisualDeduplicator
+    from card_capture.shared.pipeline_utils import _resolve_session_tracks, _PreparedTrack
+    from card_capture.core.models import TrackState, ScoredCandidate
+    from card_capture.core.models import QualityScore
+    from card_capture.stages.dedup.deduplicator import VisualDeduplicator
 
     def make_track_with_quality(instance_id, num_frames, quality_val, side_score_val=0.5):
         ts = TrackState(instance_id=instance_id)
@@ -410,7 +410,7 @@ def test_obb_centroid_invariant_under_rotation():
     This ensures in-place rotation doesn't trigger spurious session resets
     due to false positive centroid jumps.
     """
-    from card_capture.tracking.centroid_jump import centroid_from_obb
+    from card_capture.stages.track.centroid_jump import centroid_from_obb
 
     # Axis-aligned OBB: corners at (100, 100), (300, 100), (300, 300), (100, 300)
     # Center should be at (200, 200)
@@ -467,7 +467,7 @@ def test_adaptive_min_track_length_from_inter_gaps():
     This test verifies that the adaptive formula scales with typical
     swap frequency instead of absolute detection count.
     """
-    from card_capture.pipeline_utils import adaptive_min_track_length
+    from card_capture.shared.pipeline_utils import adaptive_min_track_length
 
     # Scenario 1: Long video with many detections, small inter-gaps
     # (single card continuously visible)
@@ -512,7 +512,7 @@ def test_lab_color_novelty_detects_chroma_difference(tmp_path):
     This test ensures Lab color mode can detect color-only differences.
     """
     import cv2
-    from card_capture.presence.background_novelty import BackgroundModel, quad_novelty
+    from card_capture.stages.novelty.background_novelty import BackgroundModel, quad_novelty
 
     # Create a neutral gray background
     # Neutral gray: (B=128, G=128, R=128) → LAB: L≈137, a=128, b=128
@@ -553,7 +553,7 @@ def test_lab_novelty_backward_compatible_with_grayscale(tmp_path):
     rounding differences in color space conversion).
     """
     import cv2
-    from card_capture.presence.background_novelty import BackgroundModel, quad_novelty
+    from card_capture.stages.novelty.background_novelty import BackgroundModel, quad_novelty
 
     # Create uniform background
     bg_frames = [np.full((100, 100, 3), (128, 128, 128), dtype=np.uint8) for _ in range(3)]
@@ -595,7 +595,7 @@ def test_background_model_refresh_from_frame_ewma():
     tracking slow lighting changes.
     """
     import cv2
-    from card_capture.presence.background_novelty import BackgroundModel
+    from card_capture.stages.novelty.background_novelty import BackgroundModel
 
     # Create initial background model with dim lighting (brightness ~100)
     dim_frames = [np.full((100, 100, 3), (100, 100, 100), dtype=np.uint8) for _ in range(3)]
@@ -653,7 +653,7 @@ def test_background_model_refresh_gradual_drift():
     during detected empty windows).
     """
     import cv2
-    from card_capture.presence.background_novelty import BackgroundModel
+    from card_capture.stages.novelty.background_novelty import BackgroundModel
 
     # Initial dim background (brightness ~100)
     initial_frames = [np.full((100, 100, 3), (100, 100, 100), dtype=np.uint8) for _ in range(3)]
@@ -723,7 +723,7 @@ def test_spatial_glare_distinguishes_scattered_from_blob():
     - Frame B (blob): low glare score (~0.0)
     """
     import cv2
-    from card_capture.scoring import QualityScorer
+    from card_capture.stages.score.scoring import QualityScorer
 
     # Create frame A: scattered 1×1 white pixels (10% coverage)
     frame_a = np.zeros((480, 640, 3), dtype=np.uint8)

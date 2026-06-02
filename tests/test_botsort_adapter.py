@@ -2,8 +2,8 @@ import numpy as np
 import pytest
 from unittest.mock import MagicMock, patch
 
-from card_capture.models import ScoredCandidate
-from card_capture.models import QualityScore
+from card_capture.core.models import ScoredCandidate
+from card_capture.core.models import QualityScore
 
 
 def _candidate(detection_id, frame_index, x, y, conf=0.9, w=200, h=300):
@@ -59,19 +59,19 @@ def adapter():
         "boxmot.trackers.botsort.botsort": MagicMock(),
         "supervision": mock_supervision,
     }):
-        with patch("card_capture.tracking.botsort_adapter._import_botsort") as mock_import:
+        with patch("card_capture.stages.track.botsort_adapter._import_botsort") as mock_import:
             MockBoTSORT = MagicMock()
             mock_tracker, _ = _make_mock_botsort()
             MockBoTSORT.return_value = mock_tracker
             mock_import.return_value = MockBoTSORT
-            from card_capture.tracking.botsort_adapter import BoTSORTAdapter
+            from card_capture.stages.track.botsort_adapter import BoTSORTAdapter
             yield BoTSORTAdapter(min_track_length=1)
 
 
 def test_botsort_adapter_importable():
     """Module must be importable without boxmot installed."""
     import importlib
-    import card_capture.tracking.botsort_adapter  # must not raise
+    import card_capture.stages.track.botsort_adapter  # must not raise
 
 
 def test_process_returns_list(adapter):
@@ -120,7 +120,7 @@ def test_finalized_tracks_returns_list(adapter):
 
 def test_import_botsort_resolves_new_or_old_api():
     """The adapter must import BoT-SORT regardless of boxmot major version."""
-    from card_capture.tracking.botsort_adapter import _import_botsort
+    from card_capture.stages.track.botsort_adapter import _import_botsort
     klass = _import_botsort()
     # Class name varies across versions: 'BoTSORT' (≤0.16) or 'BotSort' (≥0.17).
     assert klass.__name__ in {"BoTSORT", "BotSort"}, klass.__name__

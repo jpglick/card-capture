@@ -1,4 +1,4 @@
-from card_capture.sampler.valley_splits import find_valley_splits
+from card_capture.stages.sample.sampler.valley_splits import find_valley_splits
 
 
 def test_flat_signal_no_splits():

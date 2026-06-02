@@ -4,11 +4,10 @@ import builtins
 
 import numpy as np
 
-from card_capture.ingestion import (
-    FrameTriageFilter,
-    _decord_available,
+from card_capture.core.video_utils import (
     _resolve_reader_backend,
 )
+from card_capture.core.video_utils import _decord_available, FrameTriageFilter
 
 
 def test_frame_triage_filter_rejects_empty_frame() -> None:
@@ -37,7 +36,7 @@ def test_frame_triage_filter_accepts_textured_frame() -> None:
 def test_resolve_reader_backend_auto_falls_back_to_pyav_when_decord_unavailable(
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr("card_capture.ingestion._decord_available", lambda: False)
+    monkeypatch.setattr("card_capture.stages.sample.ingestion._decord_available", lambda: False)
 
     backend = _resolve_reader_backend("auto")
 

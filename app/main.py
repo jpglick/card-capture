@@ -26,11 +26,14 @@ from app.services.playground_service import PlaygroundService
 from app.services.mining_service import MiningService
 
 
-def create_app(db_path: Optional[Path] = None) -> FastAPI:
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def create_app(db_path: Optional[Path] = None, output_root: Optional[Path] = None) -> FastAPI:
     """Build and configure the FastAPI application.
     """
     if db_path is None:
-        db_path = Path(os.environ.get("CC_DB", "card_capture_output/cards.sqlite"))
+        db_path = Path(os.environ.get("CC_DB", "var/db/cards.sqlite"))
 
     # Ensure the database file exists.
     if not db_path.exists():
@@ -39,7 +42,7 @@ def create_app(db_path: Optional[Path] = None) -> FastAPI:
         open_connection(db_path).close()
 
     # 1. Initialise storage tables (creates pipeline_events, card_instances, etc. if needed)
-    from card_capture.storage import Storage
+    from card_capture.stages.store.storage import Storage
     storage = Storage(db_path)
     storage.initialize()
 
@@ -138,10 +141,14 @@ def create_app(db_path: Optional[Path] = None) -> FastAPI:
         training_repo=training_repo,
     )
 
-    # Serve pipeline output (crops, frames) as static files
-    output_dir = db_path.parent if db_path.parent.name != "." else Path("card_capture_output")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    app.mount("/files", StaticFiles(directory=str(output_dir)), name="files")
+    # Serve pipeline output (crops, frames) as static files. The pipeline writes
+    # to <repo>/var/output/<run_id>/... (see app/api/videos.py) and card paths are
+    # mapped to /files URLs rooted at var/output (see cards_service._to_file_url),
+    # so /files MUST serve var/output — NOT db_path.parent (which is var/db).
+    if output_root is None:
+        output_root = Path(os.environ.get("CC_OUTPUT") or (_REPO_ROOT / "var/output"))
+    output_root.mkdir(parents=True, exist_ok=True)
+    app.mount("/files", StaticFiles(directory=str(output_root)), name="files")
 
     # Include routers
     app.include_router(videos.router, prefix="/api/v1/videos", tags=["videos"])

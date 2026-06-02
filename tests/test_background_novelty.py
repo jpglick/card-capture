@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from card_capture.presence.background_novelty import (
+from card_capture.stages.novelty.background_novelty import (
     BackgroundModel,
     quad_novelty,
     is_quad_card_like,

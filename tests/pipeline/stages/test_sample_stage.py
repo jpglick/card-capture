@@ -1,8 +1,9 @@
 """sample stage starts a FrameProducer and does not drain it."""
 from unittest.mock import MagicMock
 
-from card_capture.pipeline.stages import sample as sample_stage
-from card_capture.sampler.frame_producer import FrameProducer
+from card_capture.stages import sample
+from card_capture.stages.sample.sampler.frame_producer import FrameProducer
+from card_capture.core.video_utils import probe_video, _resolve_reader_backend, _decord_available, _open_capture, RollingWindowTriage, FrameTriageFilter
 
 
 def test_sample_starts_producer_without_draining(synthetic_two_cards_mov):
@@ -10,7 +11,7 @@ def test_sample_starts_producer_without_draining(synthetic_two_cards_mov):
     request.input_video = str(synthetic_two_cards_mov)
     state = {"request": request}
 
-    sample_stage.run(state, telemetry=MagicMock())
+    sample.run(state, telemetry=MagicMock())
 
     assert isinstance(state["frame_producer"], FrameProducer)
     assert state["sampled_frames"] == []

@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from card_capture.pipeline.stages import score as score_stage
+from card_capture.stages import score
 
 
 def _track(instance_id, frame_count, novelty=1.0, q=0.7, sharpness=0.7):
@@ -40,7 +40,7 @@ def test_score_passes_through_when_no_gates_active():
         ],
         "bg_model": None,
     }
-    score_stage.run(state, telemetry=MagicMock())
+    score.run(state, telemetry=MagicMock())
     assert len(state["scored_tracks"]) == 2
     assert all(not t["pruned"] for t in state["scored_tracks"])
     assert state["pruned_instance_ids"] == []
@@ -62,14 +62,14 @@ def test_score_confidence_floor_prunes_low_quality():
         ],
         "bg_model": None,
     }
-    score_stage.run(state, telemetry=MagicMock())
+    score.run(state, telemetry=MagicMock())
     assert "weak" in state["pruned_instance_ids"]
     assert "strong" not in state["pruned_instance_ids"]
 
 
 def test_score_novelty_gate_useful_requires_n5_std015_min035():
     """Gate stays off when there's no useful spread."""
-    from card_capture.pipeline.stages.score import _novelty_gate_useful
+    from card_capture.stages.score import _novelty_gate_useful
     assert _novelty_gate_useful([1.0] * 10) is False  # std 0
     assert _novelty_gate_useful([0.5, 0.51, 0.52]) is False  # n < 5
     # Wide spread, low min → useful
@@ -97,7 +97,7 @@ def test_score_adaptive_novelty_threshold_is_largest_gap_midpoint():
         ],
         "bg_model": object(),  # truthy sentinel
     }
-    score_stage.run(state, telemetry=MagicMock())
+    score.run(state, telemetry=MagicMock())
     pruned = set(state["pruned_instance_ids"])
     assert "phantom-1" in pruned and "phantom-2" in pruned
     assert "real-1" not in pruned and "real-2" not in pruned
@@ -121,7 +121,7 @@ def test_score_stand_gate_prunes_low_novelty_and_low_sharpness():
         ],
         "bg_model": object(),
     }
-    score_stage.run(state, telemetry=MagicMock())
+    score.run(state, telemetry=MagicMock())
     pruned = state["pruned_instance_ids"]
     assert "stand" in pruned
     assert "shiny" not in pruned

@@ -1,6 +1,6 @@
 import numpy as np
 
-from card_capture.scoring import QualityScorer
+from card_capture.stages.score.scoring import QualityScorer
 
 
 def _card_like(h=900, w=600, has_occluder=False):

@@ -1,6 +1,6 @@
 import numpy as np
 
-from card_capture.tracking.centroid_jump import CentroidJumpDetector
+from card_capture.stages.track.centroid_jump import CentroidJumpDetector
 
 
 def _box(cx, cy, s=50):

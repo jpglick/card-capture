@@ -6,7 +6,7 @@ import pytest
 import tempfile
 from pathlib import Path
 
-from card_capture.identity.embedding_distance import (
+from card_capture.stages.dedup.embedding_distance import (
     compute_embedding_distance,
     embedding_same_card_score,
 )
@@ -120,8 +120,8 @@ class TestCrossVideoDedup:
         - pHash match (Hamming ≤ 22) → candidates
         - Embeddings available and similar (distance < 0.5) → confirm same card
         """
-        from card_capture.pipeline_utils import _is_reid_duplicate
-        from card_capture.deduplicator import VisualDeduplicator
+        from card_capture.shared.pipeline_utils import _is_reid_duplicate
+        from card_capture.stages.dedup.deduplicator import VisualDeduplicator
 
         deduplicator = VisualDeduplicator()
 
@@ -161,8 +161,8 @@ class TestCrossVideoDedup:
         - pHash collision (could match) → candidates
         - Embeddings available but dissimilar (distance > 0.5) → NOT same card
         """
-        from card_capture.pipeline_utils import _is_reid_duplicate
-        from card_capture.deduplicator import VisualDeduplicator
+        from card_capture.shared.pipeline_utils import _is_reid_duplicate
+        from card_capture.stages.dedup.deduplicator import VisualDeduplicator
 
         deduplicator = VisualDeduplicator()
 
@@ -324,7 +324,7 @@ class TestHardCaseCapture:
 
     def test_hard_case_multiple_fronts(self):
         """Detect >2 Fronts as hard case."""
-        from card_capture.analysis.hard_case_capture import is_hard_case
+        from card_capture.training.hard_case_capture import is_hard_case
 
         # Session with 3 Fronts (multiple_fronts)
         session = {
@@ -346,7 +346,7 @@ class TestHardCaseCapture:
 
     def test_hard_case_borderline_hamming(self):
         """Detect borderline Hamming distance (within 4 of 22) as hard case."""
-        from card_capture.analysis.hard_case_capture import is_hard_case
+        from card_capture.training.hard_case_capture import is_hard_case
 
         # Session with borderline Hamming (within range [18, 26])
         session = {
@@ -371,7 +371,7 @@ class TestAdaptiveThresholds:
 
     def test_adaptive_novelty_threshold_from_distribution(self):
         """Novelty threshold from p50 of in-video candidate distribution, clipped ±20%."""
-        from card_capture.calibration.per_video_adaptive import AdaptiveThresholdComputer
+        from card_capture.stages.score.per_video_adaptive import AdaptiveThresholdComputer
 
         computer = AdaptiveThresholdComputer()
         global_threshold = 0.08
@@ -395,7 +395,7 @@ class TestAdaptiveThresholds:
 
     def test_adaptive_hamming_threshold_from_intra_track_distances(self):
         """Hamming threshold from p75 of intra-track pHash distances, clipped ±10%."""
-        from card_capture.calibration.per_video_adaptive import AdaptiveThresholdComputer
+        from card_capture.stages.score.per_video_adaptive import AdaptiveThresholdComputer
 
         computer = AdaptiveThresholdComputer()
         global_threshold = 22  # _SAME_CARD_HAMMING_MAX
@@ -420,7 +420,7 @@ class TestAdaptiveThresholds:
 
     def test_adaptive_novelty_threshold_fallback_to_global(self):
         """Fallback to global threshold when fewer than 10 samples."""
-        from card_capture.calibration.per_video_adaptive import AdaptiveThresholdComputer
+        from card_capture.stages.score.per_video_adaptive import AdaptiveThresholdComputer
 
         computer = AdaptiveThresholdComputer()
         global_threshold = 0.08
@@ -434,7 +434,7 @@ class TestAdaptiveThresholds:
 
     def test_adaptive_hamming_threshold_fallback_to_global(self):
         """Fallback to global threshold when fewer than 10 samples."""
-        from card_capture.calibration.per_video_adaptive import AdaptiveThresholdComputer
+        from card_capture.stages.score.per_video_adaptive import AdaptiveThresholdComputer
 
         computer = AdaptiveThresholdComputer()
         global_threshold = 22
@@ -454,15 +454,15 @@ class TestAdaptiveThresholds:
         and later through _prune_empty_workspace_tracks (reads threshold but does NOT collect).
         Verify len(context.observed_novelty_scores) == N (not 2N).
         """
-        from card_capture.pipeline_utils import (
+        from card_capture.shared.pipeline_utils import (
             PipelineContext,
             _filter_candidates_by_novelty,
             _prune_empty_workspace_tracks,
             _PreparedTrack,
         )
-        from card_capture.presence.background_novelty import BackgroundModel
-        from card_capture.models import ScoredCandidate
-        from card_capture.models import QualityScore
+        from card_capture.stages.novelty.background_novelty import BackgroundModel
+        from card_capture.core.models import ScoredCandidate
+        from card_capture.core.models import QualityScore
         import cv2
 
         # Create a simple background model from a constant frame
