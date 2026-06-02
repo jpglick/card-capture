@@ -407,15 +407,23 @@ class TestConfigPresets:
 # ---------------------------------------------------------------------------
 
 class TestStaticFiles:
-    def test_files_route_exists(self, client: TestClient, tmp_path: Path, tmp_db: Path):
-        # Create a real file under the output dir (db parent)
-        crops = tmp_db.parent / "crops"
-        crops.mkdir(parents=True, exist_ok=True)
-        test_file = crops / "test.jpg"
-        test_file.write_bytes(b"\xff\xd8\xff")  # minimal JPEG header
+    def test_files_serves_output_root_not_db_dir(self, tmp_path: Path):
+        # The pipeline writes card images under <output_root>/<run_id>/crops/,
+        # which is a SIBLING of the DB dir (var/output vs var/db). /files must
+        # serve the output root so the cards page images resolve. Regression for
+        # broken images after the var/ reorg split db and output dirs.
+        from app.main import create_app
 
-        r = client.get("/files/crops/test.jpg")
-        assert r.status_code == 200
+        db = tmp_path / "db" / "cards.sqlite"
+        db.parent.mkdir(parents=True, exist_ok=True)
+        output_root = tmp_path / "output"
+        img = output_root / "run_x" / "crops" / "card.jpg"
+        img.parent.mkdir(parents=True, exist_ok=True)
+        img.write_bytes(b"\xff\xd8\xff")  # minimal JPEG header
+
+        app = create_app(db_path=db, output_root=output_root)
+        with TestClient(app) as c:
+            assert c.get("/files/run_x/crops/card.jpg").status_code == 200
 
     def test_files_missing_returns_404(self, client: TestClient):
         r = client.get("/files/crops/nonexistent_xyz.jpg")
