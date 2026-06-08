@@ -124,8 +124,10 @@ class OpenTelemetryAdapter:
         self._active_spans[stage] = span
 
     def stage_finished(self, stage: str, elapsed_ms: int, metadata: Mapping[str, object]) -> None:
-        attrs = {"stage": stage, **{k: str(v) for k, v in metadata.items()}}
-        self._stage_duration.record(elapsed_ms, attributes=attrs)
+        # Duration is an aggregated metric: keep its attributes low-cardinality
+        # (stage only). Per-stage counts vary run-to-run and would explode the
+        # metric time-series, so they ride on the span (below) instead.
+        self._stage_duration.record(elapsed_ms, attributes={"stage": stage})
 
         span = self._active_spans.pop(stage, None)
         if span:

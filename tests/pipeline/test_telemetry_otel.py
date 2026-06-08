@@ -109,3 +109,36 @@ def test_shutdown_is_idempotent():
 
     run_spans = [s for s in span_exporter.get_finished_spans() if s.name == "pipeline.run"]
     assert len(run_spans) == 1
+
+
+def test_counts_go_on_span_not_on_duration_histogram_attributes():
+    reader = InMemoryMetricReader()
+    meter_provider = MeterProvider(metric_readers=[reader])
+    span_exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+
+    sink = OpenTelemetryAdapter(
+        tracer_provider.get_tracer("card_capture"),
+        meter_provider.get_meter("card_capture.pipeline"),
+        run_id="run_1",
+    )
+    sink.stage_started("detect", {})
+    sink.stage_finished("detect", elapsed_ms=12, metadata={"detections": 42})
+
+    # The count is recorded on the span (an event — rich attributes are fine).
+    span = {s.name: s for s in span_exporter.get_finished_spans()}["detect"]
+    assert span.attributes["detections"] == "42"
+
+    # The duration histogram is an aggregated metric: the count must NOT be an
+    # attribute (it would explode time-series cardinality). Only `stage`.
+    points = []
+    for rm in reader.get_metrics_data().resource_metrics:
+        for sm in rm.scope_metrics:
+            for m in sm.metrics:
+                if m.name == "card_capture.pipeline.stage.duration_ms":
+                    points.extend(m.data.data_points)
+    assert points, "no duration_ms data points"
+    attrs = dict(points[0].attributes)
+    assert attrs.get("stage") == "detect"
+    assert "detections" not in attrs
