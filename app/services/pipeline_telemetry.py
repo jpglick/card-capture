@@ -16,6 +16,7 @@ import time
 from typing import Mapping
 
 from app.services.event_bus import Event, EventBus
+from card_capture.data.repositories.telemetry import TelemetryRepository
 
 
 _STAGES = (
@@ -107,3 +108,26 @@ class EventBusTelemetry:
             except Exception:
                 # Persisting telemetry must never kill the pipeline.
                 self._logger.debug("log_sink failed for line=%r", line, exc_info=True)
+
+
+class DbTelemetry:
+    """Implements PipelineTelemetry by writing to TelemetryRepository."""
+
+    def __init__(self, repo: TelemetryRepository, run_id: str) -> None:
+        self._repo = repo
+        self._run_id = run_id
+
+    def stage_started(self, stage: str, metadata: Mapping[str, object]) -> None:
+        self._repo.record_event(self._run_id, "stage_started", {"stage": stage, **metadata})
+
+    def stage_finished(self, stage: str, elapsed_ms: int, metadata: Mapping[str, object]) -> None:
+        self._repo.record_event(self._run_id, "stage_finished", {"stage": stage, "elapsed_ms": elapsed_ms, **metadata})
+
+    def progress(self, stage_id: str, pct: int, detail: str) -> None:
+        self._repo.record_event(self._run_id, "progress", {"stage": stage_id, "pct": pct, "detail": detail})
+
+    def resource_sample(self, sample: Mapping[str, object]) -> None:
+        self._repo.record_event(self._run_id, "resource_sample", dict(sample))
+
+    def contract_violation(self, code: str, metadata: Mapping[str, object]) -> None:
+        self._repo.record_event(self._run_id, "contract_violation", {"code": code, **metadata})
