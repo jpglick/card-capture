@@ -27,7 +27,14 @@ def _build_runner(request: Request):
     bus = request.app.state.event_bus
     db_path = request.app.state.db_path
     telemetry_repo = getattr(request.app.state, "telemetry_repo", None)
-    return PipelineRunner(bus=bus, flow_cls=None, db_path=db_path, telemetry_repo=telemetry_repo)
+    otel_enabled = getattr(request.app.state, "otel_enabled", False)
+    return PipelineRunner(
+        bus=bus,
+        flow_cls=None,
+        db_path=db_path,
+        telemetry_repo=telemetry_repo,
+        otel_enabled=otel_enabled,
+    )
 
 
 @router.get("", response_model=list[Video])

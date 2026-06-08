@@ -81,6 +81,14 @@ def create_app(db_path: Optional[Path] = None, output_root: Optional[Path] = Non
     async def lifespan(app: FastAPI):
         # Start the single-writer thread
         app.state.writer.start()
+        # Configure OpenTelemetry exporters once per process. Opt-in via env
+        # (OTEL_EXPORTER_OTLP_ENDPOINT / CARD_CAPTURE_OTEL_CONSOLE); a no-op
+        # otherwise. Without this the OTel sink records into a no-op provider.
+        from card_capture.pipeline.otel_setup import configure_telemetry
+        app.state.otel_enabled = configure_telemetry()
+        if app.state.otel_enabled:
+            import logging
+            logging.getLogger("card_capture.app").info("OpenTelemetry export enabled")
         try:
             yield
         finally:
@@ -105,6 +113,7 @@ def create_app(db_path: Optional[Path] = None, output_root: Optional[Path] = Non
     app.state.videos_repo = videos_repo
     app.state.labeling_repo = labeling_repo
     app.state.telemetry_repo = telemetry_repo
+    app.state.otel_enabled = False  # set by lifespan via configure_telemetry()
     app.state.config_repo = config_repo
     app.state.batch_repo = batch_repo
     app.state.training_repo = training_repo

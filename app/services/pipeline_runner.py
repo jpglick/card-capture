@@ -25,11 +25,52 @@ from app.services.pipeline_telemetry import EventBusTelemetry
 
 
 class PipelineRunner:
-    def __init__(self, bus: EventBus, flow_cls: Optional[Type] = None, db_path: Optional[Path] = None, telemetry_repo: Optional[Any] = None) -> None:
+    def __init__(self, bus: EventBus, flow_cls: Optional[Type] = None, db_path: Optional[Path] = None, telemetry_repo: Optional[Any] = None, otel_enabled: bool = False) -> None:
         self.bus = bus
         self.flow_cls = flow_cls
         self.db_path = db_path  # for updating video status on failure
         self.telemetry_repo = telemetry_repo
+        self.otel_enabled = otel_enabled  # OTel SDK provider configured at startup
+
+    def _assemble_telemetry(self, run_id: str, base_sink: Any):
+        """Fan ``base_sink`` out to the configured durable/observability sinks.
+
+        Returns ``(telemetry, otel_adapter)``. ``otel_adapter`` is non-None only
+        when OTel is enabled and constructed successfully; the caller must call
+        ``otel_adapter.shutdown()`` once the run ends (success or failure) to end
+        the run span and flush exporters.
+        """
+        sinks: list[Any] = [base_sink]
+        otel_adapter = None
+
+        if self.otel_enabled:
+            try:
+                import opentelemetry.metrics as _metrics
+                import opentelemetry.trace as _trace
+
+                from card_capture.pipeline.telemetry import OpenTelemetryAdapter
+
+                otel_adapter = OpenTelemetryAdapter(
+                    _trace.get_tracer("card_capture"),
+                    _metrics.get_meter("card_capture.pipeline"),
+                    run_id=run_id,
+                )
+                sinks.append(otel_adapter)
+            except Exception:
+                otel_adapter = None
+                logger.warning(
+                    "OpenTelemetry adapter unavailable; continuing without it",
+                    exc_info=True,
+                )
+
+        if self.telemetry_repo:
+            from app.services.pipeline_telemetry import DbTelemetry
+
+            sinks.append(DbTelemetry(self.telemetry_repo, run_id))
+
+        from card_capture.pipeline.telemetry import CompositeTelemetry
+
+        return CompositeTelemetry(sinks), otel_adapter
 
     async def run_async(
         self,
@@ -141,26 +182,13 @@ class PipelineRunner:
         abs_output = str((Path(_REPO_ROOT) / output_dir).resolve())
         Path(abs_output).mkdir(parents=True, exist_ok=True)
 
-        import opentelemetry.trace as trace
-        import opentelemetry.metrics as metrics
-        from card_capture.pipeline.telemetry import CompositeTelemetry, OpenTelemetryAdapter
-        
         event_bus_telemetry = EventBusTelemetry(
             self.bus,
             run_id,
             log_sink=lambda line: self._persist_log(run_id, line),
         )
-        
-        sinks = [
-            event_bus_telemetry,
-            OpenTelemetryAdapter(trace.get_tracer("card_capture"), metrics.get_meter("card_capture.pipeline"))
-        ]
-        
-        if self.telemetry_repo:
-            from app.services.pipeline_telemetry import DbTelemetry
-            sinks.append(DbTelemetry(self.telemetry_repo, run_id))
-            
-        telemetry = CompositeTelemetry(sinks)
+
+        telemetry, otel_adapter = self._assemble_telemetry(run_id, event_bus_telemetry)
 
         # Resource sampler is keyed by stage. Wrap the telemetry so
         # stage_started flips the sampler's current_stage at the
@@ -208,6 +236,10 @@ class PipelineRunner:
         finally:
             if sampler is not None:
                 sampler.stop()
+            # End the run span (marking it failed if a stage left a span open)
+            # and flush exporters — must run on both success and failure paths.
+            if otel_adapter is not None:
+                otel_adapter.shutdown()
 
         violations = result.manifest.contract_violations
         if violations:
