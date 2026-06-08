@@ -64,3 +64,80 @@ def test_plan_crop_candidates_keeps_top_n_per_track_keyed_by_detection():
     # Top-2 by score = detections 1 (0.9) and 3 (0.5); detection 2 dropped.
     assert set(wanted.keys()) == {1, 3}
     assert wanted[1] == (5, [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)])
+
+
+def _frame(idx, w=200, h=300):
+    img = (np.random.RandomState(idx).rand(h, w, 3) * 255).astype(np.uint8)
+    fs = MagicMock()
+    fs.frame_index = idx
+    fs.image = img
+    fs.width = w
+    fs.height = h
+    fs.timestamp_ms = idx * 33
+    return fs
+
+
+def _track(instance_id, frame_indices):
+    return {
+        "instance_id": instance_id,
+        "track_id": 1,
+        "angle": "Unknown",
+        "session_id": 0,
+        "first_frame_index": frame_indices[0],
+        "candidates": [
+            {
+                "detection_id": idx * 10 + 1,
+                "frame_index": idx,
+                "timestamp_ms": idx * 33,
+                "width": 200,
+                "height": 300,
+                "corners": [(40.0, 50.0), (160.0, 55.0), (158.0, 240.0), (38.0, 235.0)],
+                "confidence": 0.9,
+                "novelty_score": 1.0,
+                "score_total": 0.7,
+                "image_path": "",
+                "triage_metrics": {},
+            }
+            for idx in frame_indices
+        ],
+    }
+
+
+class _CapturingTelemetry:
+    def __init__(self):
+        self.samples = []
+
+    def resource_sample(self, payload):
+        self.samples.append(payload)
+
+    def __getattr__(self, _name):
+        return lambda *a, **k: None
+
+
+def _state(tracks, n_frames=20):
+    request = MagicMock()
+    request.config = {
+        "device": "cpu", "rotate_180": False, "use_kornia": True, "kornia_device": "cpu",
+        "laplacian_scan_stride": 0, "max_corner_gap_frames": 30, "corner_refinement": False,
+        "fusion_target_frames": 1, "refine_crop_margin_px": 8, "refine_min_available_mb": 0.0,
+    }
+    return {
+        "request": request,
+        "sampled_frames": [_frame(i) for i in range(n_frames)],
+        "tracks_data": tracks,
+        "detections": [],
+        "video_id": 1,
+        "db_path": "/tmp/x.sqlite",
+    }
+
+
+def test_refine_frees_frames_in_prepass_and_still_refines():
+    state = _state([_track("inst-a", [5, 10, 15])])
+    tele = _CapturingTelemetry()
+    refine.run(state, telemetry=tele)
+
+    assert state.get("refined_tracks")
+    assert state["refined_tracks"][0]["frame_entries"]
+    assert not state.get("sampled_frames")  # raw buffer released
+    cropped = [s for s in tele.samples if s.get("event") == "refine_cropped"]
+    assert cropped and cropped[0]["frames_freed"] == 3  # frames 5, 10, 15

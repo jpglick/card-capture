@@ -146,8 +146,37 @@ def run(state: dict, *, telemetry) -> None:
 
     refined_tracks: List[Dict[str, Any]] = []
     tracks_data = state.get("tracks_data") or []
-    
     total_tracks = len(tracks_data)
+
+    # --- Crop pre-pass (spec 2026-06-07 Phase 1 §5.1) ----------------------
+    # refine is the last consumer of the raw frames; nothing downstream reads
+    # state["sampled_frames"]. Convert each top-N candidate to a small card-
+    # region crop and free the full 4K frame immediately, so the warp loop
+    # below never coexists with the multi-GB frame buffer.
+    margin = int(config.get("refine_crop_margin_px", 8))
+    wanted = _plan_crop_candidates(tracks_data, top_n=8)
+    by_frame: Dict[int, List[int]] = {}
+    for det_id, (fidx, _corners) in wanted.items():
+        by_frame.setdefault(fidx, []).append(det_id)
+
+    crops: Dict[int, Tuple[Optional[np.ndarray], list]] = {}
+    frames_freed = 0
+    for fidx, det_ids in by_frame.items():
+        frame = decoded_images.get(fidx)
+        for det_id in det_ids:
+            _fidx, corners = wanted[det_id]
+            if frame is None or not corners:
+                crops[det_id] = (None, corners)
+            else:
+                crops[det_id] = _crop_and_rebase(frame, corners, margin)
+        if decoded_images.pop(fidx, None) is not None:
+            frames_freed += 1
+    decoded_images.clear()
+    state["sampled_frames"] = []
+    frames = None
+    telemetry.resource_sample(
+        {"event": "refine_cropped", "crops": len(crops), "frames_freed": frames_freed}
+    )
 
     for i, track_dict in enumerate(tracks_data):
         instance_id = track_dict["instance_id"]
@@ -164,13 +193,14 @@ def run(state: dict, *, telemetry) -> None:
             batch_items = []
             batch_ids = []
             for c in scored_candidates:
-                raw = decoded_images.get(int(c["frame_index"]))
-                if raw is None:
+                det_id = int(c["detection_id"])
+                crop, local_corners = crops.get(det_id, (None, c.get("corners") or []))
+                if crop is None:
                     h = int(c.get("height", 10))
                     w = int(c.get("width", 10))
-                    raw = np.zeros((h, w, 3), dtype=np.uint8)
-                batch_items.append((raw, c["corners"]))
-                batch_ids.append(int(c["detection_id"]))
+                    crop = np.zeros((h, w, 3), dtype=np.uint8)
+                batch_items.append((crop, local_corners))
+                batch_ids.append(det_id)
             try:
                 warped = kornia_normalizer.warp_canonical_batch(
                     batch_items, rotate_180=rotate_180
@@ -184,13 +214,14 @@ def run(state: dict, *, telemetry) -> None:
 
         frame_entries: List[Dict[str, Any]] = []
         for c in scored_candidates:
-            raw = decoded_images.get(int(c["frame_index"]))
-            if raw is None:
-                raw = np.zeros((int(c.get("height", 10)), int(c.get("width", 10)), 3),
-                               dtype=np.uint8)
-            normalized = normalized_by_det.get(int(c["detection_id"]))
+            det_id = int(c["detection_id"])
+            crop, local_corners = crops.get(det_id, (None, c.get("corners") or []))
+            if crop is None:
+                crop = np.zeros((int(c.get("height", 10)), int(c.get("width", 10)), 3),
+                                dtype=np.uint8)
+            normalized = normalized_by_det.get(det_id)
             if normalized is None:
-                normalized = normalizer.normalize(raw, c["corners"], rotate_180=rotate_180)
+                normalized = normalizer.normalize(crop, local_corners, rotate_180=rotate_180)
 
             quality_score = scorer.score(
                 normalized,
