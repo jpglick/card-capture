@@ -58,15 +58,14 @@ class InMemoryTelemetry:
         self.events.append(TelemetryEvent("contract_violation", {"code": code, **metadata}))
 
 
-class OtelMetricsTelemetry:
-    """Publishes stage timings and counters via OpenTelemetry Metrics.
+class OpenTelemetryAdapter:
+    """Publishes stage timings via OpenTelemetry Metrics and Traces."""
 
-    Traces and span sampling are intentionally out of scope (see spec
-    Non-Goals). This adapter records histograms/counters only.
-    """
-
-    def __init__(self, meter: "opentelemetry.metrics.Meter") -> None:
+    def __init__(self, tracer: "opentelemetry.trace.Tracer", meter: "opentelemetry.metrics.Meter") -> None:
+        self._tracer = tracer
         self._meter = meter
+        self._active_spans = {}
+        
         self._stage_duration = meter.create_histogram(
             name="card_capture.pipeline.stage.duration_ms",
             description="Per-stage elapsed wall time",
@@ -81,24 +80,30 @@ class OtelMetricsTelemetry:
             description="Generic resource sample (free-form payload via attributes)",
         )
 
-    def stage_started(self, stage: str, metadata: Mapping[str, object]):
-        # Stage start is metadata only; durations are recorded on finish.
-        pass
+    def stage_started(self, stage: str, metadata: Mapping[str, object]) -> None:
+        attrs = {k: str(v) for k, v in metadata.items()}
+        span = self._tracer.start_span(stage, attributes=attrs)
+        self._active_spans[stage] = span
 
-    def stage_finished(self, stage: str, elapsed_ms: int, metadata: Mapping[str, object]):
+    def stage_finished(self, stage: str, elapsed_ms: int, metadata: Mapping[str, object]) -> None:
         attrs = {"stage": stage, **{k: str(v) for k, v in metadata.items()}}
         self._stage_duration.record(elapsed_ms, attributes=attrs)
         
+        span = self._active_spans.pop(stage, None)
+        if span:
+            span.set_attributes({k: str(v) for k, v in metadata.items()})
+            span.set_attribute("elapsed_ms", elapsed_ms)
+            span.end()
+            
     def progress(self, stage_id: str, pct: int, detail: str) -> None:
         pass
 
-    def resource_sample(self, sample: Mapping[str, object]):
-        # Record any single numeric field if present; otherwise a count of 1.
+    def resource_sample(self, sample: Mapping[str, object]) -> None:
         numeric = next((v for v in sample.values() if isinstance(v, (int, float))), 1)
         attrs = {k: str(v) for k, v in sample.items()}
         self._resource_sample.record(numeric, attributes=attrs)
 
-    def contract_violation(self, code: str, metadata: Mapping[str, object]):
+    def contract_violation(self, code: str, metadata: Mapping[str, object]) -> None:
         attrs = {"code": code, **{k: str(v) for k, v in metadata.items()}}
         self._violation_counter.add(1, attributes=attrs)
 
