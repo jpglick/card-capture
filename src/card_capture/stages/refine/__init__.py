@@ -89,6 +89,21 @@ def _crop_and_rebase(frame: np.ndarray, corners, margin: int):
     return crop, local
 
 
+def _plan_crop_candidates(tracks_data, top_n: int = 8) -> Dict[int, Tuple[int, list]]:
+    """Map detection_id -> (frame_index, corners) for the top-N scored
+    candidates of each track — exactly the set the warp loop will consume,
+    using the same sort as the loop so the crop set matches 1:1."""
+    wanted: Dict[int, Tuple[int, list]] = {}
+    for track_dict in tracks_data:
+        scored = sorted(
+            track_dict.get("candidates", []),
+            key=lambda c: c.get("score_total", 0.0), reverse=True,
+        )[:top_n]
+        for c in scored:
+            wanted[int(c["detection_id"])] = (int(c["frame_index"]), c.get("corners") or [])
+    return wanted
+
+
 def _scored_candidate_from_dict(c: dict) -> ScoredCandidate:
     from card_capture.core.models import QualityScore
     return ScoredCandidate(
