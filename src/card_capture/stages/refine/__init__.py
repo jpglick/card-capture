@@ -104,6 +104,16 @@ def _plan_crop_candidates(tracks_data, top_n: int = 8) -> Dict[int, Tuple[int, l
     return wanted
 
 
+def _available_memory_mb() -> float:
+    """Available physical memory in MiB — the quantity macOS jetsam acts on.
+    Returns inf if psutil is unavailable so the gate never aborts spuriously."""
+    try:
+        import psutil
+        return float(psutil.virtual_memory().available) / (1024.0 * 1024.0)
+    except Exception:
+        return math.inf
+
+
 def _scored_candidate_from_dict(c: dict) -> ScoredCandidate:
     from card_capture.core.models import QualityScore
     return ScoredCandidate(
@@ -153,6 +163,19 @@ def run(state: dict, *, telemetry) -> None:
     # state["sampled_frames"]. Convert each top-N candidate to a small card-
     # region crop and free the full 4K frame immediately, so the warp loop
     # below never coexists with the multi-GB frame buffer.
+    min_available_mb = float(config.get("refine_min_available_mb", 2048.0))
+    available_mb = _available_memory_mb()
+    if available_mb < min_available_mb:
+        decoded_images.clear()
+        state["sampled_frames"] = []
+        raise RuntimeError(
+            f"refine aborted: only {available_mb:.0f}MB physical memory available "
+            f"(< {min_available_mb:.0f}MB floor) — refusing to start 4K cropping/"
+            f"warps to avoid an OS memory-pressure SIGKILL. Close other apps, "
+            f"process a shorter clip, lower fast_scan_fps, or lower "
+            f"refine_min_available_mb to override."
+        )
+
     margin = int(config.get("refine_crop_margin_px", 8))
     wanted = _plan_crop_candidates(tracks_data, top_n=8)
     by_frame: Dict[int, List[int]] = {}

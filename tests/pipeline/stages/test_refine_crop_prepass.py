@@ -141,3 +141,22 @@ def test_refine_frees_frames_in_prepass_and_still_refines():
     assert not state.get("sampled_frames")  # raw buffer released
     cropped = [s for s in tele.samples if s.get("event") == "refine_cropped"]
     assert cropped and cropped[0]["frames_freed"] == 3  # frames 5, 10, 15
+
+
+def test_available_memory_mb_returns_inf_when_psutil_unavailable(monkeypatch):
+    import psutil
+
+    def _boom():
+        raise RuntimeError("no psutil")
+
+    monkeypatch.setattr(psutil, "virtual_memory", _boom)
+    assert refine._available_memory_mb() == math.inf
+
+
+def test_refine_aborts_cleanly_when_below_memory_floor(monkeypatch):
+    monkeypatch.setattr(refine, "_available_memory_mb", lambda: 100.0)
+    state = _state([_track("inst-a", [5, 10, 15])])
+    state["request"].config["refine_min_available_mb"] = 4096.0
+    with pytest.raises(RuntimeError, match="memory"):
+        refine.run(state, telemetry=MagicMock())
+    assert not state.get("sampled_frames")  # buffer released on the failure path
