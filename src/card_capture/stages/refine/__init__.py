@@ -183,7 +183,7 @@ def run(state: dict, *, telemetry) -> None:
         by_frame.setdefault(fidx, []).append(det_id)
 
     crops: Dict[int, Tuple[Optional[np.ndarray], list]] = {}
-    frames_freed = 0
+    frames_freed = len(decoded_images)
     for fidx, det_ids in by_frame.items():
         frame = decoded_images.get(fidx)
         for det_id in det_ids:
@@ -192,8 +192,7 @@ def run(state: dict, *, telemetry) -> None:
                 crops[det_id] = (None, corners)
             else:
                 crops[det_id] = _crop_and_rebase(frame, corners, margin)
-        if decoded_images.pop(fidx, None) is not None:
-            frames_freed += 1
+        decoded_images.pop(fidx, None)
     decoded_images.clear()
     state["sampled_frames"] = []
     frames = None
@@ -224,6 +223,23 @@ def run(state: dict, *, telemetry) -> None:
                     crop = np.zeros((h, w, 3), dtype=np.uint8)
                 batch_items.append((crop, local_corners))
                 batch_ids.append(det_id)
+            
+            # Kornia normalizer calls np.stack() which requires all crops to have the same shape.
+            # We must pad them to the max width/height of the batch.
+            if batch_items:
+                max_h = max(item[0].shape[0] for item in batch_items)
+                max_w = max(item[0].shape[1] for item in batch_items)
+                padded_items = []
+                for crop, corners in batch_items:
+                    h, w = crop.shape[:2]
+                    if h < max_h or w < max_w:
+                        padded = np.zeros((max_h, max_w, 3), dtype=crop.dtype)
+                        padded[:h, :w] = crop
+                        padded_items.append((padded, corners))
+                    else:
+                        padded_items.append((crop, corners))
+                batch_items = padded_items
+
             try:
                 warped = kornia_normalizer.warp_canonical_batch(
                     batch_items, rotate_180=rotate_180

@@ -140,7 +140,7 @@ def test_refine_frees_frames_in_prepass_and_still_refines():
     assert state["refined_tracks"][0]["frame_entries"]
     assert not state.get("sampled_frames")  # raw buffer released
     cropped = [s for s in tele.samples if s.get("event") == "refine_cropped"]
-    assert cropped and cropped[0]["frames_freed"] == 3  # frames 5, 10, 15
+    assert cropped and cropped[0]["frames_freed"] == 20  # all 20 frames freed
 
 
 def test_available_memory_mb_returns_inf_when_psutil_unavailable(monkeypatch):
