@@ -128,7 +128,8 @@ class LocalPipelineRuntime:
                     raise
                 elapsed_ms = int((time.perf_counter() - start) * 1000)
                 timings.append(StageTiming(stage=name, elapsed_ms=elapsed_ms))
-                self._telemetry.stage_finished(name, elapsed_ms, {})
+                stage_metrics = state.get("stage_metrics", {}).get(name, {})
+                self._telemetry.stage_finished(name, elapsed_ms, stage_metrics)
         finally:
             runtime_worker.stop()
             writer.stop()
