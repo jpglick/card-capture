@@ -22,6 +22,19 @@ class KorniaNormalizer:
             device = probe_torch_device_status("auto").resolved
         self.device = torch.device(device)
 
+    def release_cache(self) -> None:
+        """Return cached accelerator blocks to the OS. No-op on CPU.
+
+        Called between tracks in refine so the MPS allocator's high-water mark
+        doesn't accumulate across a long run and tip a memory-tight box over.
+        """
+        if torch is None:
+            return
+        if self.device.type == "mps" and hasattr(torch, "mps"):
+            torch.mps.empty_cache()
+        elif self.device.type == "cuda":
+            torch.cuda.empty_cache()
+
     def _perspective_matrix(self, corners: List[Point]) -> np.ndarray:
         """CPU-side 3x3 perspective matrix mapping the card quad → portrait canvas."""
         pts_dst = np.array(

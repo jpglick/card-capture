@@ -73,6 +73,11 @@ class PipelineConfig:
     # Post-Processing
     rotate_180: bool = False
     fusion_target_frames: int = 1
+    # Refine memory safety (16GB-box OOM guard). Abort the run cleanly if
+    # available physical memory drops below the floor before a track's 4K warp;
+    # cap the per-warp GPU spike via the chunk size. See refine stage.
+    refine_min_available_mb: float = 2048.0
+    refine_warp_chunk_size: int = 4
     
     # Hardware Acceleration
     use_kornia: bool = True
@@ -118,6 +123,8 @@ class PipelineConfig:
             "rotate_180": self.rotate_180,
             "use_kornia": self.use_kornia,
             "kornia_device": self.device,
+            "refine_min_available_mb": self.refine_min_available_mb,
+            "refine_warp_chunk_size": self.refine_warp_chunk_size,
             # New back-half knobs
             "novelty_floor": self.novelty_floor,
             "track_confidence_floor": self.track_confidence_floor,

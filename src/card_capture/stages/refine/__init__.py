@@ -13,6 +13,7 @@ Three V4-vs-V5.5 substitutions (audited in P13):
 """
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -60,6 +61,36 @@ def _frame_index_lookup(frames) -> Dict[int, np.ndarray]:
     return {int(f.frame_index): f.image for f in frames}
 
 
+def _available_memory_mb() -> float:
+    """Available physical memory in MiB — the quantity the macOS jetsam killer
+    actually acts on.
+
+    We gate on *available headroom*, not ``virtual_memory().percent``: on a
+    16GB box a refine SIGKILL was observed while percent read only ~82% (a 95%
+    ceiling never fired), because jetsam triggers on a sudden physical-memory
+    spike, not a gradual percentage. Returns ``inf`` if psutil is unavailable
+    so the guard can never abort a run spuriously on a host we can't read.
+    """
+    try:
+        import psutil
+        return float(psutil.virtual_memory().available) / (1024.0 * 1024.0)
+    except Exception:
+        return math.inf
+
+
+def _last_track_using_frame(tracks_data) -> Dict[int, int]:
+    """Map each candidate ``frame_index`` to the highest track index that
+    references it, so refine can free a decoded frame the moment its last
+    consumer is done (instead of holding the whole ~GB buffer resident for the
+    entire loop). Uses every candidate, not just the per-track top-8, so a
+    frame is never freed before a track that could still select it."""
+    last_use: Dict[int, int] = {}
+    for i, track_dict in enumerate(tracks_data):
+        for c in track_dict.get("candidates", []):
+            last_use[int(c["frame_index"])] = i
+    return last_use
+
+
 def _scored_candidate_from_dict(c: dict) -> ScoredCandidate:
     from card_capture.core.models import QualityScore
     return ScoredCandidate(
@@ -84,6 +115,14 @@ def run(state: dict, *, telemetry) -> None:
     config = state["request"].config
     decoded_images = _frame_index_lookup(frames)
 
+    # refine is the last consumer of the raw decoded frames — nothing
+    # downstream (score/resolve/fuse/dedup/store) reads state["sampled_frames"].
+    # Drop the FrameSample list now so decoded_images is the *sole* owner of
+    # each 4K array; that's what lets the per-track frees below actually return
+    # memory to the OS instead of leaving a second reference pinning it.
+    frames = None
+    state["sampled_frames"] = []
+
     normalizer = PrecisionNormalizer()
     kornia_normalizer: Optional[KorniaNormalizer] = None
     if config.get("use_kornia", True):
@@ -102,10 +141,37 @@ def run(state: dict, *, telemetry) -> None:
 
     refined_tracks: List[Dict[str, Any]] = []
     tracks_data = state.get("tracks_data") or []
-    
     total_tracks = len(tracks_data)
 
+    # --- Memory safety (see tests/pipeline/stages/test_refine_memory_safety) --
+    # On a 16GB box refine is the peak-memory stage: the decoded 4K buffer is
+    # resident while each track's Kornia warp spikes another ~GB on top, and an
+    # OS memory-pressure SIGKILL here leaves the run orphaned as 'running'. We
+    # (1) gate on available *physical* headroom (jetsam's actual trigger),
+    # (2) keep the per-warp spike small via a modest chunk size, and (3) free
+    # each decoded frame the moment its last track is done.
+    min_available_mb = float(config.get("refine_min_available_mb", 2048.0))
+    warp_chunk_size = int(config.get("refine_warp_chunk_size", 4))
+    last_use = _last_track_using_frame(tracks_data)
+    # Frames no track references at all are pure dead weight during refine.
+    for fidx in [k for k in decoded_images if k not in last_use]:
+        del decoded_images[fidx]
+    frames_to_free: Dict[int, List[int]] = {}
+    for fidx, ti in last_use.items():
+        frames_to_free.setdefault(ti, []).append(fidx)
+
     for i, track_dict in enumerate(tracks_data):
+        available_mb = _available_memory_mb()
+        if available_mb < min_available_mb:
+            decoded_images.clear()
+            state["sampled_frames"] = []
+            raise RuntimeError(
+                f"refine aborted at track {i + 1}/{total_tracks}: only "
+                f"{available_mb:.0f}MB physical memory available (< "
+                f"{min_available_mb:.0f}MB floor) — refusing further 4K GPU warps "
+                f"to avoid an OS memory-pressure SIGKILL. Process a shorter clip, "
+                f"lower fast_scan_fps, or lower refine_min_available_mb to override."
+            )
         instance_id = track_dict["instance_id"]
         candidates_data = track_dict["candidates"]
 
@@ -129,7 +195,7 @@ def run(state: dict, *, telemetry) -> None:
                 batch_ids.append(int(c["detection_id"]))
             try:
                 warped = kornia_normalizer.warp_canonical_batch(
-                    batch_items, rotate_180=rotate_180
+                    batch_items, rotate_180=rotate_180, chunk_size=warp_chunk_size
                 )
                 for did, img in zip(batch_ids, warped):
                     normalized_by_det[did] = img
@@ -251,8 +317,29 @@ def run(state: dict, *, telemetry) -> None:
             "reid_embedding": reid_embedding,
         })
         
+        # Return this track's MPS warp allocations to the OS before the next
+        # track so the accelerator high-water mark doesn't accumulate.
+        if kornia_normalizer is not None:
+            kornia_normalizer.release_cache()
+
+        # Free every decoded frame whose last consuming track was this one, so
+        # the resident 4K buffer shrinks as the loop advances instead of staying
+        # at its peak the whole time (resident_frames is the metric that was
+        # missing when this OOM was first diagnosed).
+        for fidx in frames_to_free.get(i, []):
+            decoded_images.pop(fidx, None)
+        telemetry.resource_sample(
+            {"event": "refine_frame_buffer", "track": i,
+             "resident_frames": len(decoded_images)}
+        )
+
         pct = int(100 * (i + 1) / total_tracks)
         telemetry.progress("refine", pct, f"track {i+1}/{total_tracks}")
+
+    # Safety net: drop any frames left for tracks that hit `continue` above.
+    # The per-track frees already returned the bulk of the buffer.
+    decoded_images.clear()
+    state["sampled_frames"] = []
 
     state["refined_tracks"] = refined_tracks
     emit_stage_metrics(state, stage="refine", metrics={"refined_tracks": len(refined_tracks)})
