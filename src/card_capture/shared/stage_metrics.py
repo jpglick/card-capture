@@ -5,6 +5,11 @@ from typing import Mapping
 
 
 def emit_stage_metrics(state: dict, *, stage: str, metrics: Mapping[str, object]) -> None:
+    # Buffer for the telemetry bridge: LocalPipelineRuntime drains this into the
+    # stage_finished(...) metadata. Written unconditionally so the bridge works
+    # even when no events repo is wired (e.g. CLI / tests).
+    state.setdefault("stage_metrics", {}).setdefault(stage, {}).update(metrics)
+
     repos = state.get("repos") or {}
     events_repo = repos.get("events")
     request = state.get("request")
