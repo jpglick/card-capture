@@ -5,7 +5,7 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Optional, Type
+from typing import Any, Optional, Type
 
 from card_capture.data.connection import open_connection
 from card_capture.data.sql_queries import (
@@ -25,10 +25,11 @@ from app.services.pipeline_telemetry import EventBusTelemetry
 
 
 class PipelineRunner:
-    def __init__(self, bus: EventBus, flow_cls: Optional[Type] = None, db_path: Optional[Path] = None) -> None:
+    def __init__(self, bus: EventBus, flow_cls: Optional[Type] = None, db_path: Optional[Path] = None, telemetry_repo: Optional[Any] = None) -> None:
         self.bus = bus
         self.flow_cls = flow_cls
         self.db_path = db_path  # for updating video status on failure
+        self.telemetry_repo = telemetry_repo
 
     async def run_async(
         self,
@@ -140,11 +141,26 @@ class PipelineRunner:
         abs_output = str((Path(_REPO_ROOT) / output_dir).resolve())
         Path(abs_output).mkdir(parents=True, exist_ok=True)
 
-        telemetry = EventBusTelemetry(
+        import opentelemetry.trace as trace
+        import opentelemetry.metrics as metrics
+        from card_capture.pipeline.telemetry import CompositeTelemetry, OpenTelemetryAdapter
+        
+        event_bus_telemetry = EventBusTelemetry(
             self.bus,
             run_id,
             log_sink=lambda line: self._persist_log(run_id, line),
         )
+        
+        sinks = [
+            event_bus_telemetry,
+            OpenTelemetryAdapter(trace.get_tracer("card_capture"), metrics.get_meter("card_capture.pipeline"))
+        ]
+        
+        if self.telemetry_repo:
+            from app.services.pipeline_telemetry import DbTelemetry
+            sinks.append(DbTelemetry(self.telemetry_repo, run_id))
+            
+        telemetry = CompositeTelemetry(sinks)
 
         # Resource sampler is keyed by stage. Wrap the telemetry so
         # stage_started flips the sampler's current_stage at the

@@ -13,7 +13,8 @@ Three V4-vs-V5.5 substitutions (audited in P13):
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+import math
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -60,6 +61,59 @@ def _frame_index_lookup(frames) -> Dict[int, np.ndarray]:
     return {int(f.frame_index): f.image for f in frames}
 
 
+def _quad_bbox(corners, frame_w: int, frame_h: int, margin: int) -> Tuple[int, int, int, int]:
+    """Axis-aligned bounding box of a card quad, expanded by `margin` and
+    clamped to the frame. The margin gives the perspective warp interpolation
+    neighbours at the quad edge."""
+    xs = [p[0] for p in corners]
+    ys = [p[1] for p in corners]
+    x0 = max(0, int(math.floor(min(xs))) - margin)
+    y0 = max(0, int(math.floor(min(ys))) - margin)
+    x1 = min(int(frame_w), int(math.ceil(max(xs))) + margin)
+    y1 = min(int(frame_h), int(math.ceil(max(ys))) + margin)
+    return x0, y0, x1, y1
+
+
+def _crop_and_rebase(frame: np.ndarray, corners, margin: int):
+    """Crop the card region out of `frame` (always a `.copy()`, never a view —
+    a view would pin the full frame and defeat the memory win) and rebase the
+    corners into crop-local coordinates. `warp(frame, corners)` ==
+    `warp(crop, rebased)` because the perspective warp is translation-equivariant
+    in the source quad."""
+    h, w = frame.shape[:2]
+    x0, y0, x1, y1 = _quad_bbox(corners, w, h, margin)
+    x1 = max(x1, x0 + 1)
+    y1 = max(y1, y0 + 1)
+    crop = frame[y0:y1, x0:x1].copy()
+    local = [(float(px) - x0, float(py) - y0) for px, py in corners]
+    return crop, local
+
+
+def _plan_crop_candidates(tracks_data, top_n: int = 8) -> Dict[int, Tuple[int, list]]:
+    """Map detection_id -> (frame_index, corners) for the top-N scored
+    candidates of each track — exactly the set the warp loop will consume,
+    using the same sort as the loop so the crop set matches 1:1."""
+    wanted: Dict[int, Tuple[int, list]] = {}
+    for track_dict in tracks_data:
+        scored = sorted(
+            track_dict.get("candidates", []),
+            key=lambda c: c.get("score_total", 0.0), reverse=True,
+        )[:top_n]
+        for c in scored:
+            wanted[int(c["detection_id"])] = (int(c["frame_index"]), c.get("corners") or [])
+    return wanted
+
+
+def _available_memory_mb() -> float:
+    """Available physical memory in MiB — the quantity macOS jetsam acts on.
+    Returns inf if psutil is unavailable so the gate never aborts spuriously."""
+    try:
+        import psutil
+        return float(psutil.virtual_memory().available) / (1024.0 * 1024.0)
+    except Exception:
+        return math.inf
+
+
 def _scored_candidate_from_dict(c: dict) -> ScoredCandidate:
     from card_capture.core.models import QualityScore
     return ScoredCandidate(
@@ -102,8 +156,49 @@ def run(state: dict, *, telemetry) -> None:
 
     refined_tracks: List[Dict[str, Any]] = []
     tracks_data = state.get("tracks_data") or []
-    
     total_tracks = len(tracks_data)
+
+    # --- Crop pre-pass (spec 2026-06-07 Phase 1 §5.1) ----------------------
+    # refine is the last consumer of the raw frames; nothing downstream reads
+    # state["sampled_frames"]. Convert each top-N candidate to a small card-
+    # region crop and free the full 4K frame immediately, so the warp loop
+    # below never coexists with the multi-GB frame buffer.
+    min_available_mb = float(config.get("refine_min_available_mb", 2048.0))
+    available_mb = _available_memory_mb()
+    if available_mb < min_available_mb:
+        decoded_images.clear()
+        state["sampled_frames"] = []
+        raise RuntimeError(
+            f"refine aborted: only {available_mb:.0f}MB physical memory available "
+            f"(< {min_available_mb:.0f}MB floor) — refusing to start 4K cropping/"
+            f"warps to avoid an OS memory-pressure SIGKILL. Close other apps, "
+            f"process a shorter clip, lower fast_scan_fps, or lower "
+            f"refine_min_available_mb to override."
+        )
+
+    margin = int(config.get("refine_crop_margin_px", 8))
+    wanted = _plan_crop_candidates(tracks_data, top_n=8)
+    by_frame: Dict[int, List[int]] = {}
+    for det_id, (fidx, _corners) in wanted.items():
+        by_frame.setdefault(fidx, []).append(det_id)
+
+    crops: Dict[int, Tuple[Optional[np.ndarray], list]] = {}
+    frames_freed = len(decoded_images)
+    for fidx, det_ids in by_frame.items():
+        frame = decoded_images.get(fidx)
+        for det_id in det_ids:
+            _fidx, corners = wanted[det_id]
+            if frame is None or not corners:
+                crops[det_id] = (None, corners)
+            else:
+                crops[det_id] = _crop_and_rebase(frame, corners, margin)
+        decoded_images.pop(fidx, None)
+    decoded_images.clear()
+    state["sampled_frames"] = []
+    frames = None
+    telemetry.resource_sample(
+        {"event": "refine_cropped", "crops": len(crops), "frames_freed": frames_freed}
+    )
 
     for i, track_dict in enumerate(tracks_data):
         instance_id = track_dict["instance_id"]
@@ -120,13 +215,31 @@ def run(state: dict, *, telemetry) -> None:
             batch_items = []
             batch_ids = []
             for c in scored_candidates:
-                raw = decoded_images.get(int(c["frame_index"]))
-                if raw is None:
+                det_id = int(c["detection_id"])
+                crop, local_corners = crops.get(det_id, (None, c.get("corners") or []))
+                if crop is None:
                     h = int(c.get("height", 10))
                     w = int(c.get("width", 10))
-                    raw = np.zeros((h, w, 3), dtype=np.uint8)
-                batch_items.append((raw, c["corners"]))
-                batch_ids.append(int(c["detection_id"]))
+                    crop = np.zeros((h, w, 3), dtype=np.uint8)
+                batch_items.append((crop, local_corners))
+                batch_ids.append(det_id)
+            
+            # Kornia normalizer calls np.stack() which requires all crops to have the same shape.
+            # We must pad them to the max width/height of the batch.
+            if batch_items:
+                max_h = max(item[0].shape[0] for item in batch_items)
+                max_w = max(item[0].shape[1] for item in batch_items)
+                padded_items = []
+                for crop, corners in batch_items:
+                    h, w = crop.shape[:2]
+                    if h < max_h or w < max_w:
+                        padded = np.zeros((max_h, max_w, 3), dtype=crop.dtype)
+                        padded[:h, :w] = crop
+                        padded_items.append((padded, corners))
+                    else:
+                        padded_items.append((crop, corners))
+                batch_items = padded_items
+
             try:
                 warped = kornia_normalizer.warp_canonical_batch(
                     batch_items, rotate_180=rotate_180
@@ -140,13 +253,14 @@ def run(state: dict, *, telemetry) -> None:
 
         frame_entries: List[Dict[str, Any]] = []
         for c in scored_candidates:
-            raw = decoded_images.get(int(c["frame_index"]))
-            if raw is None:
-                raw = np.zeros((int(c.get("height", 10)), int(c.get("width", 10)), 3),
-                               dtype=np.uint8)
-            normalized = normalized_by_det.get(int(c["detection_id"]))
+            det_id = int(c["detection_id"])
+            crop, local_corners = crops.get(det_id, (None, c.get("corners") or []))
+            if crop is None:
+                crop = np.zeros((int(c.get("height", 10)), int(c.get("width", 10)), 3),
+                                dtype=np.uint8)
+            normalized = normalized_by_det.get(det_id)
             if normalized is None:
-                normalized = normalizer.normalize(raw, c["corners"], rotate_180=rotate_180)
+                normalized = normalizer.normalize(crop, local_corners, rotate_180=rotate_180)
 
             quality_score = scorer.score(
                 normalized,

@@ -26,7 +26,8 @@ def _build_runner(request: Request):
     """Return the local in-process pipeline runner (Apple Silicon / CPU)."""
     bus = request.app.state.event_bus
     db_path = request.app.state.db_path
-    return PipelineRunner(bus=bus, flow_cls=None, db_path=db_path)
+    telemetry_repo = getattr(request.app.state, "telemetry_repo", None)
+    return PipelineRunner(bus=bus, flow_cls=None, db_path=db_path, telemetry_repo=telemetry_repo)
 
 
 @router.get("", response_model=list[Video])
