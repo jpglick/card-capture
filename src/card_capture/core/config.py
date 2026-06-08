@@ -74,6 +74,10 @@ class PipelineConfig:
     rotate_180: bool = False
     fusion_target_frames: int = 1
     
+    # Refine memory safety (16GB-box OOM guard); see refine crop pre-pass.
+    refine_crop_margin_px: int = 8
+    refine_min_available_mb: float = 2048.0
+    
     # Hardware Acceleration
     use_kornia: bool = True
     # When MPS is unavailable, the pipeline hard-fails unless this is set.
@@ -118,6 +122,8 @@ class PipelineConfig:
             "rotate_180": self.rotate_180,
             "use_kornia": self.use_kornia,
             "kornia_device": self.device,
+            "refine_crop_margin_px": self.refine_crop_margin_px,
+            "refine_min_available_mb": self.refine_min_available_mb,
             # New back-half knobs
             "novelty_floor": self.novelty_floor,
             "track_confidence_floor": self.track_confidence_floor,
