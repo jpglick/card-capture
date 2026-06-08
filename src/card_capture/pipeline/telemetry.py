@@ -6,7 +6,10 @@ debugging, and (added in Task 1.4) an OpenTelemetry Metrics adapter.
 from __future__ import annotations
 
 import dataclasses
+import logging
 from typing import Mapping, Protocol
+
+logger = logging.getLogger(__name__)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -98,3 +101,46 @@ class OtelMetricsTelemetry:
     def contract_violation(self, code: str, metadata: Mapping[str, object]):
         attrs = {"code": code, **{k: str(v) for k, v in metadata.items()}}
         self._violation_counter.add(1, attributes=attrs)
+
+
+class CompositeTelemetry:
+    """Broadcasts telemetry events to multiple underlying sinks."""
+
+    def __init__(self, sinks: list[PipelineTelemetry]) -> None:
+        self._sinks = sinks
+
+    def stage_started(self, stage: str, metadata: Mapping[str, object]) -> None:
+        for sink in self._sinks:
+            try:
+                sink.stage_started(stage, metadata)
+            except Exception as e:
+                logger.warning("Telemetry sink %s failed: %s", type(sink).__name__, e)
+
+    def stage_finished(self, stage: str, elapsed_ms: int, metadata: Mapping[str, object]) -> None:
+        for sink in self._sinks:
+            try:
+                sink.stage_finished(stage, elapsed_ms, metadata)
+            except Exception as e:
+                logger.warning("Telemetry sink %s failed: %s", type(sink).__name__, e)
+            
+    def progress(self, stage_id: str, pct: int, detail: str) -> None:
+        for sink in self._sinks:
+            try:
+                sink.progress(stage_id, pct, detail)
+            except Exception as e:
+                logger.warning("Telemetry sink %s failed: %s", type(sink).__name__, e)
+
+    def resource_sample(self, sample: Mapping[str, object]) -> None:
+        for sink in self._sinks:
+            try:
+                sink.resource_sample(sample)
+            except Exception as e:
+                logger.warning("Telemetry sink %s failed: %s", type(sink).__name__, e)
+
+    def contract_violation(self, code: str, metadata: Mapping[str, object]) -> None:
+        for sink in self._sinks:
+            try:
+                sink.contract_violation(code, metadata)
+            except Exception as e:
+                logger.warning("Telemetry sink %s failed: %s", type(sink).__name__, e)
+
