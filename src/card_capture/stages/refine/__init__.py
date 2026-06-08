@@ -13,7 +13,8 @@ Three V4-vs-V5.5 substitutions (audited in P13):
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+import math
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -58,6 +59,34 @@ def _get_embedder():
 
 def _frame_index_lookup(frames) -> Dict[int, np.ndarray]:
     return {int(f.frame_index): f.image for f in frames}
+
+
+def _quad_bbox(corners, frame_w: int, frame_h: int, margin: int) -> Tuple[int, int, int, int]:
+    """Axis-aligned bounding box of a card quad, expanded by `margin` and
+    clamped to the frame. The margin gives the perspective warp interpolation
+    neighbours at the quad edge."""
+    xs = [p[0] for p in corners]
+    ys = [p[1] for p in corners]
+    x0 = max(0, int(math.floor(min(xs))) - margin)
+    y0 = max(0, int(math.floor(min(ys))) - margin)
+    x1 = min(int(frame_w), int(math.ceil(max(xs))) + margin)
+    y1 = min(int(frame_h), int(math.ceil(max(ys))) + margin)
+    return x0, y0, x1, y1
+
+
+def _crop_and_rebase(frame: np.ndarray, corners, margin: int):
+    """Crop the card region out of `frame` (always a `.copy()`, never a view —
+    a view would pin the full frame and defeat the memory win) and rebase the
+    corners into crop-local coordinates. `warp(frame, corners)` ==
+    `warp(crop, rebased)` because the perspective warp is translation-equivariant
+    in the source quad."""
+    h, w = frame.shape[:2]
+    x0, y0, x1, y1 = _quad_bbox(corners, w, h, margin)
+    x1 = max(x1, x0 + 1)
+    y1 = max(y1, y0 + 1)
+    crop = frame[y0:y1, x0:x1].copy()
+    local = [(float(px) - x0, float(py) - y0) for px, py in corners]
+    return crop, local
 
 
 def _scored_candidate_from_dict(c: dict) -> ScoredCandidate:
