@@ -45,6 +45,7 @@ app = [
   "pydantic>=2",
   "httpx",
   "python-multipart",
+  "carddealerpro @ git+https://github.com/jpglick/cdp_client.git",
 ]
 test = [
   "pytest",

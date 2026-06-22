@@ -2,7 +2,7 @@
     import { onMount, onDestroy, tick } from 'svelte';
     import { page } from '$app/state';
     import { api } from '$lib/api/client';
-    import type { RunDetail, RunResources, ResourceSample, StageMarker } from '$lib/api/types';
+    import type { RunDetail, RunResources, ResourceSample, StageMarker, CdpSubmission } from '$lib/api/types';
     import ResourceChart from '$lib/components/ResourceChart.svelte';
     import PipelineSparkline from '$lib/components/PipelineSparkline.svelte';
 
@@ -16,6 +16,11 @@
     let evtSource: EventSource | null = null;
     let pollTimer: ReturnType<typeof setInterval> | null = null;
     let logBoxElement: HTMLElement | undefined = $state();
+
+    // CDP bulk submit state
+    let cdpSubmissions = $state<Record<string, CdpSubmission>>({});
+    let cdpBulkSubmitting = $state(false);
+    let cdpBulkResult = $state<{ batch_id: string | null; submitted: number; skipped: number; failed: number; errors: string[] } | null>(null);
 
     $effect(() => {
         if (logBoxElement && (liveLines.length > 0 || run?.logs?.length)) {
@@ -92,6 +97,35 @@
         }
     }
 
+    async function loadCdpSubmissions() {
+        try {
+            cdpSubmissions = await api.cdp.getRunSubmissions(runId);
+        } catch { /* no submissions yet */ }
+    }
+
+    async function bulkSubmitToCdp() {
+        cdpBulkSubmitting = true;
+        cdpBulkResult = null;
+        try {
+            cdpBulkResult = await api.cdp.bulkSubmitRun(runId);
+            // Reload submission statuses
+            await loadCdpSubmissions();
+        } catch (e: any) {
+            cdpBulkResult = { batch_id: null, submitted: 0, skipped: 0, failed: 0, errors: [e.message] };
+        } finally {
+            cdpBulkSubmitting = false;
+        }
+    }
+
+    async function pollCdpBatch(batchId: string) {
+        try {
+            await api.cdp.pollBatch(batchId);
+            await loadCdpSubmissions();
+        } catch (e) {
+            console.error('CDP poll failed:', e);
+        }
+    }
+
     async function loadResources() {
         try {
             resources = await api.runs.resources(runId);
@@ -136,6 +170,7 @@
     onMount(() => {
         loadRun().then(() => {
             loadResources();
+            loadCdpSubmissions();
             if (run?.status === 'running') {
                 connectSSE();
                 pollTimer = setInterval(loadResources, 3000);
@@ -192,6 +227,10 @@
     const hasNeural = $derived.by(() => (resources?.samples ?? []).some((s: ResourceSample) => s.neural_pct != null));
     const isUnified = $derived(resources?.host_info?.vram_is_unified ?? false);
     const knownStageNames = $derived([...new Set(stagesWithColor.map(s => s.name))]);
+    // CDP derived stats
+    const cdpSubmittedCount = $derived(Object.values(cdpSubmissions).length);
+    const cdpIdentifiedCount = $derived(Object.values(cdpSubmissions).filter(s => s.status === 'identified').length);
+    const cdpPendingBatches = $derived([...new Set(Object.values(cdpSubmissions).filter(s => s.status === 'submitted' || s.status === 'processing').map(s => s.cdp_batch_id))]);
 </script>
 
 <div class="page-header">
@@ -215,6 +254,14 @@
             <div class="stat-label">Cards extracted</div>
             <div class="stat-value">{run.cards_extracted ?? 0}</div>
         </div>
+        {#if cdpSubmittedCount > 0}
+            <div class="stat-card cdp-stat">
+                <div class="stat-label">CDP submitted</div>
+                <div class="stat-value cdp-count">{cdpIdentifiedCount}/{cdpSubmittedCount}
+                    <span class="cdp-label-sub">identified</span>
+                </div>
+            </div>
+        {/if}
         <div class="stat-card">
             <div class="stat-label">Elapsed</div>
             <div class="stat-value">{run.elapsed_ms ? fmt(run.elapsed_ms) : '—'}</div>
@@ -230,7 +277,55 @@
     </div>
 
     {#if run.cards_extracted > 0}
-        <a href="/cards?run_id={runId}" class="view-cards-btn">View {run.cards_extracted} cards →</a>
+        <div class="run-actions">
+            <a href="/cards?run_id={runId}" class="view-cards-btn">View {run.cards_extracted} cards →</a>
+            <button
+                class="cdp-bulk-btn"
+                disabled={cdpBulkSubmitting}
+                onclick={bulkSubmitToCdp}
+                title="Submit all visible cards in this run to CardDealerPro"
+            >
+                {#if cdpBulkSubmitting}
+                    <span class="cdp-spinner">⏳</span> Submitting to CDP…
+                {:else}
+                    📤 Submit all to CDP
+                {/if}
+            </button>
+            {#if cdpPendingBatches.length > 0}
+                <button
+                    class="cdp-poll-btn"
+                    onclick={() => cdpPendingBatches.forEach(b => pollCdpBatch(b))}
+                    title="Refresh identification status from CardDealerPro"
+                >
+                    ↻ Refresh CDP status
+                </button>
+            {/if}
+        </div>
+
+        {#if cdpBulkResult}
+            <div class="cdp-result" class:cdp-result-ok={cdpBulkResult.submitted > 0} class:cdp-result-err={cdpBulkResult.failed > 0}>
+                {#if cdpBulkResult.batch_id}
+                    <span class="cdp-result-badge">Batch: <code>{cdpBulkResult.batch_id}</code></span>
+                {/if}
+                <span>✓ {cdpBulkResult.submitted} submitted</span>
+                {#if cdpBulkResult.skipped > 0}<span class="cdp-muted">· {cdpBulkResult.skipped} already submitted</span>{/if}
+                {#if cdpBulkResult.failed > 0}<span class="cdp-err">· {cdpBulkResult.failed} failed</span>{/if}
+            </div>
+        {/if}
+
+        {#if cdpSubmittedCount > 0}
+            <div class="cdp-summary-bar">
+                <span class="cdp-summary-label">CardDealerPro:</span>
+                {#each Object.entries(cdpSubmissions) as [iid, sub]}
+                    <span class="cdp-mini-badge cdp-{sub.status}" title={sub.identified_name ?? sub.status}>
+                        {sub.status === 'identified' && sub.identified_name
+                            ? sub.identified_name.slice(0, 28) + (sub.identified_name.length > 28 ? '…' : '')
+                            : sub.status}
+                        {#if sub.suggested_price}<span class="cdp-price">${sub.suggested_price.toFixed(2)}</span>{/if}
+                    </span>
+                {/each}
+            </div>
+        {/if}
     {/if}
 
     {#if (run.stage_timings?.length ?? 0) > 0}
@@ -473,6 +568,14 @@
     .stat-value.status-running  { color: #727cf5; }
     .stat-value.status-failed   { color: #fa5c7c; }
 
+    .run-actions {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+        margin-bottom: 1rem;
+    }
+
     .view-cards-btn {
         display: inline-block;
         background: #727cf5;
@@ -482,9 +585,94 @@
         text-decoration: none;
         font-weight: 600;
         font-size: 0.9rem;
-        margin-bottom: 2rem;
     }
     .view-cards-btn:hover { background: #5a65e8; }
+
+    .cdp-bulk-btn {
+        background: linear-gradient(135deg, #667eea, #764ba2);
+        color: white;
+        border: none;
+        border-radius: 8px;
+        padding: 0.5rem 1.2rem;
+        font-size: 0.9rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: opacity 0.15s;
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+    }
+    .cdp-bulk-btn:disabled { opacity: 0.6; cursor: default; }
+    .cdp-bulk-btn:hover:not(:disabled) { opacity: 0.88; }
+
+    .cdp-poll-btn {
+        background: white;
+        border: 1px solid #d1d5db;
+        border-radius: 8px;
+        padding: 0.5rem 1rem;
+        font-size: 0.85rem;
+        font-weight: 600;
+        cursor: pointer;
+        color: #495057;
+        transition: background 0.15s;
+    }
+    .cdp-poll-btn:hover { background: #f3f4f6; }
+
+    .cdp-result {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+        padding: 0.6rem 1rem;
+        border-radius: 8px;
+        font-size: 0.85rem;
+        margin-bottom: 1rem;
+        background: #f0f4ff;
+        border: 1px solid #d4deff;
+        color: #313a46;
+    }
+    .cdp-result-err { background: #fff3f5; border-color: #ffd6df; }
+    .cdp-result-badge code { font-size: 0.78rem; background: #e8eaf6; padding: 0.1rem 0.35rem; border-radius: 3px; }
+    .cdp-muted { color: #6c757d; }
+    .cdp-err { color: #fa5c7c; font-weight: 600; }
+
+    .cdp-summary-bar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem;
+        margin-bottom: 1.5rem;
+        align-items: center;
+    }
+    .cdp-summary-label {
+        font-size: 0.75rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: #6c757d;
+        margin-right: 0.25rem;
+    }
+    .cdp-mini-badge {
+        font-size: 0.72rem;
+        padding: 0.2rem 0.5rem;
+        border-radius: 999px;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.3rem;
+        max-width: 220px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .cdp-submitted  { background: #e8eaf6; color: #3949ab; }
+    .cdp-processing { background: #fff3e0; color: #e65100; }
+    .cdp-identified { background: #e8f5e9; color: #2e7d32; }
+    .cdp-failed     { background: #fce4ec; color: #c62828; }
+    .cdp-price { font-weight: 700; }
+
+    /* CDP stat card */
+    .cdp-stat { border: 1px solid #d4deff; background: #f8f9ff; }
+    .cdp-count { font-size: 1.2rem; display: flex; align-items: baseline; gap: 0.4rem; }
+    .cdp-label-sub { font-size: 0.7rem; font-weight: 500; color: #6c757d; text-transform: uppercase; }
 
     .log-box {
         background: #1e1e2d;

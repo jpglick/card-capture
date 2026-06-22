@@ -14,7 +14,7 @@ from typing import Optional
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from app.api import batch, cards, config, events, label, regression, runs, training, videos
+from app.api import batch, cards, cdp, config, events, label, regression, runs, training, videos
 from app.services.event_bus import EventBus
 from app.services.training_service import TrainingService
 from app.services.labeling_service import LabelingService
@@ -24,6 +24,7 @@ from app.services.runs_service import RunService
 from app.services.cards_service import CardService
 from app.services.playground_service import PlaygroundService
 from app.services.mining_service import MiningService
+from app.services.cdp_service import CdpService
 
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -89,6 +90,16 @@ def create_app(db_path: Optional[Path] = None, output_root: Optional[Path] = Non
         if app.state.otel_enabled:
             import logging
             logging.getLogger("card_capture.app").info("OpenTelemetry export enabled")
+        # A run still 'running' on a fresh process is orphaned — its worker was
+        # killed (e.g. OOM during refine) before it could record a terminal
+        # status. Reconcile to 'failed' so the UI stops polling it forever.
+        reaped = app.state.runs_repo.reap_orphaned_runs()
+        if reaped:
+            import logging
+            logging.getLogger("card_capture.app").warning(
+                "Reaped %d orphaned run(s) left 'running' by a prior process: %s",
+                len(reaped), ", ".join(reaped),
+            )
         try:
             yield
         finally:
@@ -143,6 +154,7 @@ def create_app(db_path: Optional[Path] = None, output_root: Optional[Path] = Non
         db_path=db_path,
         cards_repo=cards_repo,
     )
+    app.state.cdp_service = CdpService(db_path=db_path)
     app.state.playground_service = PlaygroundService(db_path=db_path)
     app.state.mining_service = MiningService(
         db_path=db_path,
@@ -168,6 +180,7 @@ def create_app(db_path: Optional[Path] = None, output_root: Optional[Path] = Non
     app.include_router(training.router, prefix="/api/v1/training", tags=["training"])
     app.include_router(regression.router, prefix="/api/v1/regression", tags=["regression"])
     app.include_router(config.router, prefix="/api/v1/config", tags=["config"])
+    app.include_router(cdp.router, prefix="/api/v1/cdp", tags=["cdp"])
     app.include_router(events.router, prefix="/events", tags=["events"])
 
     return app

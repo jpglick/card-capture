@@ -286,3 +286,13 @@ export interface BatchStatus {
     jobs: BatchJob[];
     error?: string;
 }
+
+export interface CdpSubmission {
+    cdp_batch_id: string;
+    cdp_card_id: string | null;
+    status: 'submitted' | 'processing' | 'identified' | 'failed';
+    identified_name: string | null;
+    suggested_price: number | null;
+    submitted_at: string;
+    updated_at: string;
+}

@@ -75,16 +75,26 @@ export const api = {
             return req<T.PaginatedCards>('GET', `/cards?${params.toString()}`);
         },
         listAll: async (filter: T.CardFilter): Promise<T.Card[]> => {
-            const params = new URLSearchParams();
-            Object.entries(filter).forEach(([k, v]) => {
-                if (v !== undefined) params.append(k, v.toString());
-            });
-            const r = await req<T.PaginatedCards>('GET', `/cards?${params.toString()}`);
-            return r.items;
+            const items: T.Card[] = [];
+            let page = 1;
+            while (true) {
+                const params = new URLSearchParams();
+                Object.entries(filter).forEach(([k, v]) => {
+                    if (v !== undefined) params.append(k, v.toString());
+                });
+                params.set('page', page.toString());
+                const r = await req<T.PaginatedCards>('GET', `/cards?${params.toString()}`);
+                items.push(...r.items);
+                if (items.length >= r.total || r.items.length === 0) break;
+                page += 1;
+            }
+            return items;
         },
         detail: (id: string) => req<T.CardDetail>('GET', `/cards/${id}`),
         update: (id: string, body: Partial<T.Card>) => req<T.Card>('PATCH', `/cards/${id}`, body),
         bulk: (body: T.CardBulkAction) => req<{ updated: number }>('POST', '/cards/bulk', body),
+        hide: (id: string) => req<{ ok: boolean }>('POST', `/cards/${id}/hide`),
+        unhide: (id: string) => req<{ ok: boolean }>('POST', `/cards/${id}/unhide`),
     },
     label: {
         getTruth: (videoId: string) => req<T.LabelTruth | null>('GET', `/label/truth/${videoId}`),
@@ -128,5 +138,19 @@ export const api = {
         create: (video_ids: string[], config_preset?: string) =>
             req<{ batch_id: string }>('POST', '/runs/batch', { video_ids, config_preset }),
         status: (batch_id: string) => req<T.BatchStatus>('GET', `/runs/batch/${batch_id}`),
+    },
+    cdp: {
+        getSubmission: (instanceId: string) =>
+            req<T.CdpSubmission>('GET', `/cdp/submissions/${instanceId}`),
+        getRunSubmissions: (runId: string) =>
+            req<Record<string, T.CdpSubmission>>('GET', `/cdp/submissions/run/${runId}`),
+        submitCard: (instanceId: string) =>
+            req<T.CdpSubmission>('POST', `/cdp/submit/${instanceId}`),
+        bulkSubmitRun: (runId: string) =>
+            req<{ batch_id: string | null; submitted: number; skipped: number; failed: number; errors: string[] }>('POST', `/cdp/submit/run/${runId}`),
+        pollCard: (instanceId: string) =>
+            req<T.CdpSubmission>('POST', `/cdp/poll/${instanceId}`),
+        pollBatch: (batchId: string) =>
+            req<T.CdpSubmission[]>('POST', `/cdp/poll/batch/${batchId}`),
     },
 };
